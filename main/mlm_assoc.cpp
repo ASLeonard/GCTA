@@ -232,7 +232,7 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
             load_reml_state(load_reml_file, no_adj_covar);
     } else {
         // Run REML estimation
-        reml(false, true, reml_priors, reml_priors_var, -2.0, -2.0, no_constrain, true, true);
+        reml(false, true, true, reml_priors, reml_priors_var, -2.0, -2.0, no_constrain, true, true);
         
         if(!save_reml_file.empty()) {
             // Save REML state and exit - no need for genotype data beyond this point
