@@ -1,12 +1,15 @@
-CMAKE_MINIMUM_REQUIRED(VERSION 3.16)
+CMAKE_MINIMUM_REQUIRED(VERSION 3.18)
 
 project(GCTA2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if (CMAKE_COMPILER_IS_GNUCC)
     MESSAGE("Compiling by GCC ${CMAKE_CXX_COMPILER_VERSION}")
@@ -31,248 +34,340 @@ if(NOT CMAKE_BUILD_TYPE)
     message("Setting to release build")
 endif()
 
-# Fetch 3rd parties
-include(cmake/CPM.cmake)
-set(FETCHCONTENT_QUIET OFF)
-
-CPMAddPackage("gh:madler/zlib@1.3.1")
-CPMAddPackage("gh:eigen-mirror/eigen#3.4.0")
-CPMAddPackage("gh:yixuan/spectra@1.1.0")
-
-CPMAddPackage(
-    NAME zstd
-    GITHUB_REPOSITORY facebook/zstd
-    GIT_TAG v1.5.6
-    SOURCE_SUBDIR "build/cmake"
-    EXCLUDE_FROM_ALL YES
-    OPTIONS
-    "ZSTD_BUILD_PROGRAMS OFF"
-    "ZSTD_BUILD_TESTS OFF"
-    "ZSTD_BUILD_SHARED ON")
-
-CPMAddPackage(
-    NAME Boost
-    VERSION 1.86.0
-    URL https://github.com/boostorg/boost/releases/download/boost-1.86.0/boost-1.86.0-cmake.tar.xz
-    URL_HASH SHA256=2c5ec5edcdff47ff55e27ed9560b0a0b94b07bd07ed9928b476150e16b0efc57
-    OPTIONS "BOOST_ENABLE_CMAKE ON"
-    "BUILD_SHARED_LIBS OFF"
-    "BOOST_INCLUDE_LIBRARIES algorithm\\\;math\\\;crc")
-set(CMAKE_TLS_VERIFY OFF)
-
-CPMAddPackage(
-    NAME sqlite
-    URL https://www.sqlite.org/2024/sqlite-amalgamation-3460000.zip
-    URL_HASH SHA256=712a7d09d2a22652fb06a49af516e051979a3984adb067da86760e60ed51a7f5)
-add_library(sqlite3 STATIC ${sqlite_SOURCE_DIR}/sqlite3.c)
-target_include_directories(sqlite3 PUBLIC ${sqlite_SOURCE_DIR})
-
+# Find dependencies first before fetching libraries
 find_package(Threads REQUIRED)
 
+# GSL - Optional on all platforms
 if(NOT WIN32)
-    # NOTE: Install gsl with your system package manager
-    find_package(GSL REQUIRED)
+    find_package(GSL)
+    if(GSL_FOUND)
+        message(STATUS "Found GSL: ${GSL_VERSION}")
+    else()
+        message(STATUS "GSL not found - some features may be disabled")
+    endif()
 endif()
 
-# Find OpenMP
-if(APPLE)
-    # Use manual flags for OpenMP with Apple Clang
-    set(OpenMP_C_FLAGS "-Xpreprocessor -fopenmp")
-    set(OpenMP_C_LIB_NAMES "omp")
-    set(OpenMP_C_INCLUDE_DIR "/opt/homebrew/opt/libomp/include")
-    set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp")
-    set(OpenMP_CXX_LIB_NAMES "omp")
-    set(OpenMP_CXX_INCLUDE_DIR "/opt/homebrew/opt/libomp/include")
-    set(OpenMP_omp_LIBRARY "/opt/homebrew/opt/libomp/lib/libomp.dylib")
+# OpenMP - Cross-platform detection
+find_package(OpenMP)
+if(OpenMP_FOUND)
+    message(STATUS "Found OpenMP: ${OpenMP_CXX_VERSION}")
+else()
+    if(APPLE)
+        # Try Homebrew libomp on macOS
+        find_path(OpenMP_C_INCLUDE_DIR omp.h
+            HINTS /opt/homebrew/opt/libomp/include
+                  /usr/local/opt/libomp/include)
+        find_library(OpenMP_omp_LIBRARY omp
+            HINTS /opt/homebrew/opt/libomp/lib
+                  /usr/local/opt/libomp/lib)
+        
+        if(OpenMP_C_INCLUDE_DIR AND OpenMP_omp_LIBRARY)
+            set(OpenMP_C_FLAGS "-Xpreprocessor -fopenmp")
+            set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp")
+            set(OpenMP_FOUND TRUE)
+            
+            add_library(OpenMP::OpenMP_C INTERFACE IMPORTED)
+            set_target_properties(OpenMP::OpenMP_C PROPERTIES
+                INTERFACE_COMPILE_OPTIONS "${OpenMP_C_FLAGS}"
+                INTERFACE_INCLUDE_DIRECTORIES "${OpenMP_C_INCLUDE_DIR}"
+                INTERFACE_LINK_LIBRARIES "${OpenMP_omp_LIBRARY}")
+            
+            add_library(OpenMP::OpenMP_CXX INTERFACE IMPORTED)
+            set_target_properties(OpenMP::OpenMP_CXX PROPERTIES
+                INTERFACE_COMPILE_OPTIONS "${OpenMP_CXX_FLAGS}"
+                INTERFACE_INCLUDE_DIRECTORIES "${OpenMP_C_INCLUDE_DIR}"
+                INTERFACE_LINK_LIBRARIES "${OpenMP_omp_LIBRARY}")
+            
+            message(STATUS "Found Homebrew OpenMP: ${OpenMP_omp_LIBRARY}")
+        endif()
+    endif()
+    
+    if(NOT OpenMP_FOUND)
+        message(FATAL_ERROR "OpenMP not found. Please install OpenMP.")
+    endif()
 endif()
 
-if(LINUX)
-    if(NOT OMP_LIBRARY)
-        set(OMP_LIBRARY "/usr/lib/libgomp.so")
-    endif()
-    if(NOT MKL_DIR)
-        set(MKL_DIR "/opt/intel/mkl/lib/intel64/cmake/mkl")
-    endif()
+# BLAS/LAPACK - Detect before fetching Eigen
+option(USE_MKL "Use Intel MKL if available" ON)
+set(BLAS_FOUND FALSE)
+set(LAPACK_FOUND FALSE)
+set(USING_MKL FALSE)
+
+if(USE_MKL AND (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i686"))
     set(MKL_INTERFACE "lp64")
-    set(MKL_THREADING "gnu_thread")
-    find_package(MKL REQUIRED)
-endif()
-
-if(WIN32)
-    set(OpenMP_omp_LIBRARY "${LLVM_ROOT}/lib/libomp.lib")
-    set(OpenMP_C_FLAGS "-fopenmp") 
-    set(OpenMP_C_LIB_NAMES "omp")
-    set(OpenMP_CXX_FLAGS "-fopenmp")
-    set(OpenMP_CXX_LIB_NAMES "omp")
-    set(OpenMP_CXX_INCLUDE_DIR "${LLVM_ROOT}/lib/clang/20/include")
-
-    if(NOT MKL_DIR)
-        set(MKL_DIR "C:/Program Files (x86)/Intel/oneAPI/mkl/latest")
+    if(LINUX)
+        set(MKL_THREADING "gnu_thread")
+        list(APPEND CMAKE_PREFIX_PATH 
+            "/opt/intel/mkl"
+            "/opt/intel/oneapi/mkl/latest")
+    elseif(WIN32)
+        list(APPEND CMAKE_PREFIX_PATH 
+            "C:/Program Files (x86)/Intel/oneAPI/mkl/latest")
     endif()
-    set(MKL_INTERFACE "lp64")
-    find_package(MKL REQUIRED)
+    
+    find_package(MKL CONFIG QUIET)
+    
+    if(MKL_FOUND)
+        message(STATUS "Found Intel MKL: ${MKL_VERSION}")
+        set(BLAS_LIBRARIES MKL::MKL)
+        set(LAPACK_LIBRARIES MKL::MKL)
+        set(BLAS_FOUND TRUE)
+        set(LAPACK_FOUND TRUE)
+        set(USING_MKL TRUE)
+    else()
+        message(STATUS "MKL not found, will use other BLAS/LAPACK implementations")
+    endif()
 endif()
 
-find_package(OpenMP REQUIRED)
+# Fallback to other BLAS/LAPACK if MKL not found
+if(NOT BLAS_FOUND)
+    if(APPLE)
+        # Use Accelerate framework on macOS
+        find_library(ACCELERATE_LIBRARY Accelerate)
+        if(ACCELERATE_LIBRARY)
+            message(STATUS "Using Apple Accelerate framework")
+            set(BLAS_LIBRARIES ${ACCELERATE_LIBRARY})
+            set(LAPACK_LIBRARIES ${ACCELERATE_LIBRARY})
+            set(BLAS_FOUND TRUE)
+            set(LAPACK_FOUND TRUE)
+            
+            # Get macOS SDK path for vecLib headers
+            execute_process(
+                COMMAND xcrun --sdk macosx --show-sdk-path
+                OUTPUT_VARIABLE MACOSX_SDK_PATH
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+            set(VECLIB_INCLUDE_DIR "${MACOSX_SDK_PATH}/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework/Headers")
+        endif()
+    else()
+        # Try to find generic BLAS/LAPACK
+        find_package(BLAS)
+        find_package(LAPACK)
+        
+        if(BLAS_FOUND AND LAPACK_FOUND)
+            message(STATUS "Found BLAS and LAPACK")
+        else()
+            message(WARNING "No BLAS/LAPACK found. Performance may be degraded.")
+        endif()
+    endif()
+endif()
 
-set(COMMON_INCLUDES ${CMAKE_SOURCE_DIR}/include)
-set(MAIN_SOURCE "${CMAKE_SOURCE_DIR}/src/main.cpp")
+# Fetch 3rd parties using FetchContent
+include(FetchContent)
+set(FETCHCONTENT_QUIET OFF)
 
+# zlib
+FetchContent_Declare(
+    zlib
+    URL https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(zlib)
+
+# Eigen - Updated to 5.0 (header-only)
+# Disable Pardiso globally if not using MKL (MUST be set before fetching Eigen)
+if(NOT USING_MKL)
+    add_compile_definitions(EIGEN_NO_PARDISO)
+    message(STATUS "Setting EIGEN_NO_PARDISO globally (no MKL detected)")
+endif()
+
+FetchContent_Declare(
+    Eigen3
+    URL https://gitlab.com/libeigen/eigen/-/archive/5.0.0/eigen-5.0.0.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+set(EIGEN_BUILD_PKGCONFIG OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+# Disable Eigen's automatic MKL detection - we handle this manually
+set(EIGEN_TEST_MKL OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(Eigen3)
+if(NOT TARGET Eigen3::Eigen)
+    add_library(Eigen3::Eigen INTERFACE IMPORTED)
+    target_include_directories(Eigen3::Eigen INTERFACE ${eigen3_SOURCE_DIR})
+endif()
+
+# Spectra - Updated to 1.2 (header-only)
+FetchContent_Declare(
+    Spectra
+    URL https://github.com/yixuan/spectra/archive/refs/tags/v1.2.0.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+# Disable install rules from subdirectories to avoid export conflicts
+set(CMAKE_SKIP_INSTALL_RULES ON)
+FetchContent_MakeAvailable(Spectra)
+set(CMAKE_SKIP_INSTALL_RULES OFF)
+if(NOT TARGET Spectra)
+    add_library(Spectra INTERFACE IMPORTED)
+    target_include_directories(Spectra INTERFACE ${spectra_SOURCE_DIR}/include)
+endif()
+
+# zstd
+FetchContent_Declare(
+    zstd
+    URL https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR build/cmake
+)
+set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_SHARED ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(zstd)
+
+FetchContent_Declare(
+    Boost
+    URL https://github.com/boostorg/boost/releases/download/boost-1.90.0/boost-1.90.0-cmake.tar.xz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+set(BOOST_ENABLE_CMAKE ON CACHE BOOL "" FORCE)
+set(BOOST_INCLUDE_LIBRARIES "algorithm;math;crc" CACHE STRING "" FORCE)
+FetchContent_MakeAvailable(Boost)
+
+# SQLite
+FetchContent_Declare(
+    sqlite
+    URL https://www.sqlite.org/2025/sqlite-amalgamation-3480000.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(sqlite)
+if(NOT TARGET sqlite3)
+    add_library(sqlite3 STATIC ${sqlite_SOURCE_DIR}/sqlite3.c)
+    target_include_directories(sqlite3 PUBLIC ${sqlite_SOURCE_DIR})
+    target_compile_definitions(sqlite3 PRIVATE 
+        SQLITE_ENABLE_RTREE=1
+        SQLITE_ENABLE_FTS5=1)
+endif()
+
+# Create interface library for common dependencies
+add_library(gcta_common INTERFACE)
+target_include_directories(gcta_common INTERFACE
+    ${CMAKE_SOURCE_DIR}/include
+    "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include"
+    "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/simde"
+    ${zstd_SOURCE_DIR}/lib
+    ${zlib_SOURCE_DIR}
+    ${zlib_BINARY_DIR})
+
+if(USING_MKL AND MKL_INCLUDE)
+    target_include_directories(gcta_common INTERFACE ${MKL_INCLUDE})
+    # Configure Eigen with full MKL support
+    target_compile_definitions(gcta_common INTERFACE 
+        EIGEN_USE_MKL_ALL
+        EIGEN_USE_BLAS
+        EIGEN_USE_LAPACKE
+        EIGEN_USE_PARDISO)
+    message(STATUS "Eigen configured with MKL support")
+elseif(APPLE AND VECLIB_INCLUDE_DIR)
+    target_include_directories(gcta_common INTERFACE ${VECLIB_INCLUDE_DIR})
+    # Configure Eigen with Accelerate framework (EIGEN_NO_PARDISO set globally above)
+    target_compile_definitions(gcta_common INTERFACE EIGEN_USE_BLAS)
+    message(STATUS "Eigen configured with Accelerate framework")
+    # Check for OpenBLAS (optional)
+    find_path(OPENBLAS_INCLUDE_DIR cblas.h
+        HINTS /opt/homebrew/opt/openblas/include /usr/local/opt/openblas/include)
+    if(OPENBLAS_INCLUDE_DIR)
+        target_include_directories(gcta_common INTERFACE ${OPENBLAS_INCLUDE_DIR})
+    endif()
+else()
+    # Generic BLAS/LAPACK (EIGEN_NO_PARDISO set globally above)
+    target_compile_definitions(gcta_common INTERFACE EIGEN_USE_BLAS)
+    message(STATUS "Eigen configured with generic BLAS/LAPACK")
+endif()
+
+if(GSL_FOUND)
+    target_include_directories(gcta_common INTERFACE ${GSL_INCLUDE_DIRS})
+endif()
+
+target_link_libraries(gcta_common INTERFACE
+    Boost::algorithm Boost::math Boost::crc
+    Eigen3::Eigen
+    Spectra
+    sqlite3)
+
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(gcta_common INTERFACE OpenMP::OpenMP_CXX)
+endif()
+
+if(BLAS_FOUND AND LAPACK_FOUND)
+    target_link_libraries(gcta_common INTERFACE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
+endif()
+
+# Build individual library targets from source files
 file(GLOB SRCS "${CMAKE_SOURCE_DIR}/src/*.cpp")
-list(REMOVE_ITEM SRCS "${MAIN_SOURCE}")
+list(REMOVE_ITEM SRCS "${CMAKE_SOURCE_DIR}/src/main.cpp")
 list(APPEND SRCS "${CMAKE_SOURCE_DIR}/src/acat.c")
 
 set(GCTA_LIBS "")
 foreach(lib_src ${SRCS})
-    get_filename_component(file_name "${lib_src}" NAME_WE)
-    string(TOLOWER ${file_name} lib_name)
+    get_filename_component(lib_name "${lib_src}" NAME_WE)
+    string(TOLOWER ${lib_name} lib_name)
     add_library(${lib_name} "${lib_src}")
-
-    target_include_directories(${lib_name} PUBLIC
-        ${COMMON_INCLUDES}
-        ${MKL_INCLUDE}
-        # PLINK2.0 pgen library;
-        "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include"
-        "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/simde")
-
-    target_link_libraries(${lib_name}
-        Boost::algorithm Boost::math Boost::crc
-        Eigen3::Eigen
-        Spectra
-        sqlite3)
-
+    target_link_libraries(${lib_name} PUBLIC gcta_common)
     list(APPEND GCTA_LIBS ${lib_name})
-endforeach(lib_src)
+endforeach()
 
-add_executable(gcta64 ${MAIN_SOURCE})
+# Build main executable
+add_executable(gcta64 "${CMAKE_SOURCE_DIR}/src/main.cpp")
 
 add_subdirectory(main)
-target_include_directories(mainV1 PUBLIC ${COMMON_INCLUDES} ${MKL_INCLUDE})
-target_link_libraries(mainV1 Eigen3::Eigen)
-
-set(GCTA_TARGETS gcta64 mainV1 ${GCTA_LIBS})
-function(targets_includes targets include_dir)
-    foreach(target IN LISTS ${targets})
-        target_include_directories(${target} PRIVATE ${include_dir})
-    endforeach()
-endfunction()
-
-targets_includes(GCTA_TARGETS ${zstd_SOURCE_DIR}/lib)
-targets_includes(GCTA_TARGETS ${zlib_SOURCE_DIR})
-targets_includes(GCTA_TARGETS ${zlib_BINARY_DIR})
-
-if(NOT WIN32)
-    targets_includes(GCTA_TARGETS ${GSL_INCLUDE_DIRS})
-endif()
-
-if(APPLE)
-    # For Eigen backend, OpenBLAS, LAPACK
-    # Get macOS SDK path
-    execute_process(
-        COMMAND xcrun --sdk macosx --show-sdk-path
-        OUTPUT_VARIABLE MACOSX_SDK_PATH
-        OUTPUT_STRIP_TRAILING_WHITESPACE)
-    set(VECLIB_INCLUDE_DIR "${MACOSX_SDK_PATH}/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework/Headers")
-    set(OPENBLAS_INCLUDE_DIR "/opt/homebrew/opt/openblas/include")
-
-    targets_includes(GCTA_TARGETS ${VECLIB_INCLUDE_DIR})
-    targets_includes(GCTA_TARGETS ${OPENBLAS_INCLUDE_DIR})
-
-    target_link_libraries(gcta64 OpenMP::OpenMP_CXX)
-    target_link_libraries(mainV1 OpenMP::OpenMP_CXX)
-    foreach(gcta_lib ${GCTA_LIBS})
-        target_link_libraries(${gcta_lib} OpenMP::OpenMP_CXX)
-    endforeach()
-
-    find_library(ACCELERATE_LIBRARY Accelerate)
-    target_link_libraries(gcta64 ${ACCELERATE_LIBRARY})
-    target_link_libraries(mainV1 ${ACCELERATE_LIBRARY})
-    foreach(gcta_lib ${GCTA_LIBS})
-        target_link_libraries(${gcta_lib} ${ACCELERATE_LIBRARY})
-    endforeach()
-endif()
+target_link_libraries(mainV1 PUBLIC gcta_common)
 
 add_subdirectory(third_party)
-
-target_include_directories(gcta64 PRIVATE
-    ${COMMON_INCLUDES}
-    ${MKL_INCLUDE})
-
 target_include_directories(Pgenlib PRIVATE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
 
-target_link_libraries(gcta64 mainV1 ${GCTA_LIBS} Pgenlib sqlite3 libzstd Threads::Threads zlib)
+# Link main executable
+target_link_libraries(gcta64
+    gcta_common
+    mainV1
+    ${GCTA_LIBS}
+    Pgenlib
+    libzstd
+    Threads::Threads
+    zlib)
 
-if (NOT WIN32)
+if(GSL_FOUND)
     target_link_libraries(gcta64 GSL::gsl GSL::gslcblas)
 endif()
 
-if (NOT APPLE)
-    target_link_libraries(gcta64 MKL::MKL)
+# Copy compile_commands.json to source directory for IDE support
+if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json")
+    file(COPY "${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json"
+         DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
-# Testing has some problems currently
-#enable_testing()
-#ADD_SUBDIRECTORY(test)
-
-IF(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json")
-    EXECUTE_PROCESS(COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json
-        ${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json
-    )
-ENDIF()
-
-# List all targets
-get_property(imported_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY IMPORTED_TARGETS)
-foreach(target IN LISTS imported_targets)
-    message(STATUS "imported target: ${target}")
-endforeach()
-
-get_property(local_targets DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY BUILDSYSTEM_TARGETS)
-foreach(t IN LISTS local_targets)
-    message(STATUS "built target: ${t}")
-endforeach()
-
 # Installation
-if(LINUX)
-    set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
+if(LINUX OR APPLE)
+    set(CMAKE_INSTALL_RPATH "$<IF:$<PLATFORM_ID:Darwin>,@executable_path/../lib,$ORIGIN/../lib>")
     set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
-
-    # Targets
+    
     install(TARGETS gcta64 mainV1 ${GCTA_LIBS}
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)
-
-    # Resource
-    install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.desktop
-        DESTINATION share/applications)
-    install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.png
-        DESTINATION share/icons/hicolor/256x256/apps)
-    install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.svg
-        DESTINATION share/icons/hicolor/scalable/apps)
+    
+    if(LINUX)
+        # Linux desktop integration files
+        install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.desktop
+            DESTINATION share/applications)
+        install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.png
+            DESTINATION share/icons/hicolor/256x256/apps)
+        install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.svg
+            DESTINATION share/icons/hicolor/scalable/apps)
+    endif()
 elseif(WIN32)
     install(TARGETS gcta64 mainV1 ${GCTA_LIBS} DESTINATION bin)
 
     file(GLOB RUNTIME_DLLS "${CMAKE_BINARY_DIR}/*.dll")
-    install(FILES
-        ${RUNTIME_DLLS}
-        ${zlib_BINARY_DIR}/zlib.dll
-        # Intel MKL
-        ${MKL_ROOT}/bin/mkl_intel_thread.2.dll
-        ${MKL_ROOT}/bin/mkl_avx2.2.dll
-        ${MKL_ROOT}/bin/mkl_core.2.dll
-        ${MKL_ROOT}/../../compiler/latest/bin/libiomp5md.dll
-        DESTINATION bin)
-elseif(APPLE)
-    set(CMAKE_INSTALL_RPATH "@executable_path/../lib")
-    set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
-    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
-
-    # 安装目标可执行文件和库
-    install(TARGETS gcta64 mainV1 ${GCTA_LIBS}
-        RUNTIME DESTINATION bin
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib)
-
+    set(INSTALL_DLLS ${RUNTIME_DLLS} ${zlib_BINARY_DIR}/zlib.dll)
+    
+    # Intel MKL DLLs if using MKL
+    if(USING_MKL AND MKL_ROOT)
+        list(APPEND INSTALL_DLLS
+            ${MKL_ROOT}/bin/mkl_intel_thread.2.dll
+            ${MKL_ROOT}/bin/mkl_avx2.2.dll
+            ${MKL_ROOT}/bin/mkl_core.2.dll
+            ${MKL_ROOT}/../../compiler/latest/bin/libiomp5md.dll)
+    endif()
+    
+    install(FILES ${INSTALL_DLLS} DESTINATION bin)
 endif()
