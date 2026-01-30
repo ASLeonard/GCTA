@@ -33,21 +33,62 @@ If you have any bug reports or questions please send an email to Jian Yang at <j
 
 ## Compilation
 
+### Quick Start
+
+**See [docs/build/QUICK_START.md](docs/build/QUICK_START.md) for platform-specific instructions.**
+
+For detailed build information and troubleshooting, see [BUILD_IMPROVEMENTS.md](BUILD_IMPROVEMENTS.md).
+
 #### Requirements
 
-1. Currently only x86\_64-based operating systems are supported.
-2. [Intel MKL](https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl-download.html) 2017 or above (only needed when building on x86\-64 machines)
-3. OpenBLAS (only needed when building on AArch64 machines)
-4. Eigen == 3.3.7 (there are bugs in the new version of Eigen)
-5. CMake >= 3.1
-6. BOOST >= 1.4
-7. zlib >= 1.2.11 (old zlib may cause an error of bgen file decompression)
-8. sqlite3 >= 3.31.1
-9. zstd >= 1.4.4
-10. [Spectra](https://spectralib.org/) >= 0.8.1
-11. gsl (GNU scientific library)
+**Core Requirements (all platforms):**
+- CMake >= 3.18
+- C++17 compatible compiler (GCC 6.1+, Clang 8.0+, or MSVC)
+- OpenMP support
 
-Most of the dependencies above will be downloaded by CMake automatically. You only need to install the `gsl` and `Intel MKL` manually.
+**Optional (Auto-downloaded by CMake):**
+- Boost 1.90.0 (algorithm, math, crc)
+- Eigen 5.0.0
+- Spectra 1.2.0
+- zlib 1.3.1
+- zstd 1.5.6
+- sqlite3 3.47.2
+
+**Linear Algebra Library (one of):**
+- Intel MKL 2017+ (preferred on x86\_64, optional)
+- Apple Accelerate (macOS, automatic)
+- OpenBLAS (Linux/cross-platform alternative)
+- Generic BLAS/LAPACK (universal fallback)
+
+**Platform-Specific:**
+- GNU Scientific Library (gsl) - optional but recommended
+
+#### Key Improvements in Build System
+
+✅ **MKL optional** - builds work without MKL using OpenBLAS or system BLAS/LAPACK  
+✅ **Auto-detection** - no hardcoded paths, works out of the box on most systems  
+✅ **Updated dependencies** - Boost 1.90, Eigen 5.0, Spectra 1.2  
+✅ **Better error messages** - clear indication of what's missing  
+✅ **Cross-platform** - improved support for ARM64, macOS, and Linux  
+
+#### Simple Build
+
+```bash
+cd GCTA
+mkdir build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+cmake --build . -j$(nproc)
+./gcta64 --version
+```
+
+#### Build Without MKL
+
+If you don't have Intel MKL or prefer to use OpenBLAS:
+
+```bash
+cmake -DUSE_MKL=OFF -DCMAKE_BUILD_TYPE=Release ..
+cmake --build . -j$(nproc)
+```
 
 #### Linux
 

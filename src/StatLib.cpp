@@ -98,11 +98,7 @@ namespace StatLib{
         int info = 0;
         int lda = n;
         int lwork = n;
-#if GCTA_CPU_x86
         dgeqrf(&n, &n, X, &lda, tau, work, &lwork, &info);
-#else
-        dgeqrf_(&n, &n, X, &lda, tau, work, &lwork, &info);
-#endif
         if(info != 0){
             return false;
         }
@@ -122,13 +118,8 @@ namespace StatLib{
 
         char side = 'L';
         char t = 'N';
-#if GCTA_CPU_x86
         dormqr(&side, &t, &n, &n, &n, X, &lda, tau, c, 
                 &lda, work, &lwork, &info);
-#else
-        dormqr_(&side, &t, &n, &n, &n, X, &lda, tau, c, 
-                &lda, work, &lwork, &info);
-#endif
         if(info != 0){
             return false;
         }

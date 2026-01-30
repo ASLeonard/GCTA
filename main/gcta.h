@@ -51,12 +51,12 @@ using namespace std;
 typedef DiagonalMatrix<float, Dynamic, Dynamic> eigenDiagMat;
 typedef MatrixXf eigenMatrix;
 typedef VectorXf eigenVector;
-typedef DynamicSparseMatrix<float> eigenDynSparseMat;
+typedef SparseMatrix<float, Eigen::ColMajor, long long> eigenDynSparseMat;
 #else
 typedef DiagonalMatrix<double, Dynamic, Dynamic> eigenDiagMat;
 typedef MatrixXd eigenMatrix;
 typedef VectorXd eigenVector;
-typedef DynamicSparseMatrix<double> eigenDynSparseMat;
+typedef SparseMatrix<double, Eigen::ColMajor, long long> eigenDynSparseMat;
 #endif
 
 class gcta {
