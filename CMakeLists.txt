@@ -32,6 +32,9 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(GCTA_USE_MKL "Use Intel MKL for BLAS/LAPACK (non-Apple only)" ON)
+option(GCTA_LIST_TARGETS "List imported and local targets during configure" OFF)
+option(GCTA_UNITY_BUILD "Enable unity builds for faster compilation" OFF)
+option(GCTA_ENABLE_IPO "Enable IPO/LTO in Release builds" ON)
 
 # Initialize plink-ng submodule if needed
 if(EXISTS "${CMAKE_SOURCE_DIR}/.git" AND NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include/pgenlib_ffi_support.h")
@@ -57,6 +60,7 @@ endif()
 # Fetch 3rd parties
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
+set(CMAKE_DISABLE_FIND_PACKAGE_CLANG_FORMAT ON CACHE BOOL "" FORCE)
 
 set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -87,7 +91,7 @@ FetchContent_Declare(
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_Declare(
     sqlite
-    https://www.sqlite.org/2026/sqlite-amalgamation-3510200.zip
+    URL https://www.sqlite.org/2026/sqlite-amalgamation-3510200.zip
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 
 set(SPECTRA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -142,7 +146,7 @@ if(APPLE)
     set(GCTA_USE_MKL OFF)
     find_library(ACCELERATE_LIBRARY Accelerate REQUIRED)
     list(APPEND GCTA_BLAS_LIBS ${ACCELERATE_LIBRARY})
-    list(APPEND GCTA_BLAS_DEFINES GCTA_USE_ACCELERATE ACCELERATE_NEW_LAPACK)
+    list(APPEND GCTA_BLAS_DEFINES GCTA_USE_ACCELERATE ACCELERATE_NEW_LAPACK ACCELERATE_LAPACK_ILP64)
     set(GCTA_BLAS_PROVIDER "Accelerate" CACHE INTERNAL "")
     if(NOT CMAKE_OSX_SYSROOT)
         execute_process(
@@ -226,35 +230,44 @@ target_include_directories(mainV1 PUBLIC ${COMMON_INCLUDES} ${GCTA_BLAS_INCLUDE_
 target_link_libraries(mainV1 Eigen3::Eigen)
 
 set(GCTA_TARGETS gcta64 mainV1 ${GCTA_LIBS})
-function(targets_includes targets include_dir)
-    foreach(target IN LISTS ${targets})
-        target_include_directories(${target} PRIVATE ${include_dir})
-    endforeach()
-endfunction()
 
-function(targets_compile_defs targets defs)
-    foreach(target IN LISTS ${targets})
-        target_compile_definitions(${target} PRIVATE ${defs})
-    endforeach()
-endfunction()
-
-targets_includes(GCTA_TARGETS ${zstd_SOURCE_DIR}/lib)
-targets_includes(GCTA_TARGETS ${zlib_SOURCE_DIR})
-targets_includes(GCTA_TARGETS ${zlib_BINARY_DIR})
-targets_includes(GCTA_TARGETS ${GCTA_BLAS_INCLUDE_DIRS})
-targets_compile_defs(GCTA_TARGETS ${GCTA_BLAS_DEFINES})
-
-if(NOT WIN32)
-    targets_includes(GCTA_TARGETS ${GSL_INCLUDE_DIRS})
+set(GCTA_IPO_ENABLED OFF)
+if(GCTA_ENABLE_IPO AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT GCTA_IPO_SUPPORTED OUTPUT GCTA_IPO_OUTPUT)
+    if(GCTA_IPO_SUPPORTED)
+        set(GCTA_IPO_ENABLED ON)
+    else()
+        message(STATUS "IPO/LTO not supported: ${GCTA_IPO_OUTPUT}")
+    endif()
 endif()
 
-if(APPLE)
-    target_link_libraries(gcta64 OpenMP::OpenMP_CXX)
-    target_link_libraries(mainV1 OpenMP::OpenMP_CXX)
-    foreach(gcta_lib ${GCTA_LIBS})
-        target_link_libraries(${gcta_lib} OpenMP::OpenMP_CXX)
-    endforeach()
-endif()
+foreach(target IN LISTS GCTA_TARGETS)
+    set_target_properties(${target} PROPERTIES
+        UNITY_BUILD ${GCTA_UNITY_BUILD}
+        INTERPROCEDURAL_OPTIMIZATION ${GCTA_IPO_ENABLED})
+endforeach()
+
+# Apply common includes and definitions to all targets
+foreach(target IN LISTS GCTA_TARGETS)
+    target_include_directories(${target} PRIVATE
+        ${zstd_SOURCE_DIR}/lib
+        ${zlib_SOURCE_DIR}
+        ${zlib_BINARY_DIR}
+        ${GCTA_BLAS_INCLUDE_DIRS})
+    target_compile_definitions(${target} PRIVATE ${GCTA_BLAS_DEFINES})
+    if(APPLE)
+        target_compile_options(${target} PRIVATE -Wno-nullability-completeness)
+    endif()
+    if(NOT WIN32)
+        target_include_directories(${target} PRIVATE ${GSL_INCLUDE_DIRS})
+    endif()
+endforeach()
+
+# Link OpenMP to all targets
+foreach(target IN LISTS GCTA_TARGETS)
+    target_link_libraries(${target} OpenMP::OpenMP_CXX)
+endforeach()
 
 add_subdirectory(third_party)
 
@@ -264,7 +277,7 @@ target_include_directories(gcta64 PRIVATE
 
 target_include_directories(Pgenlib PRIVATE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
 
-target_link_libraries(gcta64 mainV1 ${GCTA_LIBS} Pgenlib sqlite3 libzstd Threads::Threads zlib)
+target_link_libraries(gcta64 mainV1 ${GCTA_LIBS} Pgenlib sqlite3 libzstd Threads::Threads zlibstatic)
 
 if (NOT WIN32)
     target_link_libraries(gcta64 GSL::gsl GSL::gslcblas)
@@ -285,16 +298,18 @@ IF(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json")
     )
 ENDIF()
 
-# List all targets
-get_property(imported_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY IMPORTED_TARGETS)
-foreach(target IN LISTS imported_targets)
-    message(STATUS "imported target: ${target}")
-endforeach()
+# List all targets (verbose, only if requested)
+if(CMAKE_VERBOSE_MAKEFILE OR GCTA_LIST_TARGETS)
+    get_property(imported_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY IMPORTED_TARGETS)
+    foreach(target IN LISTS imported_targets)
+        message(STATUS "imported target: ${target}")
+    endforeach()
 
-get_property(local_targets DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY BUILDSYSTEM_TARGETS)
-foreach(t IN LISTS local_targets)
-    message(STATUS "built target: ${t}")
-endforeach()
+    get_property(local_targets DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(t IN LISTS local_targets)
+        message(STATUS "built target: ${t}")
+    endforeach()
+endif()
 
 # Installation
 if(LINUX)
@@ -333,10 +348,26 @@ elseif(APPLE)
     set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
 
-    # 安装目标可执行文件和库
+    # Install target executables and libraries
     install(TARGETS gcta64 mainV1 ${GCTA_LIBS}
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)
 
 endif()
+
+# Build configuration summary
+message(STATUS "")
+message(STATUS "==========================================")
+message(STATUS "GCTA2 Build Configuration Summary")
+message(STATUS "==========================================")
+message(STATUS "  Build type:        ${CMAKE_BUILD_TYPE}")
+message(STATUS "  BLAS/LAPACK:       ${GCTA_BLAS_PROVIDER}")
+message(STATUS "  Compiler:          ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+message(STATUS "  Install prefix:    ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "  OpenMP:            ${OpenMP_CXX_VERSION}")
+if(NOT WIN32)
+    message(STATUS "  GSL:               ${GSL_VERSION}")
+endif()
+message(STATUS "==========================================")
+message(STATUS "")

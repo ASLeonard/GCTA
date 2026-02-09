@@ -26,7 +26,8 @@ bool _LLT(MatrixType &A, double &logdet){
     Eigen::Matrix<typename MatrixType::Scalar, Eigen::Dynamic, 1> diag = A.diagonal();
     //auto diag = A.diagonal();
 
-    int info, cols = (int)A.cols();
+    gcta_blas_int info = 0;
+    gcta_blas_int cols = (gcta_blas_int)A.cols();
     char uplo = 'L';
     LOGGER.ts("LLT");
 #if GCTA_CPU_x86

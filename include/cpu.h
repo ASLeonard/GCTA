@@ -42,12 +42,21 @@
   #define EIGEN_USE_MKL_ALL
   #endif
   #include <mkl.h>
+  typedef int gcta_blas_int;
+#elif defined(GCTA_USE_ACCELERATE)
+  #ifndef EIGEN_USE_BLAS
+  #define EIGEN_USE_BLAS
+  #endif
+  #include <cblas_new.h>
+  #include <lapack.h>
+  typedef __LAPACK_int gcta_blas_int;
 #else
   #ifndef EIGEN_USE_BLAS
   #define EIGEN_USE_BLAS
   #endif
   #include <cblas.h>
   #include <clapack.h>
+  typedef int gcta_blas_int;
 #endif
 
 #endif  //END GCTA_CPU_H

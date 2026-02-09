@@ -95,13 +95,14 @@ namespace StatLib{
 
         double* tau = new double[n];
         double* work = new double[n];
-        int info = 0;
-        int lda = n;
-        int lwork = n;
+        gcta_blas_int n_lapack = (gcta_blas_int)n;
+        gcta_blas_int info = 0;
+        gcta_blas_int lda = n_lapack;
+        gcta_blas_int lwork = n_lapack;
 #if GCTA_CPU_x86
         dgeqrf(&n, &n, X, &lda, tau, work, &lwork, &info);
 #else
-        dgeqrf_(&n, &n, X, &lda, tau, work, &lwork, &info);
+        dgeqrf_(&n_lapack, &n_lapack, X, &lda, tau, work, &lwork, &info);
 #endif
         if(info != 0){
             return false;
@@ -126,8 +127,8 @@ namespace StatLib{
         dormqr(&side, &t, &n, &n, &n, X, &lda, tau, c, 
                 &lda, work, &lwork, &info);
 #else
-        dormqr_(&side, &t, &n, &n, &n, X, &lda, tau, c, 
-                &lda, work, &lwork, &info);
+        dormqr_(&side, &t, &n_lapack, &n_lapack, &n_lapack, X, &lda, tau, c,
+            &lda, work, &lwork, &info);
 #endif
         if(info != 0){
             return false;
