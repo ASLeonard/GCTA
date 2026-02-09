@@ -31,6 +31,20 @@ if(NOT CMAKE_BUILD_TYPE)
     message("Setting to release build")
 endif()
 
+# Set optimization flags for Release builds
+if(CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
+    if(APPLE)
+        # Apple Silicon optimizations
+        set(CMAKE_CXX_FLAGS_RELEASE "-O3 -mcpu=native -pipe ${CMAKE_CXX_FLAGS_RELEASE}")
+        set(CMAKE_C_FLAGS_RELEASE "-O3 -mcpu=native -pipe ${CMAKE_C_FLAGS_RELEASE}")
+    else()
+        # x86_64 optimizations
+        set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -pipe ${CMAKE_CXX_FLAGS_RELEASE}")
+        set(CMAKE_C_FLAGS_RELEASE "-O3 -march=native -pipe ${CMAKE_C_FLAGS_RELEASE}")
+    endif()
+    message(STATUS "Release optimization flags: ${CMAKE_CXX_FLAGS_RELEASE}")
+endif()
+
 option(GCTA_USE_MKL "Use Intel MKL for BLAS/LAPACK (non-Apple only)" ON)
 option(GCTA_LIST_TARGETS "List imported and local targets during configure" OFF)
 option(GCTA_UNITY_BUILD "Enable unity builds for faster compilation" OFF)
@@ -82,7 +96,7 @@ FetchContent_Declare(
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_Declare(
     zstd
-    URL https://github.com/facebook/zstd/archive/refs/tags/v1.5.6.tar.gz
+    URL https://github.com/facebook/zstd/archive/refs/tags/v1.5.7.tar.gz
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     SOURCE_SUBDIR "build/cmake")
 FetchContent_Declare(
