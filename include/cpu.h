@@ -37,7 +37,7 @@
   #define GCTA_CPU_ARM 0
 #endif
 
-#if GCTA_CPU_x86
+#if defined(GCTA_USE_MKL)
   #ifndef EIGEN_USE_MKL_ALL
   #define EIGEN_USE_MKL_ALL
   #endif
@@ -46,7 +46,7 @@
   #ifndef EIGEN_USE_BLAS
   #define EIGEN_USE_BLAS
   #endif
-  #include <cblas.h> 
+  #include <cblas.h>
   #include <clapack.h>
 #endif
 

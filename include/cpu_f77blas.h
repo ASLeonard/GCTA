@@ -37,11 +37,25 @@
   #define GCTA_CPU_ARM 0
 #endif
 
-#if GCTA_CPU_x86
+#if defined(GCTA_USE_MKL)
   #ifndef EIGEN_USE_MKL_ALL
   #define EIGEN_USE_MKL_ALL
   #endif
   #include <mkl.h>
+#elif defined(GCTA_USE_OPENBLAS)
+  #include <f77blas.h>
+#elif defined(GCTA_USE_ACCELERATE)
+  extern "C" {
+    void dgemm_(const char *transa, const char *transb, const int *m, const int *n,
+                const int *k, const double *alpha, const double *a, const int *lda,
+                const double *b, const int *ldb, const double *beta, double *c, const int *ldc);
+    void dgemv_(const char *trans, const int *m, const int *n, const double *alpha,
+                const double *a, const int *lda, const double *x, const int *incx,
+                const double *beta, double *y, const int *incy);
+    void dsyrk_(const char *uplo, const char *trans, const int *n, const int *k,
+                const double *alpha, const double *a, const int *lda,
+                const double *beta, double *c, const int *ldc);
+  }
 #else
   #include <f77blas.h>
 #endif
