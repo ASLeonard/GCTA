@@ -212,8 +212,29 @@ void option(int option_num, char* option_str[])
     }
 
     LOGGER << "Accepted options:" << endl;
+
+    // Early exit optimization for mlma: skip irrelevant flags
+    constexpr std::array<std::string_view, 18> mlma_flags = {{
+        "--bfile", "--pheno", "--mpheno", "--qcovar", "--covar", "--grm",
+        "--mlma-loco", "--mlma-subtract-grm", "--mlma-no-preadj-covar",
+        "--save-reml", "--load-reml", "--out", "--thread-num", "--threads",
+        "--reml-maxit", "--reml-priors", "--reml-priors-var",
+        "--reml-no-constrain"
+    }};
+
     for (i = arg_offset; i < argc; i++) {
         std::string_view flag = argv[i];
+
+        // Early exit: skip unknown flags for mlma subcommand
+        if (!subcommand.empty() && subcommand == "mlma") {
+            if (std::ranges::find(mlma_flags, flag) == mlma_flags.end()) {
+                // Skip unknown flag and its value (if present)
+                if (i + 1 < argc && argv[i + 1][0] != '-') {
+                    ++i;
+                }
+                continue;
+            }
+        }
 
         if (flag == "--thread-num") {
             thread_num = atoi(argv[++i]);
@@ -1411,11 +1432,12 @@ void option(int option_num, char* option_str[])
             if (LD) pter_gcta->read_LD_target_SNPs(LD_file);
             if(gsmr_flag) pter_gcta->read_gsmrfile(expo_file_list, outcome_file_list, gwas_thresh, nsnp_gsmr, gsmr_so_alg);
             if(mtcojo_flag) nsnp_read = pter_gcta->read_mtcojofile(mtcojolist_file, gwas_thresh, nsnp_gsmr);
-            if(mtcojo_flag && nsnp_read>0) {
-                if(bfile_flag==1) pter_gcta->read_bedfile(bfile + ".bed");
-                else pter_gcta->read_multi_bedfiles(multi_bfiles);
-            }
-            if(!mtcojo_flag){
+
+            // Conditional genotype loading for mlma: defer .bed if using external GRM or pre-computed REML
+            // Load .bed only if: (1) mtcojo needs it, (2) not mlma, (3) mlma computing GRM from genotypes
+            bool load_bed_now = (mtcojo_flag && nsnp_read>0) || !mlma_flag || (mlma_flag && grm_file.empty() && load_reml_file.empty());
+
+            if(load_bed_now) {
                 if(bfile_flag==1) pter_gcta->read_bedfile(bfile + ".bed");
                 else pter_gcta->read_multi_bedfiles(multi_bfiles);
             }
@@ -1439,7 +1461,18 @@ void option(int option_num, char* option_str[])
             else if (ld_mean_rsq_seg_flag) pter_gcta->ld_seg(LD_file, LD_seg, LD_wind, LD_rsq_cutoff, dominance_flag);
             else if (ld_max_rsq_flag) pter_gcta ->calcu_max_ld_rsq(LD_wind, LD_rsq_cutoff, dominance_flag);
             else if (blup_snp_flag) pter_gcta->blup_snp_geno();
-            else if (mlma_flag) pter_gcta->mlma(grm_file, m_grm_flag, subtract_grm_file, phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, within_family, make_grm_inbred_flag, mlma_no_adj_covar, weight_file, save_reml_file, load_reml_file);
+            else if (mlma_flag) {
+                // Lazy load genotypes for mlma if deferred (when using external GRM or pre-computed REML)
+                if (grm_file.empty() && load_reml_file.empty()) {
+                    // Need to load genotypes for GRM computation
+                    LOGGER << "Loading genotype data for GRM computation..." << endl;
+                    if(bfile_flag==1) pter_gcta->read_bedfile(bfile + ".bed");
+                    else pter_gcta->read_multi_bedfiles(multi_bfiles);
+                } else {
+                    LOGGER << "Using external GRM or pre-computed REML (genotypes loaded as needed for association testing)" << endl;
+                }
+                pter_gcta->mlma(grm_file, m_grm_flag, subtract_grm_file, phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, within_family, make_grm_inbred_flag, mlma_no_adj_covar, weight_file, save_reml_file, load_reml_file);
+            }
             else if (mlma_loco_flag) pter_gcta->mlma_loco(phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, make_grm_inbred_flag, mlma_no_adj_covar);
             else if (massoc_slct_flag | massoc_joint_flag) {pter_gcta->set_massoc_pC_thresh(massoc_out_pC_thresh); pter_gcta->run_massoc_slct(massoc_file, massoc_wind, massoc_p, massoc_collinear, massoc_top_SNPs, massoc_joint_flag, massoc_gc_flag, massoc_gc_val, massoc_actual_geno_flag, massoc_mld_slct_alg);}
             else if (!massoc_cond_snplist.empty()) {pter_gcta->set_massoc_pC_thresh(massoc_out_pC_thresh); pter_gcta->run_massoc_cond(massoc_file, massoc_cond_snplist, massoc_wind, massoc_collinear, massoc_gc_flag, massoc_gc_val, massoc_actual_geno_flag);}
