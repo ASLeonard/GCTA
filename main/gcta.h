@@ -147,6 +147,7 @@ public:
     //void simu_geno_unlinked(int N, int M, double maf);
 
     void set_diff_freq(double freq_diff);
+    void set_bfile(string bfile) { _bfile = bfile; }
     void run_massoc_slct(string metafile, int wind_size, double p_cutoff, double collinear, int64_t top_SNPs, bool joint_only, bool GC, double GC_val, bool actual_geno, int mld_slct_alg);
     void run_massoc_cond(string metafile, string snplistfile, int wind_size, double collinear, bool GC, double GC_val, bool actual_geno);
     void run_massoc_sblup(string metafile, int wind_size, double lambda);
@@ -525,6 +526,9 @@ private:
     int _indi_num;
     vector<int> _keep; // initialized in the read_famfile()
     eigenMatrix _varcmp_Py; // BLUP solution to the total genetic effects of individuals
+
+    // bfile path for lazy loading
+    string _bfile;
 
     // bed file
     vector< vector<bool> > _snp_1;
