@@ -3,11 +3,11 @@
 #include "constants.hpp"
 #include "utils.hpp"
 #include "StatLib.h"
+#include "cpu.h"
 #include <numeric>
 #include <string>
 #include <functional>
 #include <omp.h>
-#include "cpu_f77blas.h"
 #include <cstdio>
 #include <algorithm>
 
@@ -62,11 +62,7 @@ void LD::calcLD(){
     double alpha = 1.0 / (nr - 1);
     double *ptr1 = geno_buffer[cacl_index_buffer].get();
     double *res1 = new double[nc1 * nc1];
-#if GCTA_CPU_x86
-    dsyrk(&uplo, &trans, &nc1, &nr, &alpha, ptr1, &nr, &zero, res1, &nc1);
-#else
-    dsyrk_(&uplo, &trans, &nc1, &nr, &alpha, ptr1, &nr, &zero, res1, &nc1);
-#endif
+    cblas_dsyrk(CblasColMajor, CblasLower, CblasTrans, nc1, nr, alpha, ptr1, nr, zero, res1, nc1);
 
     double *res2 = nullptr;
     // is previous buffer active?
@@ -76,11 +72,7 @@ void LD::calcLD(){
         nc2 = cur_buffer_offset[!cacl_index_buffer] / nr;
         double *ptr2 = geno_buffer[!cacl_index_buffer].get();
         res2 = new double[nc2 * nc1];
-#if GCTA_CPU_x86
-        dgemm(&trans, &notrans, &nc2, &nc1, &nr, &alpha, ptr2, &nr, ptr1, &nr, &zero, res2, &nc2);
-#else
-        dgemm_(&trans, &notrans, &nc2, &nc1, &nr, &alpha, ptr2, &nr, ptr1, &nr, &zero, res2, &nc2);
-#endif
+        cblas_dgemm(CblasColMajor, CblasTrans, CblasNoTrans, nc2, nc1, nr, alpha, ptr2, nr, ptr1, nr, zero, res2, nc2);
     }
     
     for(int i = 0; i < nc1; i++){

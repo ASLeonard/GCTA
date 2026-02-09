@@ -50,13 +50,49 @@
   #include <cblas_new.h>
   #include <lapack.h>
   typedef __LAPACK_int gcta_blas_int;
+
+  #define dpotrf dpotrf_
+  #define dpotri dpotri_
+  #define dgetrf dgetrf_
+  #define dgetri dgetri_
+  #define dgeqrf dgeqrf_
+  #define dormqr dormqr_
 #else
   #ifndef EIGEN_USE_BLAS
   #define EIGEN_USE_BLAS
   #endif
   #include <cblas.h>
-  #include <clapack.h>
+  #if defined(__has_include)
+    #if __has_include(<lapacke.h>)
+      #include <lapacke.h>
+    #endif
+  #endif
   typedef int gcta_blas_int;
+
+  // Fortran LAPACK declarations for generic BLAS/LAPACK
+  extern "C" {
+    void dpotrf_(const char *uplo, const gcta_blas_int *n, double *a,
+                 const gcta_blas_int *lda, gcta_blas_int *info);
+    void dpotri_(const char *uplo, const gcta_blas_int *n, double *a,
+                 const gcta_blas_int *lda, gcta_blas_int *info);
+    void dgetrf_(const gcta_blas_int *m, const gcta_blas_int *n, double *a,
+                 const gcta_blas_int *lda, gcta_blas_int *ipiv, gcta_blas_int *info);
+    void dgetri_(const gcta_blas_int *n, double *a, const gcta_blas_int *lda,
+                 const gcta_blas_int *ipiv, double *work, const gcta_blas_int *lwork, gcta_blas_int *info);
+    void dgeqrf_(const gcta_blas_int *m, const gcta_blas_int *n, double *a,
+                 const gcta_blas_int *lda, double *tau, double *work, const gcta_blas_int *lwork, gcta_blas_int *info);
+    void dormqr_(const char *side, const char *trans, const gcta_blas_int *m,
+                 const gcta_blas_int *n, const gcta_blas_int *k, const double *a,
+                 const gcta_blas_int *lda, const double *tau, double *c, const gcta_blas_int *ldc,
+                 double *work, const gcta_blas_int *lwork, gcta_blas_int *info);
+  }
+
+  #define dpotrf dpotrf_
+  #define dpotri dpotri_
+  #define dgetrf dgetrf_
+  #define dgetri dgetri_
+  #define dgeqrf dgeqrf_
+  #define dormqr dormqr_
 #endif
 
 #endif  //END GCTA_CPU_H
