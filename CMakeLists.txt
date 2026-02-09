@@ -33,6 +33,27 @@ endif()
 
 option(GCTA_USE_MKL "Use Intel MKL for BLAS/LAPACK (non-Apple only)" ON)
 
+# Initialize plink-ng submodule if needed
+if(EXISTS "${CMAKE_SOURCE_DIR}/.git" AND NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include/pgenlib_ffi_support.h")
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        message(STATUS "Initializing plink-ng submodule...")
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESULT_VARIABLE GIT_SUBMOD_RESULT)
+        if(NOT GIT_SUBMOD_RESULT EQUAL "0")
+            message(FATAL_ERROR "git submodule update --init --recursive failed with ${GIT_SUBMOD_RESULT}")
+        endif()
+    else()
+        message(FATAL_ERROR "plink-ng submodule not initialized. Please run: git submodule update --init --recursive")
+    endif()
+endif()
+
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include/pgenlib_ffi_support.h")
+    message(FATAL_ERROR "plink-ng submodule is missing. Please run: git submodule update --init --recursive")
+endif()
+
 # Fetch 3rd parties
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
