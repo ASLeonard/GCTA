@@ -1341,19 +1341,13 @@ void FastFAM::conditionCovarReg(VectorXd &y, VectorXd &condPheno){
 
 void FastFAM::conditionCovarBinReg(Eigen::Ref<VectorXd> y){
     double *Hy = new double[num_indi];
-    const char nT = 'N';
     const double a1 = 1.0;
     const double a2 = -1.0;
     const double b1 = 0;
     const double b2 = 1.0;
     const int incr = 1;
-#if GCTA_CPU_x86
-    dgemv(&nT, &num_covar, &numi_indi, &a1, H.data(), &num_covar, y.data(), &incr, &b1, Hy, &incr);
-    dgemv(&nT, &numi_indi, &num_covar, &a2, covar.data(), &numi_indi, Hy, &incr, &b2, y.data(), &incr);
-#else 
-    dgemv_(&nT, &num_covar, &numi_indi, &a1, H.data(), &num_covar, y.data(), &incr, &b1, Hy, &incr);
-    dgemv_(&nT, &numi_indi, &num_covar, &a2, covar.data(), &numi_indi, Hy, &incr, &b2, y.data(), &incr);
-#endif
+    cblas_dgemv(CblasColMajor, CblasNoTrans, (int)num_covar, (int)numi_indi, a1, H.data(), (int)num_covar, y.data(), incr, b1, Hy, incr);
+    cblas_dgemv(CblasColMajor, CblasNoTrans, (int)numi_indi, (int)num_covar, a2, covar.data(), (int)numi_indi, Hy, incr, b2, y.data(), incr);
     delete[] Hy;
 }
 

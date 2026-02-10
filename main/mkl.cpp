@@ -359,14 +359,11 @@ bool gcta::comput_inverse_logdet_LDLT_mkl(eigenMatrix &Vi, double &logdet)
     }
     //LOGGER << "Finished copy" << endl;
 
-    // MKL's Cholesky decomposition
-    int info = 0, int_n = (int) n;
+    // Cholesky decomposition
+    gcta_blas_int info = 0;
+    gcta_blas_int int_n = (gcta_blas_int) n;
     char uplo = 'L';
-#if GCTA_CPU_x86
     dpotrf(&uplo, &int_n, Vi_mkl, &int_n, &info);
-#else
-    dpotrf_(&uplo, &int_n, Vi_mkl, &int_n, &info);
-#endif
     //LOGGER << "Finished decompose" << endl;
     //spotrf( &uplo, &n, Vi_mkl, &n, &info );
     if (info < 0){
@@ -383,11 +380,7 @@ bool gcta::comput_inverse_logdet_LDLT_mkl(eigenMatrix &Vi, double &logdet)
 
         //LOGGER << "start inverse" << endl;
         // Calcualte V inverse
-#if GCTA_CPU_x86
         dpotri(&uplo, &int_n, Vi_mkl, &int_n, &info);
-#else
-        dpotri_(&uplo, &int_n, Vi_mkl, &int_n, &info);
-#endif
         //LOGGER << "Inverse finished" << endl;
         //spotri( &uplo, &n, Vi_mkl, &n, &info );
         if (info < 0){
@@ -423,20 +416,15 @@ bool gcta::comput_inverse_logdet_LU_mkl(eigenMatrix &Vi, double &logdet)
         }
     }
 
-    int N = (int) n;
-    int *IPIV = new int[n + 1];
-    int LWORK = N*N;
+    gcta_blas_int N = (gcta_blas_int) n;
+    std::vector<gcta_blas_int> IPIV(n + 1);
+    gcta_blas_int LWORK = N * N;
     double *WORK = new double[n * n];
-    int INFO;
-#if GCTA_CPU_x86
-    dgetrf(&N, &N, Vi_mkl, &N, IPIV, &INFO);
-#else
-    dgetrf_(&N, &N, Vi_mkl, &N, IPIV, &INFO);
-#endif
+    gcta_blas_int INFO = 0;
+    dgetrf(&N, &N, Vi_mkl, &N, IPIV.data(), &INFO);
     if (INFO < 0) LOGGER.e(0, "LU decomposition failed. Invalid values found in the matrix.\n");
     else if (INFO > 0) {
         delete[] Vi_mkl;
-        delete[] IPIV;
         delete[] WORK;
         return false;
     } else {
@@ -447,16 +435,11 @@ bool gcta::comput_inverse_logdet_LU_mkl(eigenMatrix &Vi, double &logdet)
         }
 
         // Calcualte V inverse
-#if GCTA_CPU_x86
-        dgetri(&N, Vi_mkl, &N, IPIV, WORK, &LWORK, &INFO);
-#else
-        dgetri_(&N, Vi_mkl, &N, IPIV, WORK, &LWORK, &INFO);
-#endif
+        dgetri(&N, Vi_mkl, &N, IPIV.data(), WORK, &LWORK, &INFO);
         if (INFO < 0){
             LOGGER.e(0, "invalid values found in the variance-covariance (V) matrix.\n");
         }else if (INFO > 0){
             delete[] Vi_mkl;
-            delete[] IPIV;
             delete[] WORK;
             return false;
         }else {
@@ -469,7 +452,6 @@ bool gcta::comput_inverse_logdet_LU_mkl(eigenMatrix &Vi, double &logdet)
 
     // free memory
     delete[] Vi_mkl;
-    delete[] IPIV;
     delete[] WORK;
 
     return true;
@@ -485,21 +467,16 @@ bool gcta::comput_inverse_logdet_LU_mkl_array(int n, float *Vi, double &logdet) 
         }
     }
 
-    int N = (int) n;
-    int *IPIV = new int[n + 1];
-    int LWORK = N*N;
+    gcta_blas_int N = (gcta_blas_int) n;
+    std::vector<gcta_blas_int> IPIV(n + 1);
+    gcta_blas_int LWORK = N * N;
     double *WORK = new double[n * n];
-    int INFO;
-#if GCTA_CPU_x86
-    dgetrf(&N, &N, Vi_mkl, &N, IPIV, &INFO);
-#else
-    dgetrf_(&N, &N, Vi_mkl, &N, IPIV, &INFO);    
-#endif
+    gcta_blas_int INFO = 0;
+    dgetrf(&N, &N, Vi_mkl, &N, IPIV.data(), &INFO);
     if (INFO < 0) LOGGER.e(0, "LU decomposition failed. Invalid values found in the matrix.\n");
     else if (INFO > 0) {
         // free memory
         delete[] Vi_mkl;
-        delete[] IPIV;
         delete[] WORK;
 
         return (false); //Vi.diagonal()=Vi.diagonal().array()+Vi.diagonal().mean()*1e-3;
@@ -511,16 +488,11 @@ bool gcta::comput_inverse_logdet_LU_mkl_array(int n, float *Vi, double &logdet) 
         }
 
         // Calcualte V inverse
-#if GCTA_CPU_x86
-        dgetri(&N, Vi_mkl, &N, IPIV, WORK, &LWORK, &INFO);
-#else
-        dgetri_(&N, Vi_mkl, &N, IPIV, WORK, &LWORK, &INFO);
-#endif
+        dgetri(&N, Vi_mkl, &N, IPIV.data(), WORK, &LWORK, &INFO);
         if (INFO < 0) LOGGER.e(0, "invalid values found in the variance-covariance (V) matrix.\n");
         else if (INFO > 0) {
             // free memory
             delete[] Vi_mkl;
-            delete[] IPIV;
             delete[] WORK;
             return (false); // Vi.diagonal()=Vi.diagonal().array()+Vi.diagonal().mean()*1e-3;
         }else {
@@ -533,7 +505,6 @@ bool gcta::comput_inverse_logdet_LU_mkl_array(int n, float *Vi, double &logdet) 
 
     // free memory
     delete[] Vi_mkl;
-    delete[] IPIV;
     delete[] WORK;
 
     return true;
