@@ -2,8 +2,8 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.16)
 
 project(GCTA2 LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_C_STANDARD 17)
+set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_C_STANDARD 23)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -17,6 +17,15 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
     MESSAGE("Compiling by Clang ${CMAKE_CXX_COMPILER_VERSION}")
     if (NOT (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 8.0))
         MESSAGE(FATAL_ERROR "GCTA can't build without Clang version >= 8.0")
+    endif()
+
+    # If using Homebrew LLVM on macOS, ensure we use its libc++
+    if(APPLE AND CMAKE_CXX_COMPILER MATCHES "/opt/homebrew/opt/llvm")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
+        link_directories(/opt/homebrew/opt/llvm/lib/c++)
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -L/opt/homebrew/opt/llvm/lib/c++")
+        list(APPEND CMAKE_BUILD_RPATH "/opt/homebrew/opt/llvm/lib/c++")
+        message(STATUS "Using Homebrew LLVM libc++ from /opt/homebrew/opt/llvm/lib/c++")
     endif()
 else()
     MESSAGE(FATAL_ERROR "GCTA can only compile with GCC or Clang")
