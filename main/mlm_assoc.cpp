@@ -12,6 +12,12 @@
 
 #include "gcta.h"
 
+#include <algorithm>
+#include <fstream>
+#include <string_view>
+#include <boost/iostreams/filter/gzip.hpp>
+#include <boost/iostreams/filtering_stream.hpp>
+
 void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, string phen_file, string qcovar_file, string covar_file, int mphen, int MaxIter, vector<double> reml_priors, vector<double> reml_priors_var, bool no_constrain, bool within_family, bool inbred, bool no_adj_covar, string weight_file, string save_reml_file, string load_reml_file)
 {
     _within_family=within_family;
@@ -249,7 +255,7 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     
     _P.resize(0,0);
     _A.clear();
-    float *y=new float[n];
+    std::vector<float> y(n);
     eigenVector y_buf=_y;
 
     cout << "\nRegression coefficient(s) (e.g., general mean): " <<_b <<endl;
@@ -273,9 +279,8 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     
     if (_mu.empty()) calcu_mu();
     eigenVector beta, se, pval;
-    if(no_adj_covar) mlma_calcu_stat_covar(y, _geno_mkl, n, m, beta, se, pval);
-    else mlma_calcu_stat(y, _geno_mkl, n, m, beta, se, pval);
-    delete[] y;
+    if(no_adj_covar) mlma_calcu_stat_covar(std::span<const float>(y), std::span<const float>(_geno_mkl, static_cast<size_t>(n) * m), m, beta, se, pval);
+    else mlma_calcu_stat(std::span<const float>(y), std::span<const float>(_geno_mkl, static_cast<size_t>(n) * m), m, beta, se, pval);
     delete[] _geno_mkl;
     
     string filename=_out+".mlma";
@@ -292,14 +297,15 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     ofile.close();
 }
 
-void gcta::mlma_calcu_stat(float *y, float *geno_mkl, unsigned long n, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval)
+void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<const float> geno_mkl, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval)
 {
+    const auto n = static_cast<unsigned long>(y.size());
     int max_block_size = 10000;
     unsigned long i=0, j=0;
     double Xt_Vi_X=0.0, chisq=0.0;
-    float *X=new float[n];
-    float *Vi_X=new float[n];
-    float *Vi=new float[n*n];
+    std::vector<float> X(n);
+    std::vector<float> Vi_X(n);
+    std::vector<float> Vi(static_cast<size_t>(n) * n);
     #pragma omp parallel for private(j)
     for(i=0; i<n; i++){
         for(j=0; j<n; j++) Vi[i*n+j]=_Vi(i,j);
@@ -326,32 +332,30 @@ void gcta::mlma_calcu_stat(float *y, float *geno_mkl, unsigned long n, unsigned 
         }
 
         for(j = 0; j < n; j++) X[j] = X_block(j, block_col);
-        cblas_sgemv(CblasRowMajor, CblasNoTrans, n, n, 1.0, Vi, n, X, 1, 0.0, Vi_X, 1);
-        Xt_Vi_X=cblas_sdot(n, X, 1, Vi_X, 1);
+        cblas_sgemv(CblasRowMajor, CblasNoTrans, n, n, 1.0, Vi.data(), n, X.data(), 1, 0.0, Vi_X.data(), 1);
+        Xt_Vi_X=cblas_sdot(n, X.data(), 1, Vi_X.data(), 1);
         se[i]=1.0/Xt_Vi_X;
-        beta[i]=se[i]*cblas_sdot(n, y, 1, Vi_X, 1);
+        beta[i]=se[i]*cblas_sdot(n, y.data(), 1, Vi_X.data(), 1);
         if(se[i]>1.0e-30){
             se[i]=sqrt(se[i]);
             chisq=beta[i]/se[i];
             pval[i]=StatFunc::pchisq(chisq*chisq, 1);
         }
     }
-    delete[] X;
-    delete[] Vi_X;
-    delete[] Vi;
 }
 
-void gcta::mlma_calcu_stat_covar(float *y, float *geno_mkl, unsigned long n, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval)
+void gcta::mlma_calcu_stat_covar(std::span<const float> y, [[maybe_unused]] std::span<const float> geno_mkl, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval)
 {
+    const auto n = static_cast<unsigned long>(y.size());
     int max_block_size = 10000;
     unsigned long i=0, j=0, col_num=_X_c+1;
     double chisq=0.0, d_buf=0.0;
-    float *Vi=new float[n*n];
-    float *X=new float[n*col_num];
-    float *Vi_X=new float[n*col_num];
-    float *Xt_Vi_X=new float[col_num*col_num];
-    float *Xt_Vi_y=new float[col_num];
-    float *b_vec=new float[col_num];
+    std::vector<float> Vi(static_cast<size_t>(n) * n);
+    std::vector<float> X(static_cast<size_t>(n) * col_num);
+    std::vector<float> Vi_X(static_cast<size_t>(n) * col_num);
+    std::vector<float> Xt_Vi_X(static_cast<size_t>(col_num) * col_num);
+    std::vector<float> Xt_Vi_y(col_num);
+    std::vector<float> b_vec(col_num);
     #pragma omp parallel for private(j)
     for(i=0; i<n; i++){
         for(j=0; j<n; j++) Vi[i*n+j]=_Vi(i,j);
@@ -382,11 +386,11 @@ void gcta::mlma_calcu_stat_covar(float *y, float *geno_mkl, unsigned long n, uns
         }
 
         for(j = 0; j < n; j++) X[j*col_num+_X_c] = X_block(j, block_col);
-        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, n, col_num, n, 1.0, Vi, n, X, col_num, 0.0, Vi_X, col_num);
-        cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans, col_num, col_num, n, 1.0, X, col_num, Vi_X, col_num, 0.0, Xt_Vi_X, col_num);
-        if(!comput_inverse_logdet_LU_mkl_array(col_num, Xt_Vi_X, d_buf)) LOGGER.e(0, "Xt_Vi_X is not invertible.");
-        cblas_sgemv(CblasRowMajor, CblasTrans, n, col_num, 1.0, Vi_X, col_num, y, 1, 0.0, Xt_Vi_y, 1);
-        cblas_sgemv(CblasRowMajor, CblasNoTrans, col_num, col_num, 1.0, Xt_Vi_X, col_num, Xt_Vi_y, 1, 0.0, b_vec, 1);
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, n, col_num, n, 1.0, Vi.data(), n, X.data(), col_num, 0.0, Vi_X.data(), col_num);
+        cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans, col_num, col_num, n, 1.0, X.data(), col_num, Vi_X.data(), col_num, 0.0, Xt_Vi_X.data(), col_num);
+        if(!comput_inverse_logdet_LU_mkl_array(col_num, Xt_Vi_X.data(), d_buf)) LOGGER.e(0, "Xt_Vi_X is not invertible.");
+        cblas_sgemv(CblasRowMajor, CblasTrans, n, col_num, 1.0, Vi_X.data(), col_num, y.data(), 1, 0.0, Xt_Vi_y.data(), 1);
+        cblas_sgemv(CblasRowMajor, CblasNoTrans, col_num, col_num, 1.0, Xt_Vi_X.data(), col_num, Xt_Vi_y.data(), 1, 0.0, b_vec.data(), 1);
         se[i]=Xt_Vi_X[_X_c*col_num+_X_c];
         beta[i]=b_vec[_X_c];
         if(se[i]>1.0e-30){
@@ -395,12 +399,6 @@ void gcta::mlma_calcu_stat_covar(float *y, float *geno_mkl, unsigned long n, uns
             pval[i]=StatFunc::pchisq(chisq*chisq, 1);
         }
     }
-    delete[] Vi;
-    delete[] X;
-    delete[] Vi_X;
-    delete[] Xt_Vi_X;
-    delete[] Xt_Vi_y;
-    delete[] b_vec;
 }
 
 void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, int mphen, int MaxIter, vector<double> reml_priors, vector<double> reml_priors_var, bool no_constrain, bool inbred, bool no_adj_covar)
@@ -436,8 +434,9 @@ void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, in
     LOGGER<<_n<<" individuals are in common in these files."<<endl;
     
     vector<int> chrs, vi_buf(_chr);
-    stable_sort(vi_buf.begin(), vi_buf.end());
-	vi_buf.erase(unique(vi_buf.begin(), vi_buf.end()), vi_buf.end());
+    std::ranges::sort(vi_buf);
+    auto unique_range = std::ranges::unique(vi_buf);
+    vi_buf.erase(unique_range.begin(), vi_buf.end());
     if(vi_buf.size()<2) LOGGER.e(0, "There is only one chromosome. The MLM leave-on-chromosome-out (LOCO) analysis requires at least two chromosomes.");
     for(i=0; i<vi_buf.size(); i++){
         if(vi_buf[i]<=_autosome_num) chrs.push_back(vi_buf[i]);
@@ -505,7 +504,7 @@ void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, in
     _A[1]=eigenMatrix::Identity(_n, _n);
     
     eigenVector y_buf=_y;
-    float *y=new float[_n];
+    std::vector<float> y(_n);
     vector<eigenVector> beta(chrs.size()), se(chrs.size()), pval(chrs.size());
     for(c1=0; c1<chrs.size(); c1++){
         LOGGER<<"\n-----------------------------------\n#Chr "<<chrs[c1]<<":"<<endl;
@@ -541,15 +540,14 @@ void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, in
         _P.resize(0,0);
         _A[0].resize(0,0);
 
-        if(no_adj_covar)  mlma_calcu_stat_covar(y, (geno_chrs[c1]), n, _include.size(), beta[c1], se[c1], pval[c1]);
-        else mlma_calcu_stat(y, (geno_chrs[c1]), n, _include.size(), beta[c1], se[c1], pval[c1]);
+        if(no_adj_covar)  mlma_calcu_stat_covar(std::span<const float>(y), std::span<const float>(geno_chrs[c1], static_cast<size_t>(n) * _include.size()), _include.size(), beta[c1], se[c1], pval[c1]);
+        else mlma_calcu_stat(std::span<const float>(y), std::span<const float>(geno_chrs[c1], static_cast<size_t>(n) * _include.size()), _include.size(), beta[c1], se[c1], pval[c1]);
         
         _include=include_o;
         _snp_name_map=snp_name_map_o;
         LOGGER<<"-----------------------------------"<<endl;
     }
     
-    delete[] y;
     for(c1=0; c1<chrs.size(); c1++){
         delete[] (grm_chrs[c1]);
         delete[] (geno_chrs[c1]);
@@ -588,8 +586,11 @@ void gcta::grm_minus_grm(float *grm, float *sub_grm)
 
 void gcta::save_reml_state(string filename, bool no_adj_covar)
 {
-    gzofstream outfile(filename.c_str());
-    if(!outfile.good()) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
+    std::ofstream raw_file(filename, std::ios::binary);
+    if(!raw_file.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
+    boost::iostreams::filtering_ostream outfile;
+    outfile.push(boost::iostreams::gzip_compressor());
+    outfile.push(raw_file);
     
     // Write magic header
     char magic[5] = "REML";
@@ -635,18 +636,22 @@ void gcta::save_reml_state(string filename, bool no_adj_covar)
         outfile.write((char*)&idx, sizeof(int));
     }
     
-    outfile.close();
+    outfile.reset();
+    raw_file.close();
 }
 
 void gcta::load_reml_state(string filename, bool no_adj_covar)
 {
-    gzifstream infile(filename.c_str());
-    if(!infile.good()) LOGGER.e(0, "cannot open the file ["+filename+"] to read. Make sure you have run --mlma with --reml-only first.");
+    std::ifstream raw_file(filename, std::ios::binary);
+    if(!raw_file.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to read. Make sure you have run --mlma with --reml-only first.");
+    boost::iostreams::filtering_istream infile;
+    infile.push(boost::iostreams::gzip_decompressor());
+    infile.push(raw_file);
     
     // Read and verify magic header
     char magic[5] = {0};
     infile.read(magic, 4);
-    if(string(magic) != "REML") LOGGER.e(0, "file ["+filename+"] is not a valid REML state file.");
+    if(std::string_view(magic, 4) != "REML") LOGGER.e(0, "file ["+filename+"] is not a valid REML state file.");
     
     // Read dimensions
     int n = 0, x_c = 0, num_varcmp = 0, num_r_indx = 0;
@@ -697,7 +702,8 @@ void gcta::load_reml_state(string filename, bool no_adj_covar)
         _r_indx[i] = idx;
     }
     
-    infile.close();
+    infile.reset();
+    raw_file.close();
     
     LOGGER << "Loaded REML state: n=" << n << ", covariates=" << x_c << ", variance components=" << num_varcmp << endl;
 }

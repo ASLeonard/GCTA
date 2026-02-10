@@ -89,7 +89,7 @@ set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_SHARED ON CACHE BOOL "" FORCE)
 set(BOOST_ENABLE_CMAKE ON CACHE BOOL "" FORCE)
-set(BOOST_INCLUDE_LIBRARIES "algorithm;math;crc" CACHE STRING "" FORCE)
+set(BOOST_INCLUDE_LIBRARIES "algorithm;math;crc;iostreams" CACHE STRING "" FORCE)
 
 FetchContent_Declare(
     zlib
@@ -238,7 +238,7 @@ foreach(lib_src ${SRCS})
         "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/simde")
 
     target_link_libraries(${lib_name}
-        Boost::algorithm Boost::math Boost::crc
+        Boost::algorithm Boost::math Boost::crc Boost::iostreams
         Eigen3::Eigen
         Spectra
         sqlite3)
@@ -250,7 +250,7 @@ add_executable(gcta64 ${MAIN_SOURCE})
 
 add_subdirectory(main)
 target_include_directories(mainV1 PUBLIC ${COMMON_INCLUDES} ${GCTA_BLAS_INCLUDE_DIRS})
-target_link_libraries(mainV1 Eigen3::Eigen)
+target_link_libraries(mainV1 Eigen3::Eigen Boost::iostreams)
 
 set(GCTA_TARGETS gcta64 mainV1 ${GCTA_LIBS})
 

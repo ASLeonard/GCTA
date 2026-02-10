@@ -27,8 +27,8 @@
 #include <iomanip>
 #include <bitset>
 #include <map>
+#include <span>
 #include <Eigen/StdVector>
-#include "zfstream.h"
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <unsupported/Eigen/SparseExtra>
@@ -395,8 +395,8 @@ private:
     
 
     // mlma
-    void mlma_calcu_stat(float *y, float *geno_mkl, unsigned long n, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval);
-    void mlma_calcu_stat_covar(float *y, float *geno_mkl, unsigned long n, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval);
+    void mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<const float> geno_mkl, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval);
+    void mlma_calcu_stat_covar(std::span<const float> y, [[maybe_unused]] std::span<const float> geno_mkl, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval);
     void grm_minus_grm(float *grm, float *sub_grm);
 
     // population

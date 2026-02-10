@@ -2,6 +2,9 @@
 #include "Logger.h"
 #include <sstream>
 #include <iterator>
+#include <fstream>
+#include <boost/iostreams/filter/gzip.hpp>
+#include <boost/iostreams/filtering_stream.hpp>
 
 bool determine_gwas_file(string input_file) {
     int nelements = 0;
@@ -526,11 +529,15 @@ void gcta::gsmr(int gsmr_alg_flag, string ref_ld_dirt, string w_ld_dirt, double 
             collect_snp_instru_effect(ss_effect, _snp_val_flag, snp_instru_map, _meta_snp_name_map, _meta_snp_a1, _meta_snp_a2, _meta_snp_freq, _meta_snp_b, _meta_snp_se);
             string output_filename = _out + ".eff_plot.gz";
             LOGGER.i(0, "Saving the SNP instruments for the GSMR plots to [" + output_filename + "] ...");
-            gzofstream zofile(output_filename.c_str());
-            if (!zofile) LOGGER.e(0, "cannot open the file [" + output_filename + "] to write.");
+            std::ofstream raw_file(output_filename, std::ios::binary);
+            if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + output_filename + "] to write.");
+            boost::iostreams::filtering_ostream zofile;
+            zofile.push(boost::iostreams::gzip_compressor());
+            zofile.push(raw_file);
             zofile << ss_pheno.str() << "#gsmr_begin" << endl << ss_gsmr.str() 
                    << "#gsmr_end" << endl << ss_effect.str() << ss.str();
-            zofile.close();
+            zofile.reset();
+            raw_file.close();
         } else {
             LOGGER.w(0, "Not enough SNP instruments to be saved in the compressed text file.");
         }

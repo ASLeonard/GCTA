@@ -11,6 +11,9 @@
  */
 
 #include "gcta.h"
+#include <fstream>
+#include <boost/iostreams/filter/gzip.hpp>
+#include <boost/iostreams/filtering_stream.hpp>
 
 /////////////////
 // data functions
@@ -195,7 +198,7 @@ void gcta::make_grm_mkl(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool o
 
     // count the number of missing genotypes
     vector< vector<int> > miss_pos(n);
-    bool * X_bool = new bool[n * m];
+    std::vector<bool> X_bool(static_cast<size_t>(n) * m);
     for (i = 0; i < n; i++) {
         for (j = 0; j < m; j++) {
             k = i * m + j;
@@ -276,7 +279,6 @@ void gcta::make_grm_mkl(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool o
                 else _geno_mkl[k] = 0.0;
             }
         }
-        delete[] X_bool;
     } else {
         // Output A_N and A
         string out_buf = _out;
@@ -286,7 +288,6 @@ void gcta::make_grm_mkl(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool o
 
         // free memory
         delete[] _geno_mkl;
-        delete[] X_bool;
         delete[] _grm_mkl;
     }
 }
@@ -320,16 +321,19 @@ void gcta::output_grm_mkl(float* A, bool output_grm_bin)
     } else {
         // Save A matrix in txt format
         grm_file = _out + ".grm.gz";
-        gzofstream zoutf;
-        zoutf.open(grm_file.c_str());
-        if (!zoutf.is_open()) LOGGER.e(0, "cannot open the file [" + grm_file + "] to write.");
+        std::ofstream raw_file(grm_file, std::ios::binary);
+        if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + grm_file + "] to write.");
+        boost::iostreams::filtering_ostream zoutf;
+        zoutf.push(boost::iostreams::gzip_compressor());
+        zoutf.push(raw_file);
         LOGGER << "Saving the genetic relationship matrix to the file [" + grm_file + "] (in compressed text format)." << endl;
         zoutf.setf(ios::scientific);
         zoutf.precision(6);
         for (i = 0; i < n; i++) {
             for (j = 0; j <= i; j++) zoutf << i + 1 << '\t' << j + 1 << '\t' << _grm_N(i,j) << '\t' << A[i * n + j] << endl;
         }
-        zoutf.close();
+        zoutf.reset();
+        raw_file.close();
         LOGGER << "The genetic relationship matrix has been saved in the file [" + grm_file + "] (in compressed text format)." << endl;
     }
 

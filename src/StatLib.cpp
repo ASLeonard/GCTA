@@ -82,7 +82,7 @@ namespace StatLib{
         double mean = 1.0 - (1.0 + n) / 2.0;
 
         //outer op
-        double* X = new double[n * n];
+        std::vector<double> X(static_cast<size_t>(n) * n);
         for(int i = 0; i < n; i++){
             int base_index = i * n;
             for(int j = 0; j < n; j++){
@@ -90,19 +90,19 @@ namespace StatLib{
             }
         }
 
-        double* tau = new double[n];
+        std::vector<double> tau(n);
         gcta_blas_int n_lapack = (gcta_blas_int)n;
         gcta_blas_int info = 0;
         gcta_blas_int lda = n_lapack;
         gcta_blas_int lwork = -1;
         double work_query = 0;
-        dgeqrf(&n_lapack, &n_lapack, X, &lda, tau, &work_query, &lwork, &info);
+        dgeqrf(&n_lapack, &n_lapack, X.data(), &lda, tau.data(), &work_query, &lwork, &info);
         lwork = (gcta_blas_int)work_query;
         std::vector<double> work(lwork);
-        dgeqrf(&n_lapack, &n_lapack, X, &lda, tau, work.data(), &lwork, &info);
+        dgeqrf(&n_lapack, &n_lapack, X.data(), &lda, tau.data(), work.data(), &lwork, &info);
         double *c = Z;
         char side = 'L', trans = 'T';
-        dormqr(&side, &trans, &n_lapack, &n_lapack, &n_lapack, X, &lda, tau, c, &lda, work.data(), &lwork, &info);
+        dormqr(&side, &trans, &n_lapack, &n_lapack, &n_lapack, X.data(), &lda, tau.data(), c, &lda, work.data(), &lwork, &info);
         if(info != 0){
             return false;
         }

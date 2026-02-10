@@ -23,6 +23,9 @@
 #include <map>
 #include <set>
 #include <algorithm>
+#include <fstream>
+#include <boost/iostreams/filter/gzip.hpp>
+#include <boost/iostreams/filtering_stream.hpp>
 
 double eps = 1e-6;
 
@@ -355,28 +358,28 @@ vector<string> gcta::read_snp_metafile_gz(string metafile, map<string,int> &gws_
     string strbuf="", snpbuf="";
     vector<string> snplist;
     int line_number=0;
-    const int MAX_LINE_LENGTH = 1024;
-    char buf[MAX_LINE_LENGTH];
     
-    gzifstream meta_snp(metafile.c_str());
-    if (!meta_snp)
+    std::ifstream raw_file(metafile, std::ios::binary);
+    if (!raw_file.is_open())
          LOGGER.e(0, "cannot open the file [" + metafile + "] to read.");
+    boost::iostreams::filtering_istream meta_snp;
+    meta_snp.push(boost::iostreams::gzip_decompressor());
+    meta_snp.push(raw_file);
     
     string err_msg = "Failed to read [" + metafile + "]. An error occurs in line ";
 
     // Read the summary data
-    while(1) {
-        meta_snp.getline(buf, MAX_LINE_LENGTH, '\n');
-        if(meta_snp.fail() || !meta_snp.good()) break;
+    string line;
+    while(std::getline(meta_snp, line)) {
         line_number ++;
         if(line_number==1) continue;
-        stringstream ss(buf);
-        if (!(ss >> snpbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        stringstream ss(line);
+        if (!(ss >> snpbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         // Save the SNPs
         snplist.push_back(snpbuf);
         int i = 0;
         for( i=0; i<6; i++)
-            if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+            if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         // Save the p-value
         double pval_buf = 1.0;
         if(strbuf!="." && strbuf!="NA" && strbuf!="NAN") pval_buf = atof(strbuf.c_str());
@@ -386,7 +389,8 @@ vector<string> gcta::read_snp_metafile_gz(string metafile, map<string,int> &gws_
         }
     }
 
-    meta_snp.close();
+    meta_snp.reset();
+    raw_file.close();
     return snplist;
 }
 
@@ -459,12 +463,12 @@ double gcta::read_single_metafile_gz(string metafile, map<string, int> id_map,
                          eigenVector &snp_se, eigenVector &snp_pval,
                          eigenVector &snp_n, vector<bool> &snp_flag) {
    
-    const int MAX_LINE_LENGTH = 1024;
-    char buf[MAX_LINE_LENGTH];
-
-    gzifstream meta_raw(metafile.c_str());
-    if (!meta_raw)
+    std::ifstream raw_file(metafile, std::ios::binary);
+    if (!raw_file.is_open())
         LOGGER.e(0, "cannot open the file [" + metafile + "] to read.");
+    boost::iostreams::filtering_istream meta_raw;
+    meta_raw.push(boost::iostreams::gzip_decompressor());
+    meta_raw.push(raw_file);
     string err_msg = "Failed to read [" + metafile + "]. An error occurs in line ";
 
     int line_number=0, snp_indx=0;
@@ -474,46 +478,45 @@ double gcta::read_single_metafile_gz(string metafile, map<string, int> id_map,
     bool missing_flag = false;
     string strbuf = "";
     vector<double> vec_vp_buf;
-    while(1) {
-        meta_raw.getline(buf, MAX_LINE_LENGTH, '\n');
-        if(meta_raw.fail() || !meta_raw.good()) break;
+    string line;
+    while(std::getline(meta_raw, line)) {
         missing_flag = false;
         line_number++;
         if(line_number==1) continue;
          
         string snpbuf = "", strbuf = "", valbuf = "";
-        stringstream ss(buf);
+        stringstream ss(line);
         // SNP
-        if (!(ss >> snpbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> snpbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         iter = id_map.find(snpbuf);
         if(iter == id_map.end()) continue;     
         snp_indx = iter->second;
         // a1 
-        if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         StrFunc::to_upper(strbuf);
         snp_a1[snp_indx] = strbuf;
         // a2
-        if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         StrFunc::to_upper(strbuf);
         snp_a2[snp_indx] = strbuf;
         // freq
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_freq(snp_indx) = atof(valbuf.c_str());
         else { snp_freq(snp_indx) = nan(""); missing_flag=true; }
         // b
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_b(snp_indx) = atof(valbuf.c_str());
         else { snp_b(snp_indx) = nan(""); missing_flag=true; }
         // se
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_se(snp_indx) = atof(valbuf.c_str());
         else { snp_se(snp_indx) = nan(""); missing_flag=true; }
         // p-value
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_pval(snp_indx) = atof(valbuf.c_str());
         else { snp_pval(snp_indx) = nan(""); missing_flag=true; }
         // n
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_n(snp_indx) = atof(valbuf.c_str());
         else { snp_n(snp_indx) = nan(""); missing_flag=true; }
         snp_flag[snp_indx] = true;
@@ -524,7 +527,8 @@ double gcta::read_single_metafile_gz(string metafile, map<string, int> id_map,
             vec_vp_buf.push_back(vp_buf);
         }        
     }
-    meta_raw.close();
+    meta_raw.reset();
+    raw_file.close();
     if(vec_vp_buf.size()>0) median_vp = CommFunc::median(vec_vp_buf);
 
     return median_vp;
@@ -1761,14 +1765,15 @@ vector<string> read_ld_score_gz(string filestr, map<string,int> snplist_map, vec
 
     string err_msg = "Failed to read [" + filestr + "]. An error occurs in line ";
 
-    const int MAX_LINE_LENGTH = 1024;
-    char strbuf[MAX_LINE_LENGTH];
-    gzifstream ldsc_marker(filestr.c_str());
-    while(1) {
-        ldsc_marker.getline(strbuf, MAX_LINE_LENGTH, '\n');
-        if (ldsc_marker.fail() || !ldsc_marker.good()) break;
+    std::ifstream raw_file(filestr, std::ios::binary);
+    if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + filestr + "] to read.");
+    boost::iostreams::filtering_istream ldsc_marker;
+    ldsc_marker.push(boost::iostreams::gzip_decompressor());
+    ldsc_marker.push(raw_file);
+    string line;
+    while(std::getline(ldsc_marker, line)) {
         line_number ++;
-        std::istringstream linebuf(strbuf);
+        std::istringstream linebuf(line);
         std::istream_iterator<string> begin(linebuf), end;
         vector<string> line_elements(begin, end);
         if(line_elements.size() == 4) {
@@ -1790,7 +1795,8 @@ vector<string> read_ld_score_gz(string filestr, map<string,int> snplist_map, vec
             ld_score_snps.push_back(snpbuf);
         }
     }
-    ldsc_marker.close();
+    ldsc_marker.reset();
+    raw_file.close();
     return ld_score_snps;
 }
 
