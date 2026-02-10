@@ -1402,12 +1402,26 @@ void option(int option_num, char* option_str[])
                 if(gsmr_flag) pter_gcta->read_gsmrfile(expo_file_list, outcome_file_list, gwas_thresh, nsnp_gsmr, gsmr_so_alg);
                 if(mtcojo_flag) nsnp_read = pter_gcta->read_mtcojofile(mtcojolist_file, gwas_thresh, nsnp_gsmr);
                 if(mtcojo_flag && nsnp_read>0) {
-                    if(bfile_flag==1) pter_gcta->read_bedfile(bfile + ".bed");
-                    else pter_gcta->read_multi_bedfiles(multi_bfiles);
+                    if(bfile_flag==1) {
+                        if (genetic_model != "additive") {
+                            pter_gcta->read_bed_dosage(bfile + ".bed");
+                        } else {
+                            pter_gcta->read_bedfile(bfile + ".bed");
+                        }
+                    } else {
+                        pter_gcta->read_multi_bedfiles(multi_bfiles);
+                    }
                 }
                 if(!mtcojo_flag){
-                    if(bfile_flag==1) pter_gcta->read_bedfile(bfile + ".bed");
-                    else pter_gcta->read_multi_bedfiles(multi_bfiles);
+                    if(bfile_flag==1) {
+                        if (genetic_model != "additive") {
+                            pter_gcta->read_bed_dosage(bfile + ".bed");
+                        } else {
+                            pter_gcta->read_bedfile(bfile + ".bed");
+                        }
+                    } else {
+                        pter_gcta->read_multi_bedfiles(multi_bfiles);
+                    }
                 }
 
                 if (!update_impRsq_file.empty()) pter_gcta->update_impRsq(update_impRsq_file);
