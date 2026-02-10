@@ -29,6 +29,7 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     if (!qcovar_flag && !covar_flag) no_adj_covar=false;
     if (m_grm_flag) grm_flag = false;
     bool subtract_grm_flag = (!subtract_grm_file.empty());
+    const bool skip_grm_loading = !load_reml_file.empty();
     if (subtract_grm_flag && m_grm_flag) LOGGER.e(0, "the --mlma-subtract-grm option cannot be used in combination with the --mgrm option.");
     
     // Read data
@@ -55,31 +56,37 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
         LOGGER.e(0, "no individual is in common among the input files.");
     }
 
-    if(subtract_grm_flag){
-        grm_files.push_back(grm_file);
-        grm_files.push_back(subtract_grm_file);
-        for (i = 0; i < grm_files.size(); i++) {
-            read_grm(grm_files[i], grm_id, false, true, true);
-            update_id_map_kp(grm_id, _id_map, _keep);
-        }        
-    }
-    else{
-        if(grm_flag){
-            grm_files.push_back(grm_file);
-            read_grm(grm_file, grm_id, true, false, true);
-            update_id_map_kp(grm_id, _id_map, _keep);
+    if (skip_grm_loading) {
+        if (!grm_file.empty() || m_grm_flag || subtract_grm_flag) {
+            LOGGER << "Skipping GRM loading because --load-reml is set. Ensure the saved REML state matches the current sample set." << endl;
         }
-        else if (m_grm_flag) {
-            read_grm_filenames(grm_file, grm_files, false);
+    } else {
+        if(subtract_grm_flag){
+            grm_files.push_back(grm_file);
+            grm_files.push_back(subtract_grm_file);
             for (i = 0; i < grm_files.size(); i++) {
                 read_grm(grm_files[i], grm_id, false, true, true);
                 update_id_map_kp(grm_id, _id_map, _keep);
             }
         }
         else{
-            grm_files.push_back("NA");
-            make_grm_mkl(false, false, inbred, true, 0, true);
-            for(i=0; i<_keep.size(); i++) grm_id.push_back(_fid[_keep[i]]+":"+_pid[_keep[i]]);
+            if(grm_flag){
+                grm_files.push_back(grm_file);
+                read_grm(grm_file, grm_id, true, false, true);
+                update_id_map_kp(grm_id, _id_map, _keep);
+            }
+            else if (m_grm_flag) {
+                read_grm_filenames(grm_file, grm_files, false);
+                for (i = 0; i < grm_files.size(); i++) {
+                    read_grm(grm_files[i], grm_id, false, true, true);
+                    update_id_map_kp(grm_id, _id_map, _keep);
+                }
+            }
+            else{
+                grm_files.push_back("NA");
+                make_grm_mkl(false, false, inbred, true, 0, true);
+                for(i=0; i<_keep.size(); i++) grm_id.push_back(_fid[_keep[i]]+":"+_pid[_keep[i]]);
+            }
         }
     }
     
@@ -104,111 +111,113 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
 
     _r_indx.clear();
     vector<int> kp;
-    if (subtract_grm_flag) {
-        _r_indx = {0, 1};
-        _A.resize(_r_indx.size());
+    if (!skip_grm_loading) {
+        if (subtract_grm_flag) {
+            _r_indx = {0, 1};
+            _A.resize(_r_indx.size());
 
-        LOGGER << "\nReading the primary GRM from [" << grm_files[1] << "] ..." << endl;
-        read_grm(grm_files[1], grm_id, true, false, false);
+            LOGGER << "\nReading the primary GRM from [" << grm_files[1] << "] ..." << endl;
+            read_grm(grm_files[1], grm_id, true, false, false);
 
-        StrFunc::match(uni_id, grm_id, kp);
-        (_A[0]).resize(_n, _n);
-        Eigen::MatrixXf A_N_buf(_n, _n);
-        #pragma omp parallel for private(k)
-        for (j = 0; j < _n; j++) {
-            for (k = 0; k <= j; k++) {
-                if (kp[j] >= kp[k]){
-                    (_A[0])(k, j) = (_A[0])(j, k) = _grm(kp[j], kp[k]);
-                    A_N_buf(k, j) = A_N_buf(j, k) = _grm_N(kp[j], kp[k]);
-                }
-                else{
-                    (_A[0])(k, j) = (_A[0])(j, k) = _grm(kp[k], kp[j]);
-                    A_N_buf(k, j) = A_N_buf(j, k) = _grm_N(kp[k], kp[j]);
-                }
-            }
-        }
-
-        LOGGER << "\nReading the secondary GRM from [" << grm_files[0] << "] ..." << endl;
-        read_grm(grm_files[0], grm_id, true, false, false);
-        LOGGER<<"\nSubtracting [" << grm_files[1] << "] from [" << grm_files[0] << "] ..." << endl;
-        StrFunc::match(uni_id, grm_id, kp);
-        #pragma omp parallel for private(k)
-        for (j = 0; j < _n; j++) {
-            for (k = 0; k <= j; k++) {
-                if (kp[j] >= kp[k]) (_A[0])(k, j) = (_A[0])(j, k) = ((_A[0])(j, k) * A_N_buf(j, k)  - _grm(kp[j], kp[k]) * _grm_N(kp[j], kp[k])) / (A_N_buf(j, k) - _grm_N(kp[j], kp[k]));
-                else (_A[0])(k, j) = (_A[0])(j, k) = ((_A[0])(j, k) * A_N_buf(j, k) - _grm(kp[k], kp[j]) * _grm_N(kp[k], kp[j])) / (A_N_buf(j, k) - _grm_N(kp[k], kp[j]));
-            }
-        }
-        _grm.resize(0,0);
-        _grm_N.resize(0,0);
-    }
-    else {
-        _r_indx.resize(grm_files.size() + 1);
-        std::iota(_r_indx.begin(), _r_indx.end(), 0);
-        _A.resize(_r_indx.size());
-        if(grm_flag){
             StrFunc::match(uni_id, grm_id, kp);
             (_A[0]).resize(_n, _n);
-            #pragma omp parallel for private(j)
-            for(i=0; i<_n; i++){
-                for(j=0; j<=i; j++) (_A[0])(j,i)=(_A[0])(i,j)=_grm(kp[i],kp[j]);
-            }
-            _grm.resize(0,0);
-        }
-        else if(m_grm_flag){
-            LOGGER << "There are " << grm_files.size() << " GRM file names specified in the file [" + grm_file + "]." << endl;
-            for (i = 0; i < grm_files.size(); i++) {
-                LOGGER << "Reading the GRM from the " << i + 1 << "th file ..." << endl;
-                read_grm(grm_files[i], grm_id, true, false, true);
-                StrFunc::match(uni_id, grm_id, kp);
-                (_A[i]).resize(_n, _n);
-                #pragma omp parallel for private(k)
-                for (j = 0; j < _n; j++) {
-                    for (k = 0; k <= j; k++) {
-                        if (kp[j] >= kp[k]) (_A[i])(k, j) = (_A[i])(j, k) = _grm(kp[j], kp[k]);
-                        else (_A[i])(k, j) = (_A[i])(j, k) = _grm(kp[k], kp[j]);
+            Eigen::MatrixXf A_N_buf(_n, _n);
+            #pragma omp parallel for private(k)
+            for (j = 0; j < _n; j++) {
+                for (k = 0; k <= j; k++) {
+                    if (kp[j] >= kp[k]){
+                        (_A[0])(k, j) = (_A[0])(j, k) = _grm(kp[j], kp[k]);
+                        A_N_buf(k, j) = A_N_buf(j, k) = _grm_N(kp[j], kp[k]);
+                    }
+                    else{
+                        (_A[0])(k, j) = (_A[0])(j, k) = _grm(kp[k], kp[j]);
+                        A_N_buf(k, j) = A_N_buf(j, k) = _grm_N(kp[k], kp[j]);
                     }
                 }
             }
-        }
-        else{
+
+            LOGGER << "\nReading the secondary GRM from [" << grm_files[0] << "] ..." << endl;
+            read_grm(grm_files[0], grm_id, true, false, false);
+            LOGGER<<"\nSubtracting [" << grm_files[1] << "] from [" << grm_files[0] << "] ..." << endl;
             StrFunc::match(uni_id, grm_id, kp);
-            (_A[0]).resize(_n, _n);
-            #pragma omp parallel for private(j)
-            for(i=0; i<_n; i++){
-                for(j=0; j<=i; j++) (_A[0])(j,i)=(_A[0])(i,j)=_grm_mkl[kp[i]*_n+kp[j]];
+            #pragma omp parallel for private(k)
+            for (j = 0; j < _n; j++) {
+                for (k = 0; k <= j; k++) {
+                    if (kp[j] >= kp[k]) (_A[0])(k, j) = (_A[0])(j, k) = ((_A[0])(j, k) * A_N_buf(j, k)  - _grm(kp[j], kp[k]) * _grm_N(kp[j], kp[k])) / (A_N_buf(j, k) - _grm_N(kp[j], kp[k]));
+                    else (_A[0])(k, j) = (_A[0])(j, k) = ((_A[0])(j, k) * A_N_buf(j, k) - _grm(kp[k], kp[j]) * _grm_N(kp[k], kp[j])) / (A_N_buf(j, k) - _grm_N(kp[k], kp[j]));
+                }
             }
-            delete[] _grm_mkl;
+            _grm.resize(0,0);
+            _grm_N.resize(0,0);
         }
-    }
-    _A[_r_indx.size()-1]=eigenMatrix::Identity(_n, _n);
-    
-    if(!weight_file.empty()){
-        vector<string> weight_ID;
-        vector<double> weights;
-
-        read_weight(weight_file, weight_ID, weights);
-        update_id_map_kp(weight_ID, _id_map, _keep);
-    //}
-    //if(!weight_file.empty()){
-        // contruct weight
-        Eigen::VectorXd v_weight(_n);
-        for (size_t i = 0; i < weight_ID.size(); ++i) {
-            if (auto it = uni_id_map.find(weight_ID[i]); it != uni_id_map.end()) {
-                v_weight(it->second) = weights[i];
+        else {
+            _r_indx.resize(grm_files.size() + 1);
+            std::iota(_r_indx.begin(), _r_indx.end(), 0);
+            _A.resize(_r_indx.size());
+            if(grm_flag){
+                StrFunc::match(uni_id, grm_id, kp);
+                (_A[0]).resize(_n, _n);
+                #pragma omp parallel for private(j)
+                for(i=0; i<_n; i++){
+                    for(j=0; j<=i; j++) (_A[0])(j,i)=(_A[0])(i,j)=_grm(kp[i],kp[j]);
+                }
+                _grm.resize(0,0);
+            }
+            else if(m_grm_flag){
+                LOGGER << "There are " << grm_files.size() << " GRM file names specified in the file [" + grm_file + "]." << endl;
+                for (i = 0; i < grm_files.size(); i++) {
+                    LOGGER << "Reading the GRM from the " << i + 1 << "th file ..." << endl;
+                    read_grm(grm_files[i], grm_id, true, false, true);
+                    StrFunc::match(uni_id, grm_id, kp);
+                    (_A[i]).resize(_n, _n);
+                    #pragma omp parallel for private(k)
+                    for (j = 0; j < _n; j++) {
+                        for (k = 0; k <= j; k++) {
+                            if (kp[j] >= kp[k]) (_A[i])(k, j) = (_A[i])(j, k) = _grm(kp[j], kp[k]);
+                            else (_A[i])(k, j) = (_A[i])(j, k) = _grm(kp[k], kp[j]);
+                        }
+                    }
+                }
+            }
+            else{
+                StrFunc::match(uni_id, grm_id, kp);
+                (_A[0]).resize(_n, _n);
+                #pragma omp parallel for private(j)
+                for(i=0; i<_n; i++){
+                    for(j=0; j<=i; j++) (_A[0])(j,i)=(_A[0])(i,j)=_grm_mkl[kp[i]*_n+kp[j]];
+                }
+                delete[] _grm_mkl;
             }
         }
-        //v_weight = 1.0 / v_weight.array();
-        //v_weight = 1.0 / v_weight.array() - (1.0 / v_weight.array()).mean() + 1;
-        /*
-        ofstream o_test("weight_out.txt");
-        for(int i = 0; i < v_weight.size(); i++){
-            o_test << v_weight[i] << "\t" << _y[i] << endl;
-        }
-        o_test.close();
-        */
+        _A[_r_indx.size()-1]=eigenMatrix::Identity(_n, _n);
+        
+        if(!weight_file.empty()){
+            vector<string> weight_ID;
+            vector<double> weights;
 
-        _A[_r_indx.size() - 1].diagonal() = v_weight;
+            read_weight(weight_file, weight_ID, weights);
+            update_id_map_kp(weight_ID, _id_map, _keep);
+        //}
+        //if(!weight_file.empty()){
+            // contruct weight
+            Eigen::VectorXd v_weight(_n);
+            for (size_t i = 0; i < weight_ID.size(); ++i) {
+                if (auto it = uni_id_map.find(weight_ID[i]); it != uni_id_map.end()) {
+                    v_weight(it->second) = weights[i];
+                }
+            }
+            //v_weight = 1.0 / v_weight.array();
+            //v_weight = 1.0 / v_weight.array() - (1.0 / v_weight.array()).mean() + 1;
+            /*
+            ofstream o_test("weight_out.txt");
+            for(int i = 0; i < v_weight.size(); i++){
+                o_test << v_weight[i] << "\t" << _y[i] << endl;
+            }
+            o_test.close();
+            */
+
+            _A[_r_indx.size() - 1].diagonal() = v_weight;
+        }
     }
 
     // construct X matrix
@@ -217,15 +226,17 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     construct_X(_n, uni_id_map, qcovar_flag, qcovar_num, qcovar_ID, qcovar, covar_flag, covar_num, covar_ID, covar, E_float, qE_float);
     
     // names of variance component
-    for (size_t i = 0; i < grm_files.size(); ++i) {
-        const string suffix = (grm_files.size() == 1) ? "" : std::to_string(i + 1);
-        _var_name.emplace_back("V(G" + suffix + ")");
-        _hsq_name.emplace_back("V(G" + suffix + ")/Vp");
+    if (!skip_grm_loading) {
+        for (size_t i = 0; i < grm_files.size(); ++i) {
+            const string suffix = (grm_files.size() == 1) ? "" : std::to_string(i + 1);
+            _var_name.emplace_back("V(G" + suffix + ")");
+            _hsq_name.emplace_back("V(G" + suffix + ")/Vp");
+        }
+        _var_name.push_back("V(e)");
+        
+        // within family
+        if(_within_family) detect_family();
     }
-    _var_name.push_back("V(e)");
-    
-    // within family
-    if(_within_family) detect_family();
     
     // run REML algorithm
     LOGGER << "\nPerforming MLM association analyses" << (subtract_grm_flag?"":" (including the candidate SNP)") << " ..."<<endl;
@@ -587,7 +598,7 @@ void gcta::grm_minus_grm(float *grm, float *sub_grm)
 void gcta::save_reml_state(string filename, bool no_adj_covar)
 {
     std::ofstream raw_file(filename, std::ios::binary);
-    if(!raw_file.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
+    if(!raw_file.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to write. (Use --save-reml to generate this file.)");
     boost::iostreams::filtering_ostream outfile;
     outfile.push(boost::iostreams::gzip_compressor());
     outfile.push(raw_file);
@@ -638,12 +649,13 @@ void gcta::save_reml_state(string filename, bool no_adj_covar)
     
     outfile.reset();
     raw_file.close();
+    LOGGER << "Saved REML state (n=" << n << ", covariates=" << x_c << ", variance components=" << num_varcmp << ") to [" << filename << "]." << endl;
 }
 
 void gcta::load_reml_state(string filename, bool no_adj_covar)
 {
     std::ifstream raw_file(filename, std::ios::binary);
-    if(!raw_file.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to read. Make sure you have run --mlma with --reml-only first.");
+    if(!raw_file.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to read. Make sure you have run --mlma --save-reml first with matching --out prefix.");
     boost::iostreams::filtering_istream infile;
     infile.push(boost::iostreams::gzip_decompressor());
     infile.push(raw_file);
@@ -705,5 +717,5 @@ void gcta::load_reml_state(string filename, bool no_adj_covar)
     infile.reset();
     raw_file.close();
     
-    LOGGER << "Loaded REML state: n=" << n << ", covariates=" << x_c << ", variance components=" << num_varcmp << endl;
+    LOGGER << "Loaded REML state from [" << filename << "]: n=" << n << ", covariates=" << x_c << ", variance components=" << num_varcmp << endl;
 }

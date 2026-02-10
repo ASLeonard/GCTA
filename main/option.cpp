@@ -134,7 +134,8 @@ void option(int option_num, char* option_str[])
 
     // mixed linear model association 
     bool mlma_flag = false, mlma_loco_flag = false, mlma_no_adj_covar = false;
-    string subtract_grm_file = "", save_reml_file = "", load_reml_file = "";;
+    bool save_reml_flag = false, load_reml_flag = false;
+    string subtract_grm_file = "", save_reml_file = "", load_reml_file = "";
 
     // Fst
     bool fst_flag = false;
@@ -942,12 +943,11 @@ void option(int option_num, char* option_str[])
             mlma_no_adj_covar = true;	
             LOGGER << "--mlma-no-preadj-covar" << endl;	
         } else if (strcmp(argv[i], "--save-reml") == 0) {
-            save_reml_file = argv[++i];
-            LOGGER << "--save-reml " << save_reml_file << endl;
+            save_reml_flag = true;
+            LOGGER << "--save-reml" << endl;
         } else if (strcmp(argv[i], "--load-reml") == 0) {
-            load_reml_file = argv[++i];
-            LOGGER << "--load-reml " << load_reml_file << endl;
-            CommFunc::FileExist(load_reml_file);
+            load_reml_flag = true;
+            LOGGER << "--load-reml" << endl;
         } else if (strcmp(argv[i], "--fst") == 0) {
             fst_flag = true;
             LOGGER << "--fst " << endl;
@@ -1220,6 +1220,12 @@ void option(int option_num, char* option_str[])
             LOGGER.e(0, errmsg.str());
         }
     }
+    if (save_reml_flag) save_reml_file = out + ".reml.bin.gz";
+    if (load_reml_flag) {
+        load_reml_file = out + ".reml.bin.gz";
+        CommFunc::FileExist(load_reml_file);
+    }
+
     // conflicted options
     LOGGER << endl;
     if (bfile2_flag && !bfile_flag) LOGGER.e(0, "the option --bfile2 should always go with the option --bfile.");
@@ -1362,39 +1368,45 @@ void option(int option_num, char* option_str[])
             if (!rm_indi_file.empty()) pter_gcta->remove_indi(rm_indi_file);
             if (!update_sex_file.empty()) pter_gcta->update_sex(update_sex_file);
             if (!blup_indi_file.empty()) pter_gcta->read_indi_blup(blup_indi_file);
-            if(bfile_flag==1) pter_gcta->read_bimfile(bfile + ".bim");
-            else pter_gcta->read_multi_bimfiles(multi_bfiles);
-            if (!extract_snp_file.empty()) pter_gcta->extract_snp(extract_snp_file);
-            if (extract_chr_start > 0) pter_gcta->extract_chr(extract_chr_start, extract_chr_end);
-            if(extract_region_chr>0) pter_gcta->extract_region_bp(extract_region_chr, extract_region_bp, extract_region_wind);
-            if (!extract_snp_name.empty()){
-                if(extract_region_wind>0) pter_gcta->extract_region_snp(extract_snp_name, extract_region_wind);
-                else pter_gcta->extract_single_snp(extract_snp_name);
-            }
-            if (!exclude_snp_file.empty()) pter_gcta->exclude_snp(exclude_snp_file);
-            if(exclude_region_chr>0) pter_gcta->exclude_region_bp(exclude_region_chr, exclude_region_bp, exclude_region_wind);
-            if (!exclude_snp_name.empty()) {
-                if(exclude_region_wind>0) pter_gcta->exclude_region_snp(exclude_snp_name, exclude_region_wind);
-                else pter_gcta->exclude_single_snp(exclude_snp_name);
-            }
-            if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
-            if (LD) pter_gcta->read_LD_target_SNPs(LD_file);
-            if(gsmr_flag) pter_gcta->read_gsmrfile(expo_file_list, outcome_file_list, gwas_thresh, nsnp_gsmr, gsmr_so_alg);
-            if(mtcojo_flag) nsnp_read = pter_gcta->read_mtcojofile(mtcojolist_file, gwas_thresh, nsnp_gsmr);
-            if(mtcojo_flag && nsnp_read>0) {
-                if(bfile_flag==1) pter_gcta->read_bedfile(bfile + ".bed");
-                else pter_gcta->read_multi_bedfiles(multi_bfiles);
-            }
-            if(!mtcojo_flag){
-                if(bfile_flag==1) pter_gcta->read_bedfile(bfile + ".bed");
-                else pter_gcta->read_multi_bedfiles(multi_bfiles);
-            }
+            bool mlma_reml_only = mlma_flag && !save_reml_file.empty() && load_reml_file.empty();
+            bool skip_snp_loading = mlma_reml_only && (!grm_file.empty() || m_grm_flag || !subtract_grm_file.empty());
+            if (skip_snp_loading) {
+                LOGGER << "Skipping SNP/genotype loading because --save-reml is used with an external GRM." << endl;
+            } else {
+                if(bfile_flag==1) pter_gcta->read_bimfile(bfile + ".bim");
+                else pter_gcta->read_multi_bimfiles(multi_bfiles);
+                if (!extract_snp_file.empty()) pter_gcta->extract_snp(extract_snp_file);
+                if (extract_chr_start > 0) pter_gcta->extract_chr(extract_chr_start, extract_chr_end);
+                if(extract_region_chr>0) pter_gcta->extract_region_bp(extract_region_chr, extract_region_bp, extract_region_wind);
+                if (!extract_snp_name.empty()){
+                    if(extract_region_wind>0) pter_gcta->extract_region_snp(extract_snp_name, extract_region_wind);
+                    else pter_gcta->extract_single_snp(extract_snp_name);
+                }
+                if (!exclude_snp_file.empty()) pter_gcta->exclude_snp(exclude_snp_file);
+                if(exclude_region_chr>0) pter_gcta->exclude_region_bp(exclude_region_chr, exclude_region_bp, exclude_region_wind);
+                if (!exclude_snp_name.empty()) {
+                    if(exclude_region_wind>0) pter_gcta->exclude_region_snp(exclude_snp_name, exclude_region_wind);
+                    else pter_gcta->exclude_single_snp(exclude_snp_name);
+                }
+                if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
+                if (LD) pter_gcta->read_LD_target_SNPs(LD_file);
+                if(gsmr_flag) pter_gcta->read_gsmrfile(expo_file_list, outcome_file_list, gwas_thresh, nsnp_gsmr, gsmr_so_alg);
+                if(mtcojo_flag) nsnp_read = pter_gcta->read_mtcojofile(mtcojolist_file, gwas_thresh, nsnp_gsmr);
+                if(mtcojo_flag && nsnp_read>0) {
+                    if(bfile_flag==1) pter_gcta->read_bedfile(bfile + ".bed");
+                    else pter_gcta->read_multi_bedfiles(multi_bfiles);
+                }
+                if(!mtcojo_flag){
+                    if(bfile_flag==1) pter_gcta->read_bedfile(bfile + ".bed");
+                    else pter_gcta->read_multi_bedfiles(multi_bfiles);
+                }
 
-            if (!update_impRsq_file.empty()) pter_gcta->update_impRsq(update_impRsq_file);
-            if (!update_freq_file.empty()) pter_gcta->update_freq(update_freq_file);
-            if (dose_Rsq_cutoff > 0.0) pter_gcta->filter_impRsq(dose_Rsq_cutoff);
-            if (maf > 0) pter_gcta->filter_snp_maf(maf);
-            if (max_maf > 0.0) pter_gcta->filter_snp_max_maf(max_maf);
+                if (!update_impRsq_file.empty()) pter_gcta->update_impRsq(update_impRsq_file);
+                if (!update_freq_file.empty()) pter_gcta->update_freq(update_freq_file);
+                if (dose_Rsq_cutoff > 0.0) pter_gcta->filter_impRsq(dose_Rsq_cutoff);
+                if (maf > 0) pter_gcta->filter_snp_maf(maf);
+                if (max_maf > 0.0) pter_gcta->filter_snp_max_maf(max_maf);
+            }
             if (out_freq_flag) pter_gcta->save_freq(out_ssq_flag);
             else if (!paa_file.empty()) pter_gcta->paa(paa_file);
             else if (ibc) pter_gcta->ibc(ibc_all);
