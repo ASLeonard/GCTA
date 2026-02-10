@@ -329,8 +329,8 @@ eigenMatrix gcta::sample_overlap_rb(vector<vector<bool>> snp_val_flag, eigenMatr
         }
 
         double average1 = bhat1_zscore.mean(), average2 = bhat2_zscore.mean();
-        bhat1_zscore = bhat1_zscore - average1*VectorXd::Ones(n_cm_snps_buf);
-        bhat2_zscore = bhat2_zscore - average2*VectorXd::Ones(n_cm_snps_buf);
+        bhat1_zscore = bhat1_zscore - average1*Eigen::VectorXd::Ones(n_cm_snps_buf);
+        bhat2_zscore = bhat2_zscore - average2*Eigen::VectorXd::Ones(n_cm_snps_buf);
         double sd1 = bhat1_zscore.norm(), sd2 = bhat2_zscore.norm();
         ldsc_intercept(trait_indx1[i],trait_indx2[i]-nexpo) = bhat1_zscore.dot(bhat2_zscore)/(sd1*sd2);
     }

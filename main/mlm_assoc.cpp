@@ -107,7 +107,7 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
 
         StrFunc::match(uni_id, grm_id, kp);
         (_A[0]).resize(_n, _n);
-        MatrixXf A_N_buf(_n, _n);
+        Eigen::MatrixXf A_N_buf(_n, _n);
         #pragma omp parallel for private(k)
         for (j = 0; j < _n; j++) {
             for (k = 0; k <= j; k++) {
@@ -185,7 +185,7 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     //}
     //if(!weight_file.empty()){
         // contruct weight
-        VectorXd v_weight(_n);
+        Eigen::VectorXd v_weight(_n);
         for (int i = 0; i < weight_ID.size(); i++) {
             iter = uni_id_map.find(weight_ID[i]);
             if (iter == uni_id_map.end()) continue;
@@ -311,7 +311,7 @@ void gcta::mlma_calcu_stat(float *y, float *geno_mkl, unsigned long n, unsigned 
     pval=eigenVector::Constant(m,2);
     LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<endl;
     int new_start = 0, block_size = 0, block_col = 0, k = 0, l = 0;
-    MatrixXf X_block;
+    Eigen::MatrixXf X_block;
     vector<int> indx;
     for(i = 0; i < m; i++, block_col++){
         // get a block of SNPs
@@ -367,7 +367,7 @@ void gcta::mlma_calcu_stat_covar(float *y, float *geno_mkl, unsigned long n, uns
     pval=eigenVector::Constant(m,2);
     LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<endl;
     int new_start = 0, block_size = 0, block_col = 0, k = 0, l = 0;
-    MatrixXf X_block;
+    Eigen::MatrixXf X_block;
     vector<int> indx;
     for(i = 0; i < m; i++, block_col++){
         // get a block of SNPs

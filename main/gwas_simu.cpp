@@ -134,7 +134,7 @@ void gcta::GWAS_simu(string bfile, int simu_num, string qtl_file, int case_num, 
     }
 
     // Calculate allele frequency
-    MatrixXf X;
+    Eigen::MatrixXf X;
     make_XMat(X);
     if(eff_mod == 0){
         eigenVector sd_SNP;

@@ -96,7 +96,7 @@ void gcta::make_grm(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool outpu
             }
         }
     }
-    else _grm_N = MatrixXf::Constant(n,n,m);
+    else _grm_N = Eigen::MatrixXf::Constant(n,n,m);
 
     // Calcuate WW'
     #ifdef SINGLE_PRECISION
@@ -501,7 +501,7 @@ void gcta::manipulate_grm(string grm_file, string keep_indi_file, string remove_
         }
         grm_buf.resize(0,0);
         if(!dont_read_N){
-            MatrixXf grm_N_buf = _grm_N;
+            Eigen::MatrixXf grm_N_buf = _grm_N;
             _grm_N.resize(_keep.size(), _keep.size());
             for (i = 0; i < _keep.size(); i++) {
                 for (j = 0; j <= i; j++) _grm_N(i, j) = grm_N_buf(_keep[i], _keep[j]);
@@ -649,7 +649,7 @@ void gcta::grm_bK(string grm_file, string keep_indi_file, string remove_indi_fil
             for (j = 0; j <= i; j++) _grm(i, j) = grm_buf(_keep[i], _keep[j]);
         }
         grm_buf.resize(0,0);
-        MatrixXf grm_N_buf = _grm_N;
+        Eigen::MatrixXf grm_N_buf = _grm_N;
         _grm_N.resize(_keep.size(), _keep.size());
         for (i = 0; i < _keep.size(); i++) {
             for (j = 0; j <= i; j++) _grm_N(i, j) = grm_N_buf(_keep[i], _keep[j]);
@@ -673,9 +673,9 @@ void gcta::pca(string grm_file, string keep_indi_file, string remove_indi_file, 
     int i = 0, j = 0, n = _keep.size();
     LOGGER << "\nPerforming principal component analysis ..." << endl;
 
-    SelfAdjointEigenSolver<MatrixXd> eigensolver(_grm.cast<double>());
-    MatrixXd evec = (eigensolver.eigenvectors());
-    VectorXd eval = eigensolver.eigenvalues();
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(_grm.cast<double>());
+    Eigen::MatrixXd evec = (eigensolver.eigenvectors());
+    Eigen::VectorXd eval = eigensolver.eigenvalues();
 
     string eval_file = _out + ".eigenval";
     ofstream o_eval(eval_file.c_str());
@@ -881,7 +881,7 @@ void gcta::project_loading(string pc_load, int N){
     snp_loading.shrink_to_fit();
 
     //Map the vector to Matrix, share the same memory, thus to save the memory.
-    eigenMatrix m_snp_loading = Map< Matrix<t_val,Dynamic,Dynamic,RowMajor> > (filter_snp_loading.data(), _include.size(), N);
+    eigenMatrix m_snp_loading = Eigen::Map< Eigen::Matrix<t_val,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor> > (filter_snp_loading.data(), _include.size(), N);
     LOGGER << " " << m_snp_loading.rows() << " SNPs are included for loading" << endl;
 
     if(missnp_list.size() > 0){
@@ -904,7 +904,7 @@ void gcta::project_loading(string pc_load, int N){
     #pragma omp parallel for ordered schedule(dynamic)
     for(int ind_index=0; ind_index < _keep.size(); ind_index++){
         LOGGER <<  to_string(ind_index+1) + "\r" << flush;
-        Matrix<t_val,1,Dynamic> geno(_include.size());
+        Eigen::Matrix<t_val,1,Eigen::Dynamic> geno(_include.size());
         for(int snp_index=0; snp_index < _include.size(); snp_index++){
             if (!_snp_1[_include[snp_index]][_keep[ind_index]] || _snp_2[_include[snp_index]][_keep[ind_index]]) {
                 geno(snp_index) = _snp_1[_include[snp_index]][_keep[ind_index]] + _snp_2[_include[snp_index]][_keep[ind_index]];

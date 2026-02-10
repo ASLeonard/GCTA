@@ -76,7 +76,7 @@ void gcta::gbat_read_geneAnno(string gAnno_file, vector<string> &gene_name, vect
     LOGGER << "Physical positions of " << gene_name.size() << " genes have been included." << endl;
 }
 
-void gcta::gbat_calcu_ld(MatrixXf &X, eigenVector &sumsq_x, int snp1_indx, int snp2_indx, MatrixXf &C)
+void gcta::gbat_calcu_ld(Eigen::MatrixXf &X, eigenVector &sumsq_x, int snp1_indx, int snp2_indx, Eigen::MatrixXf &C)
 {
     int i = 0, j = 0;
     int size = snp2_indx - snp1_indx + 1;
@@ -175,7 +175,7 @@ void gcta::gbat(string sAssoc_file, string gAnno_file, int wind, int simu_num)
     else LOGGER << mapped << " genes have been mapped to SNP data." << endl;
 
     // recoding genotype
-    MatrixXf X;
+    Eigen::MatrixXf X;
     eigenVector sumsq_x(_include.size());
     make_XMat(X);
     #pragma omp parallel for private(j)
@@ -211,11 +211,11 @@ void gcta::gbat(string sAssoc_file, string gAnno_file, int wind, int simu_num)
         }
         chisq_o[i] = 0;
         for (j = iter1->second; j <= iter2->second; j++) chisq_o[i] += snp_chisq[j];
-        MatrixXf C;
+        Eigen::MatrixXf C;
         gbat_calcu_ld(X, sumsq_x, iter1->second, iter2->second, C); // iter2->second-1 because iter2 is one step further
         if(snp_num_in_gene[i] == 1) gene_pval[i] = StatFunc::pchisq(chisq_o[i], 1.0);
         else {
-            SelfAdjointEigenSolver<MatrixXf> saes(C);
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXf> saes(C);
             gene_pval[i] = StatFunc::pchisqsum(chisq_o[i], saes.eigenvalues().cast<double>());
         }
 

@@ -668,13 +668,13 @@ double StatFunc::qchisq(double q, double df) {
 //#################
 // functions to calculate pchisqsum 
 
-double StatFunc::pchisqsum(double x, VectorXd lambda) {
+double StatFunc::pchisqsum(double x, Eigen::VectorXd lambda) {
     double pval = psadd(x, lambda);
     if (pval > 1.0) pval = psatt(x, lambda);
     return pval;
 }
 
-double StatFunc::psadd(double x, VectorXd lambda) {
+double StatFunc::psadd(double x, Eigen::VectorXd lambda) {
     double d = lambda.maxCoeff();
     if (d <= 0.0) return 2.0;
     lambda = lambda.array() / d;
@@ -703,7 +703,7 @@ double StatFunc::psadd(double x, VectorXd lambda) {
     else return pnorm(w + log(v / w) / w);
 }
 
-double StatFunc::psatt(double x, VectorXd lambda) {
+double StatFunc::psatt(double x, Eigen::VectorXd lambda) {
     double sum=lambda.sum();
     if(CommFunc::FloatEqual(sum,0.0)) return 2.0;
   
@@ -715,23 +715,23 @@ double StatFunc::psatt(double x, VectorXd lambda) {
     return pchisq(x/a, b);
 }
 
-double StatFunc::K(double zeta, VectorXd &lambda) {
+double StatFunc::K(double zeta, Eigen::VectorXd &lambda) {
     return -0.5*(1.0 - 2.0 * zeta * lambda.array()).log().sum();
 }
 
-double StatFunc::Kp(double zeta, VectorXd &lambda) {
+double StatFunc::Kp(double zeta, Eigen::VectorXd &lambda) {
     return (lambda.array() / (1.0 - 2.0 * zeta * lambda.array())).sum();
 }
 
-double StatFunc::Kpp(double zeta, VectorXd &lambda) {
+double StatFunc::Kpp(double zeta, Eigen::VectorXd &lambda) {
     return 2.0 * (lambda.array().square() / (1.0 - 2.0 * zeta * lambda.array()).array().square()).sum();
 }
 
-double StatFunc::Kp_min_x(double zeta, VectorXd &lambda, double x) {
+double StatFunc::Kp_min_x(double zeta, Eigen::VectorXd &lambda, double x) {
     return Kp(zeta, lambda) - x;
 }
 
-double StatFunc::Brents_Kp_min_x(VectorXd &lambda, double x, double lowerLimit, double upperLimit, double errorTol) {
+double StatFunc::Brents_Kp_min_x(Eigen::VectorXd &lambda, double x, double lowerLimit, double upperLimit, double errorTol) {
     double a = lowerLimit;
     double b = upperLimit;
     double c = 0;

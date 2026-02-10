@@ -12,16 +12,16 @@
 #include <cctype>
 #include "Logger.h"
 
-int StrFunc::split_string(const string &str, vector<string> &vec_str, string separator)
+int StrFunc::split_string(const std::string &str, std::vector<std::string> &vec_str, std::string separator)
 {
 	if(str.empty()) return 0;
 	vec_str.clear();
 
 	int i=0;
 	bool look=false;
-	string str_buf;
-	string symbol_pool="`1234567890-=~!@#$%^&*()_+qwertyuiop[]\\asdfghjkl;'zxcvbnm,./QWERTYUIOP{}|ASDFGHJKL:\"ZXCVBNM<>? \t\n";
-	string::size_type pos;
+	std::string str_buf;
+	std::string symbol_pool="`1234567890-=~!@#$%^&*()_+qwertyuiop[]\\asdfghjkl;'zxcvbnm,./QWERTYUIOP{}|ASDFGHJKL:\"ZXCVBNM<>? \t\n";
+	std::string::size_type pos;
 
 	for(i=0; i<separator.size(); i++){
 		pos=symbol_pool.find(separator[i]);
@@ -29,7 +29,7 @@ int StrFunc::split_string(const string &str, vector<string> &vec_str, string sep
 	}
 
 	for(i=0; i<str.size(); i++){
-		if( symbol_pool.find(str[i])!=string::npos ){
+		if( symbol_pool.find(str[i])!=std::string::npos ){
 			if(!look) look=true;
 			str_buf += str[i];
 		}
@@ -46,21 +46,21 @@ int StrFunc::split_string(const string &str, vector<string> &vec_str, string sep
 	return vec_str.size();
 }
 
-string StrFunc::first_string(const string &str, const char separator)
+std::string StrFunc::first_string(const std::string &str, const char separator)
 {
 	int pos=str.find(separator);
-	if(pos!=-1) return string(str.begin(), str.begin()+pos);
-	return string("");
+	if(pos!=-1) return std::string(str.begin(), str.begin()+pos);
+	return std::string("");
 }
 
-string StrFunc::last_string(const string &str, const char separator)
+std::string StrFunc::last_string(const std::string &str, const char separator)
 {
 	int pos=str.find_last_of(separator);
-	if(pos!=-1) return string(str.begin()+pos+1, str.end());
-	return string("");
+	if(pos!=-1) return std::string(str.begin()+pos+1, str.end());
+	return std::string("");
 }
 
-void StrFunc::to_upper(string &str)
+void StrFunc::to_upper(std::string &str)
 {
 	int i=0;
 	for(i=0; i<str.size(); i++){
@@ -68,7 +68,7 @@ void StrFunc::to_upper(string &str)
 	}
 }
 
-void StrFunc::to_lower(string &str)
+void StrFunc::to_lower(std::string &str)
 {
 	int i=0;
 	for(i=0; i<str.size(); i++){
@@ -76,23 +76,23 @@ void StrFunc::to_lower(string &str)
 	}
 }
 
-string StrFunc::get_sub_str(const string & rst, int pos)
+std::string StrFunc::get_sub_str(const std::string & rst, int pos)
 {
-	vector<string> vs_buf;
+	std::vector<std::string> vs_buf;
 	StrFunc::split_string(rst, vs_buf);
 	return vs_buf[pos];
 }
 
-bool StrFunc::StrEqual(const string &StrA, const string &StrB, bool NoCaseSens)
+bool StrFunc::StrEqual(const std::string &StrA, const std::string &StrB, bool NoCaseSens)
 {
 	if(!NoCaseSens) return StrA==StrB;
-	string StrBufA=StrA, StrBufB=StrB;
+	std::string StrBufA=StrA, StrBufB=StrB;
 	to_upper(StrBufA);
 	to_upper(StrBufB);
 	return StrBufA==StrBufB;
 }
 
-bool StrFunc::StrVecEqual(const vector<string> &VsBufA, const vector<string> &VsBufB, int Pos)
+bool StrFunc::StrVecEqual(const std::vector<std::string> &VsBufA, const std::vector<std::string> &VsBufB, int Pos)
 {
 	int SizeA=VsBufA.size(), SizeB=VsBufB.size();
 	if(SizeA!=SizeB) return false;
@@ -106,21 +106,21 @@ bool StrFunc::StrVecEqual(const vector<string> &VsBufA, const vector<string> &Vs
 	return true;
 }
 
-bool StrFunc::str_within_quto(const string &str, string &str_buf)
+bool StrFunc::str_within_quto(const std::string &str, std::string &str_buf)
 {
     std::size_t begin=str.find_first_of("\"");
     std::size_t end=str.find_last_of("\"");
-    if(begin==string::npos || end==string::npos || begin==end) return false;
+    if(begin==std::string::npos || end==std::string::npos || begin==end) return false;
 
     str_buf="";
     str_buf.insert(str_buf.begin(), str.begin()+begin+1, str.begin()+end);
     return true;
 }
 
-vector<string>::iterator StrFunc::find(vector<string> &target_vs, const string &target_str)
+std::vector<std::string>::iterator StrFunc::find(std::vector<std::string> &target_vs, const std::string &target_str)
 {
-	string str_buf=target_str;
-	vector<string> vs_buf=target_vs;
+	std::string str_buf=target_str;
+	std::vector<std::string> vs_buf=target_vs;
 
 	int i=0;
 	for(i=0; i<vs_buf.size(); i++) to_upper(vs_buf[i]);
@@ -128,20 +128,20 @@ vector<string>::iterator StrFunc::find(vector<string> &target_vs, const string &
 	return target_vs.begin()+(std::find(vs_buf.begin(), vs_buf.end(), str_buf)-vs_buf.begin());
 }
 
-string::iterator StrFunc::find(string &target_str, const char target_ch)
+std::string::iterator StrFunc::find(std::string &target_str, const char target_ch)
 {
 	char ch_buf=target_ch;
-	string str_buf=target_str;
+	std::string str_buf=target_str;
 	to_upper(str_buf);
 	if(ch_buf>'a' && ch_buf<'z') ch_buf+='A'-'a';
 	return target_str.begin()+(std::find(str_buf.begin(), str_buf.end(), ch_buf)-str_buf.begin());
 }
 
-bool StrFunc::goto_str(std::istream &in_file, const string &str)
+bool StrFunc::goto_str(std::istream &in_file, const std::string &str)
 {
-	string str_buf;
-	string query_str=str;
-	vector<string> vs_buf;
+	std::string str_buf;
+	std::string query_str=str;
+	std::vector<std::string> vs_buf;
 	StrFunc::to_upper(query_str);
 	while(in_file>>str_buf){
 		if( StrFunc::split_string(str_buf, vs_buf)>0 ) str_buf=vs_buf[0];
@@ -156,17 +156,17 @@ bool StrFunc::goto_str(std::istream &in_file, const string &str)
 
 void StrFunc::rewind_if(std::istream &in_file)
 {
-	in_file.clear(ios::goodbit);
-	in_file.seekg(ios::beg);
+	in_file.clear(std::ios::goodbit);
+	in_file.seekg(std::ios::beg);
 }
 
-void StrFunc::match(const vector<string> &VecA, const vector<string> &VecB, vector<int> &VecC)
+void StrFunc::match(const std::vector<std::string> &VecA, const std::vector<std::string> &VecB, std::vector<int> &VecC)
 {
     int i=0;
-    map<string, int> id_map;
-    map<string, int>::iterator iter;
+    std::map<std::string, int> id_map;
+    std::map<std::string, int>::iterator iter;
     VecC.clear();
-    for(i=0; i<VecB.size(); i++) id_map.insert(pair<string,int>(VecB[i], i));
+    for(i=0; i<VecB.size(); i++) id_map.insert(std::pair<std::string,int>(VecB[i], i));
     for(i=0; i<VecA.size(); i++){
         iter=id_map.find(VecA[i]);
         if(iter==id_map.end()) VecC.push_back(-9);
@@ -175,9 +175,9 @@ void StrFunc::match(const vector<string> &VecA, const vector<string> &VecB, vect
 }
 
 // This function compare two string ignore the case
-bool StrFunc::i_compare(string const& a, string const& b){
+bool StrFunc::i_compare(std::string const& a, std::string const& b){
     if (a.length() == b.length()) {
-        return equal(b.begin(), b.end(),
+        return std::equal(b.begin(), b.end(),
                     a.begin(), [](unsigned char c1, unsigned char c2){
                      return ::tolower(c1) == ::tolower(c2);});
     }else {

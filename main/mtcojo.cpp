@@ -1129,9 +1129,9 @@ vector<double> est_bxy_gsmr(eigenVector bxy_sort, eigenVector bxy, vector<string
     for(i = 0; i < n_indices_snp; i++) bxy_kept(i) = bxy(kept_ID[i]);
 
     // gsmr
-    VectorXd vec_1= VectorXd::Ones(n_indices_snp);
+    Eigen::VectorXd vec_1= Eigen::VectorXd::Ones(n_indices_snp);
     cov_bxy = cov_bxy + eps*eigenMatrix::Identity(n_indices_snp, n_indices_snp);
-    LDLT<eigenMatrix> ldlt_cov_bxy(cov_bxy);
+    Eigen::LDLT<eigenMatrix> ldlt_cov_bxy(cov_bxy);
 
     if( ldlt_cov_bxy.vectorD().minCoeff() <= 0 )
         LOGGER.e(0, "the variance-covariance matrix of bxy is not invertible.");
@@ -1251,7 +1251,7 @@ double global_heidi_pvalue(double bxy_hat, double bxy_hat_se, eigenVector bzx, e
         for(int j=i+1; j<n_indices_snp; j++) 
             corr_d(i,j) = corr_d(j,i) = var_d(i,j) / sqrt(var_d(i,i)*var_d(j,j));
     double chival = (d.array()*d.array()/var_d.diagonal().array()).sum();
-    SelfAdjointEigenSolver<eigenMatrix> saes(corr_d);
+    Eigen::SelfAdjointEigenSolver<eigenMatrix> saes(corr_d);
     global_heidi_pval = StatFunc::pchisqsum(chival, saes.eigenvalues().cast<double>());
 
     return(global_heidi_pval);  
@@ -1406,7 +1406,7 @@ double heidi_outlier_topsnp(eigenVector &indi_het_pval, eigenVector bxy, eigenMa
             for(int j=i+1; j<(n_indices_snp-1); j++) 
                 corr_d(i,j) = corr_d(j,i) = var_d(i,j) / sqrt(var_d(i,i)*var_d(j,j));
         double chival = (d.array()*d.array()/var_d.diagonal().array()).sum();            
-        SelfAdjointEigenSolver<eigenMatrix> saes(corr_d);
+        Eigen::SelfAdjointEigenSolver<eigenMatrix> saes(corr_d);
         double global_heidi_pval = StatFunc::pchisqsum(chival, saes.eigenvalues().cast<double>());
         return(global_heidi_pval);
     }
@@ -1533,7 +1533,7 @@ vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eige
     }
 
     // LD r
-    MatrixXf x_sub(nindi, n_indices_snp);
+    Eigen::MatrixXf x_sub(nindi, n_indices_snp);
     vector<int> snp_sn(n_indices_snp);
     map<string, int>::iterator iter;
     int i_buf = 0;
@@ -1548,7 +1548,7 @@ vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eige
     make_XMat_subset(x_sub, snp_sn, true);
 
     double x_sd1 = 0.0, x_sd2 = 0.0, x_cov = 0.0;
-    ld_r_mat = MatrixXd::Identity(n_indices_snp, n_indices_snp);
+    ld_r_mat = Eigen::MatrixXd::Identity(n_indices_snp, n_indices_snp);
     for(i=0; i<(n_indices_snp-1); i++) {
         x_sd1 = x_sub.col(i).norm();
         for(j=(i+1); j<n_indices_snp; j++) {
@@ -2274,7 +2274,7 @@ eigenMatrix mtcojo_cond_multiple_covars(eigenVector bzy, eigenVector bzy_se,  ei
 
     double var_bzx_buf = 0.0, cov_bzx_bzy = 0.0;
     eigenVector bjxy(ncovar);
-    MatrixXd d_mat = MatrixXd::Zero(ncovar,ncovar), r_mat = MatrixXd::Identity(ncovar, ncovar);
+    Eigen::MatrixXd d_mat = Eigen::MatrixXd::Zero(ncovar,ncovar), r_mat = Eigen::MatrixXd::Identity(ncovar, ncovar);
     
     for(i=0; i<ncovar; i++) {
         d_mat(i,i) = sqrt(ldsc_slope(i+1, i+1)*vp_trait(i+1));
@@ -2288,7 +2288,7 @@ eigenMatrix mtcojo_cond_multiple_covars(eigenVector bzy, eigenVector bzy_se,  ei
     
     double d_buf = 0.0;
     eigenVector bjxy_buf(ncovar), se_bzx_bzy(ncovar);
-    eigenMatrix bzx_se_buf=MatrixXd::Zero(ncovar,ncovar), bzx_intercept=MatrixXd::Identity(ncovar,ncovar);
+    eigenMatrix bzx_se_buf=Eigen::MatrixXd::Zero(ncovar,ncovar), bzx_intercept=Eigen::MatrixXd::Identity(ncovar,ncovar);
     for(i=0; i<(ncovar-1); i++) {
         for(j=i+1; j<ncovar; j++) {
             bzx_intercept(i,j) = bzx_intercept(j,i) = ldsc_intercept(i+1, j+1);

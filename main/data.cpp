@@ -1757,7 +1757,7 @@ void gcta::read_indi_blup(string blup_indi_file) {
     LOGGER << "BLUP solution to the total genetic effects for " << _keep.size() << " individuals have been read from [" + blup_indi_file + "]." << endl;
 }
 
-bool gcta::make_XMat(MatrixXf &X)
+bool gcta::make_XMat(Eigen::MatrixXf &X)
 {
     if (_mu.empty()) calcu_mu();
 
@@ -1798,7 +1798,7 @@ bool gcta::make_XMat(MatrixXf &X)
     return have_mis;
 }
 
-bool gcta::make_XMat_d(MatrixXf &X)
+bool gcta::make_XMat_d(Eigen::MatrixXf &X)
 {
     if (_mu.empty()) calcu_mu();
 
@@ -1845,14 +1845,14 @@ bool gcta::make_XMat_d(MatrixXf &X)
     return have_mis;
 }
 
-void gcta::std_XMat(MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std)
+void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std)
 {
     if (_mu.empty()) calcu_mu();
 
     unsigned long i = 0, j = 0, n = _keep.size(), m = _include.size();
     sd_SNP.resize(m);
     if (_dosage_flag) {
-        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - VectorXf::Constant(n, _mu[_include[j]])).squaredNorm() / (n - 1.0);
+        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - Eigen::VectorXf::Constant(n, _mu[_include[j]])).squaredNorm() / (n - 1.0);
     } 
     else {
         for (j = 0; j < m; j++) sd_SNP[j] = _mu[_include[j]]*(1.0 - 0.5 * _mu[_include[j]]);
@@ -1892,7 +1892,7 @@ void gcta::std_XMat(MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool m
     }
 }
 
-void gcta::std_XMat_d(MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu, bool divid_by_std)
+void gcta::std_XMat_d(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu, bool divid_by_std)
 {
     if (_mu.empty()) calcu_mu();
 
@@ -2037,7 +2037,7 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
     LOGGER << "The recoded genotype matrix has been saved in the file [" + X_zFile + "] (in compressed text format)." << endl;
 }
 
-bool gcta::make_XMat_subset(MatrixXf &X, vector<int> &snp_indx, bool divid_by_std)
+bool gcta::make_XMat_subset(Eigen::MatrixXf &X, vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
     if (_mu.empty()) calcu_mu();
@@ -2091,7 +2091,7 @@ bool gcta::make_XMat_subset(MatrixXf &X, vector<int> &snp_indx, bool divid_by_st
     return true;
 }
 
-bool gcta::make_XMat_d_subset(MatrixXf &X, vector<int> &snp_indx, bool divid_by_std)
+bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
     if (_mu.empty()) calcu_mu();

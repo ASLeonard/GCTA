@@ -390,7 +390,7 @@ void gcta::calcu_ld_blk(vector<int> &brk_pnt, vector<int> &brk_pnt3, eigenVector
         // make genotype matrix
         vector<int> snp_indx(size);
         for (j = brk_pnt[i], k = 0; j <= brk_pnt[i + 1]; j++, k++) snp_indx[k] = j;
-        MatrixXf X_sub;
+        Eigen::MatrixXf X_sub;
         if(dominance_flag) make_XMat_d_subset(X_sub, snp_indx, true);
         else make_XMat_subset(X_sub, snp_indx, true);
         eigenVector ssx_sqrt_i_sub(size);
@@ -402,7 +402,7 @@ void gcta::calcu_ld_blk(vector<int> &brk_pnt, vector<int> &brk_pnt3, eigenVector
 
         if (size > size_limit) calcu_ld_blk_split(size, size_limit, X_sub, ssx_sqrt_i_sub, rsq_cutoff, rsq_size, mean_rsq_sub, max_rsq_sub, s1, s2, second);
         else {
-            MatrixXf rsq_sub = X_sub.transpose() * X_sub;
+            Eigen::MatrixXf rsq_sub = X_sub.transpose() * X_sub;
             #pragma omp parallel for private(k)
             for (j = 0; j < size; j++) {
                 rsq_size[j] = 0.0;
@@ -443,7 +443,7 @@ void gcta::calcu_ld_blk(vector<int> &brk_pnt, vector<int> &brk_pnt3, eigenVector
     }
 }
 
-void gcta::calcu_ld_blk_split(int size, int size_limit, MatrixXf &X_sub, eigenVector &ssx_sqrt_i_sub, double rsq_cutoff, eigenVector &rsq_size, eigenVector &mean_rsq_sub, eigenVector &max_rsq_sub, int s1, int s2, bool second)
+void gcta::calcu_ld_blk_split(int size, int size_limit, Eigen::MatrixXf &X_sub, eigenVector &ssx_sqrt_i_sub, double rsq_cutoff, eigenVector &rsq_size, eigenVector &mean_rsq_sub, eigenVector &max_rsq_sub, int s1, int s2, bool second)
 {
     int i = 0, j = 0, k = 0, m = 0, n = _keep.size();
     vector<int> brk_pnt_sub;
@@ -463,7 +463,7 @@ void gcta::calcu_ld_blk_split(int size, int size_limit, MatrixXf &X_sub, eigenVe
         if (size_sub < 3) continue;
 
         eigenVector ssx_sqrt_i_sub_sub = ssx_sqrt_i_sub.segment(brk_pnt_sub[i], size_sub);
-        MatrixXf rsq_sub_sub = X_sub.block(0,brk_pnt_sub[i],n,size_sub).transpose() * X_sub;
+        Eigen::MatrixXf rsq_sub_sub = X_sub.block(0,brk_pnt_sub[i],n,size_sub).transpose() * X_sub;
         eigenVector rsq_size_sub(size_sub), mean_rsq_sub_sub(size_sub), max_rsq_sub_sub = eigenVector::Constant(size_sub, -1.0);
 
         #pragma omp parallel for private(k)
@@ -607,7 +607,7 @@ void gcta::calcu_ld_blk_multiSet(vector<int> &brk_pnt, vector<int> &brk_pnt3, ve
 
         vector<int> snp_indx(size);
         for (j = brk_pnt[i], k = 0; j <= brk_pnt[i + 1]; j++, k++) snp_indx[k] = j;
-        MatrixXf X_sub;
+        Eigen::MatrixXf X_sub;
         if(dominance_flag) make_XMat_d_subset(X_sub, snp_indx, true);
         else make_XMat_subset(X_sub, snp_indx, true);
         eigenVector ssx_sqrt_i_sub(size);
@@ -631,7 +631,7 @@ void gcta::calcu_ld_blk_multiSet(vector<int> &brk_pnt, vector<int> &brk_pnt3, ve
             int size_of_this_set = used_in_this_set.size();
             if(size_of_this_set < 1) continue;
 
-            MatrixXf X_sub2(n, size_of_this_set);
+            Eigen::MatrixXf X_sub2(n, size_of_this_set);
             for(j = 0; j < size_of_this_set; j++) X_sub2.col(j) = X_sub.col(used_in_this_set[j]);
             
             eigenVector rsq_size = eigenVector::Zero(size);
@@ -640,7 +640,7 @@ void gcta::calcu_ld_blk_multiSet(vector<int> &brk_pnt, vector<int> &brk_pnt3, ve
 
             if (size > size_limit) calcu_ld_blk_split_multiSet(size, size_limit, X_sub, X_sub2, used_in_this_set, ssx_sqrt_i_sub, rsq_cutoff, rsq_size, mean_rsq_sub, max_rsq_sub, s1, s2, second);
             else {
-                MatrixXf rsq_sub = X_sub.transpose() * X_sub2;
+                Eigen::MatrixXf rsq_sub = X_sub.transpose() * X_sub2;
 
                 #pragma omp parallel for private(k,l)
                 for (j = 0; j < size; j++) {
@@ -683,7 +683,7 @@ void gcta::calcu_ld_blk_multiSet(vector<int> &brk_pnt, vector<int> &brk_pnt3, ve
     }
 }
 
-void gcta::calcu_ld_blk_split_multiSet(int size, int size_limit, MatrixXf &X_sub, MatrixXf &X_sub2, vector<int> &used_in_this_set, eigenVector &ssx_sqrt_i_sub, double rsq_cutoff, eigenVector &rsq_size, eigenVector &mean_rsq_sub, eigenVector &max_rsq_sub, int s1, int s2, bool second)
+void gcta::calcu_ld_blk_split_multiSet(int size, int size_limit, Eigen::MatrixXf &X_sub, Eigen::MatrixXf &X_sub2, vector<int> &used_in_this_set, eigenVector &ssx_sqrt_i_sub, double rsq_cutoff, eigenVector &rsq_size, eigenVector &mean_rsq_sub, eigenVector &max_rsq_sub, int s1, int s2, bool second)
 {
     int i = 0, j = 0, k = 0, l = 0, m = 0, n = _keep.size();
     vector<int> brk_pnt_sub;
@@ -703,7 +703,7 @@ void gcta::calcu_ld_blk_split_multiSet(int size, int size_limit, MatrixXf &X_sub
         if (size_sub < 3) continue;
 
         eigenVector ssx_sqrt_i_sub_sub = ssx_sqrt_i_sub.segment(brk_pnt_sub[i], size_sub);
-        MatrixXf rsq_sub_sub = X_sub.block(0,brk_pnt_sub[i],n,size_sub).transpose() * X_sub2;
+        Eigen::MatrixXf rsq_sub_sub = X_sub.block(0,brk_pnt_sub[i],n,size_sub).transpose() * X_sub2;
         eigenVector rsq_size_sub = eigenVector::Zero(size_sub);
         eigenVector mean_rsq_sub_sub = eigenVector::Zero(size_sub);
         eigenVector max_rsq_sub_sub = eigenVector::Constant(size_sub, -1.0);
@@ -984,7 +984,7 @@ void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_a
         // make genotype matrix
         vector<int> snp_indx(size);
         for (j = brk_pnt[i], k = 0; j <= brk_pnt[i + 1]; j++, k++) snp_indx[k] = j;
-        MatrixXf X_sub;
+        Eigen::MatrixXf X_sub;
         if(dominance_flag) make_XMat_d_subset(X_sub, snp_indx, true);
         else make_XMat_subset(X_sub, snp_indx, true);
         eigenVector ssx_sqrt_i_sub(size);
@@ -994,7 +994,7 @@ void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_a
             else ssx_sqrt_i_sub[j] = 1.0 / sqrt(ssx_sqrt_i_sub[j]);
         }
 
-        MatrixXf rsq_sub = X_sub.transpose() * X_sub;
+        Eigen::MatrixXf rsq_sub = X_sub.transpose() * X_sub;
         #pragma omp parallel for private(k)
         for (j = 0; j < size; j++) {
             rsq_sub(j,j) = 1.0;
@@ -1005,14 +1005,14 @@ void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_a
         }
 
 
-        SelfAdjointEigenSolver<MatrixXf> pca(rsq_sub);
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXf> pca(rsq_sub);
 
                 // debug
        // ofstream tmp("tmp_R.txt");
         //tmp<< rsq_sub.col(1998) << endl;
 
 
-        VectorXf d_i = pca.eigenvalues();
+        Eigen::VectorXf d_i = pca.eigenvalues();
         double eff_m = 0;
         for(j = 0; j < size; j ++){
         	if(d_i(j) < 1e-5) d_i(j) = 0.0;
@@ -1030,7 +1030,7 @@ void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_a
 
         // debug
         LOGGER << "size = " << size << "; eff_m = " << eff_m << endl;
-        MatrixXf R_i = pca.eigenvectors() * d_i.asDiagonal() * pca.eigenvectors().transpose();
+        Eigen::MatrixXf R_i = pca.eigenvectors() * d_i.asDiagonal() * pca.eigenvectors().transpose();
         R_i = R_i.array();
 
 
@@ -1049,22 +1049,22 @@ void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_a
         // debug
         LOGGER << "size = " << size << "; eff_m = " << eff_m << endl;
 
-        MatrixXf R_i = svd.matrixV() * d_i.asDiagonal() * svd.matrixV().transpose();*/
-        VectorXf Q_diag(size);
+        Eigen::MatrixXf R_i = svd.matrixV() * d_i.asDiagonal() * svd.matrixV().transpose();*/
+        Eigen::VectorXf Q_diag(size);
         for(j = 0; j < size; j ++) Q_diag(j) = R_i.col(j).dot(rsq_sub.row(j).transpose());
-        VectorXf multi_rsq_buf(size);
+        Eigen::VectorXf multi_rsq_buf(size);
     	for(j = 0; j < size; j ++){
     		if(fabs(Q_diag[j] - 1.0) < 0.01) multi_rsq_buf[j] = 1.0 - 1.0 / R_i(j,j);
     		else multi_rsq_buf[j] = 1.0;
             if(multi_rsq_buf[j] > 1.0) multi_rsq_buf[j] = 1.0;
     	}
-        VectorXf multi_rsq_buf_adj = multi_rsq_buf.array() - (1.0 - multi_rsq_buf.array()) * (eff_m / ((double)n - eff_m - 1.0));
+        Eigen::VectorXf multi_rsq_buf_adj = multi_rsq_buf.array() - (1.0 - multi_rsq_buf.array()) * (eff_m / ((double)n - eff_m - 1.0));
 
-        rsq_sub.diagonal() = VectorXf::Zero(size);
+        rsq_sub.diagonal() = Eigen::VectorXf::Zero(size);
         rsq_sub = rsq_sub.array() * rsq_sub.array();
-        VectorXf max_rsq_buf(size);
+        Eigen::VectorXf max_rsq_buf(size);
         vector<int> max_pos_buf(size);
-        VectorXf::Index max_pos_pnt;
+        Eigen::VectorXf::Index max_pos_pnt;
         for(j = 0; j < size; j++){
             rsq_sub.col(j).maxCoeff(&max_pos_pnt);
             max_pos_buf[j] = (int)max_pos_pnt;
@@ -1090,7 +1090,7 @@ void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_a
     }
 }
 
-bool gcta::bending_eigenval_Xf(VectorXf &eval)
+bool gcta::bending_eigenval_Xf(Eigen::VectorXf &eval)
 {
     int j = 0;
     double eval_m = eval.mean();

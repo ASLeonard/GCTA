@@ -22,9 +22,6 @@
 #include <Eigen/Sparse>
 #include <unsupported/Eigen/SparseExtra>
 
-using namespace Eigen;
-using namespace std;
-
 namespace StatFunc
 {
     ////////// P-value Calculatiion Functions Start ////////////////
@@ -60,10 +57,10 @@ namespace StatFunc
     double gasdev(int &idum);
 
     // generate a sequence following normal distribution
-    void gasdev_seq(int &idum, vector<double> &vec, int size, double means, double var);
+    void gasdev_seq(int &idum, std::vector<double> &vec, int size, double means, double var);
 
     // generate a sequence following normal distribution with zero average
-    void gasdev_seq(int &idum, vector<double> &vec, int size, double var);
+    void gasdev_seq(int &idum, std::vector<double> &vec, int size, double var);
 
     // generate a gamma random variable when alpha is larger than 1.0
     double cheng_gamdev(int &idum, const double alpha);
@@ -84,13 +81,13 @@ namespace StatFunc
     double F_val(double df_1, double df_2, double prob);
 
     // Control the experimental-wise type I error by FDR method
-    double ControlFDR(const vector<double> &P_Value, double alpha, bool Restrict);
-    double ControlFDR_Zou(const vector<double> &GenePValue, double FDR);
-    double ControlFDR_Storey(vector<double> &P_Value, vector<double> &Q_Value, double CrtQ, double &FDR);
-    double CalcuPi0(vector<double> &P_Value, vector<double> &Lambda);
-    void spline(vector<double> &x, vector<double> &y, const double yp1, const double ypn, vector<double> &y2);
-    void splint(vector<double> &xa, vector<double> &ya, vector<double> &y2a, const double x, double &y);
-    vector<double> ControlFDR_BH(const vector<double> p_value);
+    double ControlFDR(const std::vector<double> &P_Value, double alpha, bool Restrict);
+    double ControlFDR_Zou(const std::vector<double> &GenePValue, double FDR);
+    double ControlFDR_Storey(std::vector<double> &P_Value, std::vector<double> &Q_Value, double CrtQ, double &FDR);
+    double CalcuPi0(std::vector<double> &P_Value, std::vector<double> &Lambda);
+    void spline(std::vector<double> &x, std::vector<double> &y, const double yp1, const double ypn, std::vector<double> &y2);
+    void splint(std::vector<double> &xa, std::vector<double> &ya, std::vector<double> &y2a, const double x, double &y);
+    std::vector<double> ControlFDR_BH(const std::vector<double> p_value);
 
     // normal distribution
     double erf(double x);
@@ -104,15 +101,15 @@ namespace StatFunc
     double qchisq(double q, double df);
     
     // sum of chisq distribution
-    double pchisqsum(double x, VectorXd lambda);
-    double psadd(double x, VectorXd lambda);
-    double psatt(double x, VectorXd lambda);
-    double K(double zeta, VectorXd &lambda);
-    double Kp(double zeta, VectorXd &lambda);
-    double Kpp(double zeta, VectorXd &lambda);
-    double Kp_min_x(double zeta, VectorXd &lambda, double x);
-    double Brents_Kp_min_x(VectorXd &lambda, double x, double lowerLimit, double upperLimit, double errorTol);
-    vector<size_t> sort_re_index(const vector<double> &x);
+    double pchisqsum(double x, Eigen::VectorXd lambda);
+    double psadd(double x, Eigen::VectorXd lambda);
+    double psatt(double x, Eigen::VectorXd lambda);
+    double K(double zeta, Eigen::VectorXd &lambda);
+    double Kp(double zeta, Eigen::VectorXd &lambda);
+    double Kpp(double zeta, Eigen::VectorXd &lambda);
+    double Kp_min_x(double zeta, Eigen::VectorXd &lambda, double x);
+    double Brents_Kp_min_x(Eigen::VectorXd &lambda, double x, double lowerLimit, double upperLimit, double errorTol);
+    std::vector<size_t> sort_re_index(const std::vector<double> &x);
 }
 
 #endif

@@ -16,36 +16,35 @@
 #include <algorithm>
 #include <map>
 #include <iostream>
-using namespace std;
 
 namespace StrFunc
 {
-	bool str_within_quto(const string &str, string &str_buf);
-	int split_string(const string &str, vector<string> &vec_str, string separator=" ,\t;\n");
-	string first_string(const string &str, const char separator);
-	string last_string(const string &str, const char separator);
-	void to_upper(string &str);
-	void to_lower(string &str);
-	string get_sub_str(const string & rst, int pos);
-	bool StrEqual(const string &StrA, const string &StrB, bool NoCaseSens=true);
-	bool StrVecEqual(const vector<string> &VsBufA, const vector<string> &VsBufB, int Pos);
+	bool str_within_quto(const std::string &str, std::string &str_buf);
+	int split_string(const std::string &str, std::vector<std::string> &vec_str, std::string separator=" ,\t;\n");
+	std::string first_string(const std::string &str, const char separator);
+	std::string last_string(const std::string &str, const char separator);
+	void to_upper(std::string &str);
+	void to_lower(std::string &str);
+	std::string get_sub_str(const std::string & rst, int pos);
+	bool StrEqual(const std::string &StrA, const std::string &StrB, bool NoCaseSens=true);
+	bool StrVecEqual(const std::vector<std::string> &VsBufA, const std::vector<std::string> &VsBufB, int Pos);
 
 	// find a string in a string vector ignoring upper or lower case
-	vector<string>::iterator find(vector<string> &target_vs, const string &target_str);
+	std::vector<std::string>::iterator find(std::vector<std::string> &target_vs, const std::string &target_str);
 
 	// find a char in a string ignoring upper or lower case
-	string::iterator find(string &target_str, const char target_ch);
+	std::string::iterator find(std::string &target_str, const char target_ch);
 
 	// go to the postion of a give string in a stream ignoring upper or lower case
-	bool goto_str(std::istream &in_file, const string &str);
+	bool goto_str(std::istream &in_file, const std::string &str);
 
 	// rewind a stream
 	void rewind_if(std::istream &in_file);
 
 	// match two vectors
-	void match(const vector<string> &VecA, const vector<string> &VecB, vector<int> &VecC);
+	void match(const std::vector<std::string> &VecA, const std::vector<std::string> &VecB, std::vector<int> &VecC);
         // compare two string ignore the case
-        bool i_compare(string const& a, string const& b);
+        bool i_compare(std::string const& a, std::string const& b);
 }
 
 #endif
