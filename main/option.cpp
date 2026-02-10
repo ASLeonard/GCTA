@@ -1456,9 +1456,15 @@ void option(int option_num, char* option_str[])
         if (!exclude_snp_name.empty()) pter_gcta->exclude_single_snp(exclude_snp_name);
         if (extract_chr_start > 0) LOGGER << "Warning: the option --chr, --autosome or --nonautosome is inactive for dosage data." << endl;
         if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
-        if (dose_mach_flag) pter_gcta->read_imp_dose_mach(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
-        else if (dose_mach_gz_flag) pter_gcta->read_imp_dose_mach_gz(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
-        else if (dose_beagle_flag) pter_gcta->read_imp_dose_beagle(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
+        bool mlma_reml_only_dosage = mlma_flag && save_reml_flag && !load_reml_flag;
+        bool skip_dose_geno = mlma_reml_only_dosage && (!grm_file.empty() || m_grm_flag || !subtract_grm_file.empty());
+        if (skip_dose_geno) {
+            LOGGER << "Skipping dosage genotype loading because --save-reml is used with an external GRM." << endl;
+        } else {
+            if (dose_mach_flag) pter_gcta->read_imp_dose_mach(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
+            else if (dose_mach_gz_flag) pter_gcta->read_imp_dose_mach_gz(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
+            else if (dose_beagle_flag) pter_gcta->read_imp_dose_beagle(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
+        }
         if (!update_sex_file.empty()) pter_gcta->update_sex(update_sex_file);
         if (!update_impRsq_file.empty()) pter_gcta->update_impRsq(update_impRsq_file);
         if (!update_freq_file.empty()) pter_gcta->update_freq(update_freq_file);
