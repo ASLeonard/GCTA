@@ -96,16 +96,16 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     
     // construct model terms
     _y.setZero(_n);
-    for(i=0; i<phen_ID.size(); i++){
-        iter=uni_id_map.find(phen_ID[i]);
-        if(iter==uni_id_map.end()) continue;
-        _y[iter->second]=atof(phen_buf[i][mphen-1].c_str());
+    for(size_t i = 0; i < phen_ID.size(); ++i){
+        if(auto iter = uni_id_map.find(phen_ID[i]); iter != uni_id_map.end()) {
+            _y[iter->second] = std::stod(phen_buf[i][mphen-1]);
+        }
     }
 
     _r_indx.clear();
     vector<int> kp;
     if (subtract_grm_flag) {
-        for(i=0; i < 2; i++) _r_indx.push_back(i);
+        _r_indx = {0, 1};
         _A.resize(_r_indx.size());
 
         LOGGER << "\nReading the primary GRM from [" << grm_files[1] << "] ..." << endl;
@@ -143,7 +143,8 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
         _grm_N.resize(0,0);
     }
     else {
-        for(i=0; i < grm_files.size() + 1; i++) _r_indx.push_back(i);
+        _r_indx.resize(grm_files.size() + 1);
+        std::iota(_r_indx.begin(), _r_indx.end(), 0);
         _A.resize(_r_indx.size());
         if(grm_flag){
             StrFunc::match(uni_id, grm_id, kp);
@@ -192,10 +193,10 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     //if(!weight_file.empty()){
         // contruct weight
         Eigen::VectorXd v_weight(_n);
-        for (int i = 0; i < weight_ID.size(); i++) {
-            iter = uni_id_map.find(weight_ID[i]);
-            if (iter == uni_id_map.end()) continue;
-            v_weight(iter->second) = weights[i];
+        for (size_t i = 0; i < weight_ID.size(); ++i) {
+            if (auto it = uni_id_map.find(weight_ID[i]); it != uni_id_map.end()) {
+                v_weight(it->second) = weights[i];
+            }
         }
         //v_weight = 1.0 / v_weight.array();
         //v_weight = 1.0 / v_weight.array() - (1.0 / v_weight.array()).mean() + 1;
@@ -216,12 +217,10 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     construct_X(_n, uni_id_map, qcovar_flag, qcovar_num, qcovar_ID, qcovar, covar_flag, covar_num, covar_ID, covar, E_float, qE_float);
     
     // names of variance component
-    for (i = 0; i < grm_files.size(); i++) {
-        stringstream strstrm;
-        if (grm_files.size() == 1) strstrm << "";
-        else strstrm << i + 1;
-        _var_name.push_back("V(G" + strstrm.str() + ")");
-        _hsq_name.push_back("V(G" + strstrm.str() + ")/Vp");
+    for (size_t i = 0; i < grm_files.size(); ++i) {
+        const string suffix = (grm_files.size() == 1) ? "" : std::to_string(i + 1);
+        _var_name.emplace_back("V(G" + suffix + ")");
+        _hsq_name.emplace_back("V(G" + suffix + ")/Vp");
     }
     _var_name.push_back("V(e)");
     
@@ -261,7 +260,7 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     cout << "\nRegression coefficient(s) (e.g., general mean): " <<_b <<endl;
     
     if(!no_adj_covar) y_buf=_y.array()-(_X*_b).array(); // adjust phenotype for covariates
-    for(i=0; i<n; i++) y[i]=y_buf[i];
+    for(size_t i = 0; i < n; ++i) y[i] = y_buf[i];
     
 /*    if(grm_flag || m_grm_flag){
         LOGGER<<endl;
@@ -283,13 +282,13 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     else mlma_calcu_stat(std::span<const float>(y), std::span<const float>(_geno_mkl, static_cast<size_t>(n) * m), m, beta, se, pval);
     delete[] _geno_mkl;
     
-    string filename=_out+".mlma";
+    const string filename = _out + ".mlma";
     LOGGER<<"\nSaving the results of the mixed linear model association analyses of "<<m<<" SNPs to ["+filename+"] ..."<<endl;
-    ofstream ofile(filename.c_str());
+    ofstream ofile(filename);
     if(!ofile) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
     ofile<<"Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\tp"<<endl;
-	for(i=0; i<m; i++){
-        j=_include[i];
+	for(size_t i = 0; i < m; ++i){
+        const auto j = _include[i];
         ofile<<_chr[j]<<"\t"<<_snp_name[j]<<"\t"<<_bp[j]<<"\t"<<_ref_A[j]<<"\t"<<_other_A[j]<<"\t";
         if(pval[i]>1.5) ofile<<"NA\tNA\tNA\tNA"<<endl;
         else ofile<<0.5*_mu[j]<<"\t"<<beta[i]<<"\t"<<se[i]<<"\t"<<pval[i]<<endl;
@@ -300,8 +299,8 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
 void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<const float> geno_mkl, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval)
 {
     const auto n = static_cast<unsigned long>(y.size());
-    int max_block_size = 10000;
-    unsigned long i=0, j=0;
+    constexpr int max_block_size = 10000;
+    unsigned long i = 0, j = 0;
     double Xt_Vi_X=0.0, chisq=0.0;
     std::vector<float> X(n);
     std::vector<float> Vi_X(n);
@@ -347,8 +346,9 @@ void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<
 void gcta::mlma_calcu_stat_covar(std::span<const float> y, [[maybe_unused]] std::span<const float> geno_mkl, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval)
 {
     const auto n = static_cast<unsigned long>(y.size());
-    int max_block_size = 10000;
-    unsigned long i=0, j=0, col_num=_X_c+1;
+    constexpr int max_block_size = 10000;
+    unsigned long i = 0, j = 0;
+    const unsigned long col_num = _X_c + 1;
     double chisq=0.0, d_buf=0.0;
     std::vector<float> Vi(static_cast<size_t>(n) * n);
     std::vector<float> X(static_cast<size_t>(n) * col_num);
