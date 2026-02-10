@@ -81,6 +81,7 @@ void option(int option_num, char* option_str[])
     double grm_adj_fac = -2.0, grm_cutoff = -2.0, rm_high_ld_cutoff = -1.0, bK_threshold = -10.0;
     int dosage_compen = -2, out_pc_num = 20, make_grm_mtd = 0;
     string grm_file = "", paa_file = "", pc_file = "";
+    string genetic_model = "additive"; // genetic model for dosage calculation
     //pca projection
     string project_file = "";
     int project_N = 0;
@@ -428,6 +429,13 @@ void option(int option_num, char* option_str[])
             dominance_flag = true;
             thread_flag = true;
             LOGGER <<"--dominance"<< endl;
+        } else if (strcmp(argv[i], "--model") == 0) {
+            genetic_model = argv[++i];
+            GeneticModel temp_model;
+            if (!stringToGeneticModel(genetic_model, temp_model)) {
+                LOGGER.e(0, "\n  --model should be either 'additive' or 'nonadditive'.\n");
+            }
+            LOGGER << "--model " << genetic_model << endl;
         } else if (strcmp(argv[i], "--make-grm-xchr") == 0 || strcmp(argv[i], "--make-grm-xchr-bin") == 0) {
             make_grm_flag = true;
             make_grm_xchar_flag = true;
@@ -1325,6 +1333,7 @@ void option(int option_num, char* option_str[])
     // Implement
     LOGGER << endl;
     gcta *pter_gcta = new gcta(autosome_num, rm_high_ld_cutoff, out); //, *pter_gcta2=new gcta(autosome_num, rm_high_ld_cutoff, out);
+    pter_gcta->set_genetic_model(genetic_model);
     if(ldscore_adj_flag) pter_gcta->set_ldscore_adj_flag(ldscore_adj_flag);
     if(reml_force_inv_fac_flag) pter_gcta->set_reml_force_inv();
     if(reml_force_converge_flag) pter_gcta->set_reml_force_converge();

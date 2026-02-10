@@ -57,6 +57,31 @@ typedef Eigen::VectorXd eigenVector;
 typedef Eigen::SparseMatrix<double> eigenDynSparseMat;
 #endif
 
+enum class GeneticModel {
+    ADDITIVE,
+    NONADDITIVE
+};
+
+// Helper functions for GeneticModel enum
+inline bool stringToGeneticModel(const std::string& str, GeneticModel& model) {
+    if (str == "additive") {
+        model = GeneticModel::ADDITIVE;
+        return true;
+    } else if (str == "nonadditive") {
+        model = GeneticModel::NONADDITIVE;
+        return true;
+    }
+    return false;
+}
+
+inline std::string geneticModelToString(GeneticModel model) {
+    switch (model) {
+        case GeneticModel::ADDITIVE:    return "additive";
+        case GeneticModel::NONADDITIVE: return "nonadditive";
+        default: return "unknown";
+    }
+}
+
 class gcta {
 public:
     gcta(int autosome_num, double rm_ld_cutoff, std::string out);
@@ -66,6 +91,7 @@ public:
     void read_famfile(std::string famfile);
     void read_bimfile(std::string bimfile);
     void read_bedfile(std::string bedfile);
+    void read_bed_dosage(std::string bedfile); // Read bed file and fill _geno_dose with dosage calculated from genotypes
     std::vector<std::string> read_bfile_list(std::string bfile_list);
     void read_multi_famfiles(std::vector<std::string> multi_bfiles);
     void read_multi_bimfiles(std::vector<std::string> multi_bfiles);
@@ -118,6 +144,7 @@ public:
     void blup_snp_dosage();
     void set_reml_force_inv();
     void set_reml_force_converge();
+    void set_genetic_model(std::string model);
     void set_cv_blup(bool cv_blup);
     void set_reml_no_converge();
     void set_reml_fixed_var();
@@ -530,6 +557,7 @@ private:
 
     // imputed data
     bool _dosage_flag;
+    GeneticModel _genetic_model;
     std::vector< std::vector<float> > _geno_dose;
     std::vector<double> _impRsq;
 

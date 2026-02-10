@@ -26,6 +26,7 @@ gcta::gcta(int autosome_num, double rm_ld_cutoff, string out)
     _rm_ld_cutoff = rm_ld_cutoff;
     _out = out;
     _dosage_flag = false;
+    _genetic_model = GeneticModel::ADDITIVE;
     _grm_bin_flag = false;
     _reml_mtd = 0;
     _reml_inv_mtd = 0;
@@ -58,6 +59,7 @@ gcta::gcta(int autosome_num, double rm_ld_cutoff, string out)
 
 gcta::gcta() {
     _dosage_flag = false;
+    _genetic_model = GeneticModel::ADDITIVE;
     _grm_bin_flag = false;
     _reml_mtd = 0;
     _reml_inv_mtd = 0;
@@ -90,6 +92,13 @@ gcta::gcta() {
 
 gcta::~gcta() {
 
+}
+
+void gcta::set_genetic_model(string model) {
+    if (!stringToGeneticModel(model, _genetic_model)) {
+        LOGGER.e(0, "genetic model must be either 'additive' or 'nonadditive'.");
+    }
+    LOGGER << "Genetic model set to: " << model << endl;
 }
 
 void gcta::read_famfile(string famfile) {
@@ -257,6 +266,253 @@ void gcta::read_bedfile(string bedfile)
     BIT.close();
     LOGGER << "Genotype data for " << _keep.size() << " individuals and " << _include.size() << " SNPs to be included from [" + bedfile + "]." << endl;
 
+    update_fam(rindi);
+    update_bim(rsnp);
+}
+
+/**
+ * Read PLINK bed file and fill _geno_dose matrix with dosage values
+ * calculated from genotypes and allele frequencies.
+ * 
+ * This function performs two passes over the bed file:
+ * Pass 1: Calculate allele frequencies from the genotype data
+ * Pass 2: Convert genotypes to dosages using the calculated frequencies
+ * 
+ * Genotype encoding in PLINK bed format (SNP-major):
+ *   00 -> Homozygous for allele 1 (coded as 2)
+ *   01 -> Homozygous for allele 2 (coded as 0)
+ *   11 -> Heterozygous (coded as 1)
+ *   10 -> Missing (coded as 1e6)
+ * 
+ * Dosage calculation depends on the genetic model (_genetic_model):
+ * 
+ * Additive model (default):
+ *   - RR (homozygous for reference) = 0
+ *   - RA (heterozygous) = 1
+ *   - AA (homozygous for alternate) = 2
+ * 
+ * Nonadditive model:
+ *   - RR (homozygous for reference) = 0
+ *   - RA (heterozygous) = 2p (where p is allele frequency)
+ *   - AA (homozygous for alternate) = 4p - 2
+ *   - Missing values are set to 1e6
+ * 
+ * Prerequisites:
+ *   - read_famfile() must be called first to initialize individuals
+ *   - read_bimfile() must be called first to initialize SNPs and alleles
+ *   - set_genetic_model() can be called to set the model (default: "additive")
+ * 
+ * @param bedfile Path to the PLINK .bed file
+ * 
+ * Example usage:
+ *   gcta mydata;
+ *   mydata.read_famfile("mydata.fam");
+ *   mydata.read_bimfile("mydata.bim");
+ *   mydata.set_genetic_model("nonadditive");  // Optional
+ *   mydata.read_bed_dosage("mydata.bed");
+ *   // Now _geno_dose matrix is filled with dosage values
+ */
+void gcta::read_bed_dosage(string bedfile)
+{
+    // This function reads plink bed files and fills _geno_dose matrix
+    // with dosage values calculated from genotypes and allele frequencies
+    
+    int i = 0, j = 0, k = 0;
+    
+    // Flag for reading individuals and SNPs
+    vector<int> rindi, rsnp;
+    get_rindi(rindi);
+    get_rsnp(rsnp);
+    
+    if (_include.size() == 0) LOGGER.e(0, "no SNP is retained for analysis.");
+    if (_keep.size() == 0) LOGGER.e(0, "no individual is retained for analysis.");
+    
+    // Set dosage flag
+    _dosage_flag = true;
+    
+    // Initialize _geno_dose matrix
+    _geno_dose.clear();
+    _geno_dose.resize(_keep.size());
+    for (i = 0; i < _keep.size(); i++) {
+        _geno_dose[i].resize(_include.size());
+    }
+    
+    // Temporary storage for raw genotypes: [SNP][individual]
+    // We'll use a two-pass approach:
+    // Pass 1: Calculate allele frequencies
+    // Pass 2: Fill dosage matrix
+    
+    LOGGER << "Reading PLINK BED file from [" + bedfile + "] in SNP-major format ..." << endl;
+    
+    // Calculate allele frequencies using _mu
+    _mu.clear();
+    _mu.resize(_snp_num, 0.0);
+    
+    // First pass: calculate allele frequencies
+    {
+        fstream BIT(bedfile.c_str(), ios::in | ios::binary);
+        if (!BIT) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
+        
+        char ch[1];
+        bitset<8> b;
+        
+        // Skip the first three bytes (magic numbers)
+        for (i = 0; i < 3; i++) BIT.read(ch, 1);
+        
+        int snp_indx = 0;
+        for (j = 0, snp_indx = 0; j < _snp_num; j++) {
+            if (!rsnp[j]) {
+                // Skip SNPs not in _include
+                for (i = 0; i < _indi_num; i += 4) BIT.read(ch, 1);
+                continue;
+            }
+            
+            // Count alleles for frequency calculation
+            int allele_count = 0;
+            int valid_count = 0;
+            
+            for (i = 0; i < _indi_num;) {
+                BIT.read(ch, 1);
+                if (!BIT) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
+                b = ch[0];
+                
+                k = 0;
+                while (k < 7 && i < _indi_num) {
+                    bool bit1 = !b[k++];
+                    bool bit2 = !b[k++];
+                    
+                    if (rindi[i]) {
+                        // Calculate genotype: 00->0, 01->1, 11->2, 10->missing
+                        // In bed format: 00=homozA1A1, 11=het, 01=homozA2A2, 10=missing
+                        // After bit flip: bit2=1,bit1=1 -> AA(2), bit2=0,bit1=0 -> BB(0), 
+                        //                 bit2=0,bit1=1 -> AB(1), bit2=1,bit1=0 -> missing
+                        if (!bit2 && bit1) {
+                            // Missing genotype (10 in original encoding)
+                            // Skip missing data
+                        } else {
+                            // Valid genotype
+                            int geno = bit1 + bit2; // 0, 1, or 2
+                            // If allele1 is reference, count directly
+                            // If allele2 is reference, count needs to be flipped
+                            if (_allele1[_include[snp_indx]] == _ref_A[_include[snp_indx]]) {
+                                allele_count += geno;
+                            } else {
+                                allele_count += (2 - geno);
+                            }
+                            valid_count++;
+                        }
+                    }
+                    i++;
+                }
+            }
+            
+            // Calculate allele frequency (as dosage: 0-2)
+            if (valid_count > 0) {
+                _mu[_include[snp_indx]] = (double)allele_count / (double)valid_count;
+            } else {
+                _mu[_include[snp_indx]] = 0.0;
+            }
+            
+            snp_indx++;
+        }
+        
+        BIT.clear();
+        BIT.close();
+    }
+    
+    LOGGER << "Allele frequencies calculated from genotype data." << endl;
+    
+    // Second pass: fill _geno_dose matrix with dosage values
+    {
+        fstream BIT(bedfile.c_str(), ios::in | ios::binary);
+        if (!BIT) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
+        
+        char ch[1];
+        bitset<8> b;
+        
+        // Skip the first three bytes
+        for (i = 0; i < 3; i++) BIT.read(ch, 1);
+        
+        int snp_indx = 0;
+        bool missing_warned = false;
+        
+        for (j = 0, snp_indx = 0; j < _snp_num; j++) {
+            if (!rsnp[j]) {
+                // Skip SNPs not in _include
+                for (i = 0; i < _indi_num; i += 4) BIT.read(ch, 1);
+                continue;
+            }
+            
+            int indi_indx = 0;
+            for (i = 0; i < _indi_num;) {
+                BIT.read(ch, 1);
+                if (!BIT) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
+                b = ch[0];
+                
+                k = 0;
+                while (k < 7 && i < _indi_num) {
+                    bool bit1 = !b[k++];
+                    bool bit2 = !b[k++];
+                    
+                    if (rindi[i]) {
+                        // Convert genotype to dosage
+                        if (!bit2 && bit1) {
+                            // Missing genotype (10 in original encoding)
+                            _geno_dose[indi_indx][snp_indx] = 1e6; // Missing value indicator
+                            if (!missing_warned) {
+                                LOGGER << "Warning: missing values detected in the genotype data." << endl;
+                                missing_warned = true;
+                            }
+                        } else {
+                            // Valid genotype: convert to dosage based on model
+                            float dosage = 0.0f;
+                            int geno = bit1 + bit2; // Raw genotype: 0, 1, or 2
+                            
+                            // Adjust genotype if allele2 is reference (flip encoding)
+                            bool allele2_is_ref = (_allele2[_include[snp_indx]] == _ref_A[_include[snp_indx]]);
+                            if (allele2_is_ref) {
+                                geno = 2 - geno; // Flip: 0->2, 1->1, 2->0
+                            }
+                            
+                            // Get allele frequency for reference allele (already calculated in first pass)
+                            double p = _mu[_include[snp_indx]] / 2.0; // Convert from dosage (0-2) to frequency (0-1)
+                            
+                            switch (_genetic_model) {
+                                case GeneticModel::ADDITIVE:
+                                    // Additive model: RR=0, RA=1, AA=2
+                                    dosage = (float)geno;
+                                    break;
+                                    
+                                case GeneticModel::NONADDITIVE:
+                                    // Nonadditive model: RR=0, RA=2p, AA=4p-2
+                                    // geno is now with respect to reference allele
+                                    if (geno == 0) {
+                                        dosage = 0.0f; // RR (homozygous non-reference)
+                                    } else if (geno == 1) {
+                                        dosage = (float)(2.0 * p); // RA (heterozygote)
+                                    } else { // geno == 2
+                                        dosage = (float)(4.0 * p - 2.0); // AA (homozygous reference)
+                                    }
+                                    break;
+                            }
+                            
+                            _geno_dose[indi_indx][snp_indx] = dosage;
+                        }
+                        indi_indx++;
+                    }
+                    i++;
+                }
+            }
+            snp_indx++;
+        }
+        
+        BIT.clear();
+        BIT.close();
+    }
+    
+    LOGGER << "Dosage data calculated for " << _keep.size() << " individuals and " 
+           << _include.size() << " SNPs from [" + bedfile + "] using " << geneticModelToString(_genetic_model) << " model." << endl;
+    
     update_fam(rindi);
     update_bim(rsnp);
 }
