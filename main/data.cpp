@@ -13,6 +13,9 @@
 #include <sstream>
 #include <iterator>
 #include <set>
+#include <fstream>
+#include <boost/iostreams/filter/gzip.hpp>
+#include <boost/iostreams/filtering_stream.hpp>
 #include "gcta.h"
 #include "Logger.h"
 #include "StrFunc.h"
@@ -707,15 +710,17 @@ void gcta::read_imp_info_mach_gz(string zinfofile)
     _dosage_flag = true;
 
     int i = 0;
-    gzifstream zinf;
-    zinf.open(zinfofile.c_str());
-    if (!zinf.is_open()) LOGGER.e(0, "cannot open the file [" + zinfofile + "] to read.");
+    std::ifstream raw_file(zinfofile, std::ios::binary);
+    if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + zinfofile + "] to read.");
+    boost::iostreams::filtering_istream zinf;
+    zinf.push(boost::iostreams::gzip_decompressor());
+    zinf.push(raw_file);
 
     string buf, str_buf, errmsg = "Reading dosage data failed. Please check the format of the map file.";
     string c_buf;
     double f_buf = 0.0;
     LOGGER << "Reading map file of the imputed dosage data from [" + zinfofile + "]." << endl;
-    getline(zinf, buf); // skip the header
+    std::getline(zinf, buf); // skip the header
     vector<string> vs_buf;
     int col_num = StrFunc::split_string(buf, vs_buf, " \t\n");
     if (col_num < 7) LOGGER.e(0, errmsg);
@@ -724,8 +729,7 @@ void gcta::read_imp_info_mach_gz(string zinfofile)
     _allele1.clear();
     _allele2.clear();
     _impRsq.clear();
-    while (1) {
-        getline(zinf, buf);
+    while (std::getline(zinf, buf)) {
         stringstream ss(buf);
         string nerr = errmsg + "\nError occurs in line: " + ss.str();
         if (!(ss >> str_buf)) break;
@@ -736,10 +740,9 @@ void gcta::read_imp_info_mach_gz(string zinfofile)
         _allele2.push_back(c_buf);
         for (i = 0; i < 4; i++) if (!(ss >> f_buf)) LOGGER.e(0, nerr);
         _impRsq.push_back(f_buf);
-        if (zinf.fail() || !zinf.good()) break;
     }
-    zinf.clear();
-    zinf.close();
+    zinf.reset();
+    raw_file.close();
     _snp_num = _snp_name.size();
     _chr.resize(_snp_num);
     _bp.resize(_snp_num);
@@ -806,9 +809,11 @@ void gcta::read_imp_dose_mach_gz(string zdosefile, string kp_indi_file, string r
     vector<int> rsnp;
     get_rsnp(rsnp);
 
-    gzifstream zinf;
-    zinf.open(zdosefile.c_str());
-    if (!zinf.is_open()) LOGGER.e(0, "cannot open the file [" + zdosefile + "] to read.");
+    std::ifstream raw_file(zdosefile, std::ios::binary);
+    if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + zdosefile + "] to read.");
+    boost::iostreams::filtering_istream zinf;
+    zinf.push(boost::iostreams::gzip_decompressor());
+    zinf.push(raw_file);
 
     vector<string> indi_ls;
     map<string, int> kp_id_map, blup_id_map, rm_id_map;
@@ -830,9 +835,8 @@ void gcta::read_imp_dose_mach_gz(string zdosefile, string kp_indi_file, string r
     _geno_dose.clear();
 
     vector<int> kp_it;
-    while (1) {
+    while (std::getline(zinf, buf)) {
         bool kp_flag = true;
-        getline(zinf, buf);
         stringstream ss(buf);
         if (!(ss >> str_buf)) break;
         int ibuf = StrFunc::split_string(str_buf, vs_buf, ">");
@@ -851,18 +855,21 @@ void gcta::read_imp_dose_mach_gz(string zdosefile, string kp_indi_file, string r
             _pid.push_back(vs_buf[1]);
             kept_id.push_back(id_buf);
         } else kp_it.push_back(0);
-        if (zinf.fail() || !zinf.good()) break;
     }
-    zinf.clear();
-    zinf.close();
+    zinf.reset();
+    raw_file.close();
     LOGGER << "(Imputed dosage data for " << kp_it.size() << " individuals detected)." << endl;
     _indi_num = _fid.size();
 
-    zinf.open(zdosefile.c_str());
+    std::ifstream raw_file2(zdosefile, std::ios::binary);
+    if (!raw_file2.is_open()) LOGGER.e(0, "cannot open the file [" + zdosefile + "] to read.");
+    boost::iostreams::filtering_istream zinf2;
+    zinf2.push(boost::iostreams::gzip_decompressor());
+    zinf2.push(raw_file2);
     _geno_dose.resize(_indi_num);
     for (line = 0; line < _indi_num; line++) _geno_dose[line].resize(_include.size());
     for (line = 0, k = 0; line < kp_it.size(); line++) {
-        getline(zinf, buf);
+        std::getline(zinf2, buf);
         if (kp_it[line] == 0) continue;
         stringstream ss(buf);
         if (!(ss >> str_buf)) break;
@@ -884,8 +891,8 @@ void gcta::read_imp_dose_mach_gz(string zdosefile, string kp_indi_file, string r
         }
         k++;
     }
-    zinf.clear();
-    zinf.close();
+    zinf2.reset();
+    raw_file2.close();
 
     LOGGER << "Imputed dosage data for " << kept_id.size() << " individuals are included from [" << zdosefile << "]." << endl;
     _fa_id.resize(_indi_num);
@@ -1018,21 +1025,20 @@ void gcta::read_imp_dose_mach(string dosefile, string kp_indi_file, string rm_in
 void gcta::read_imp_info_beagle(string zinfofile) {
     _dosage_flag = true;
 
-    const int MAX_LINE_LENGTH = 1000;
-    char buf[MAX_LINE_LENGTH];
+    string buf;
     string str_buf, errmsg = "Reading SNP summary information filed? Please check the format of [" + zinfofile + "].";
 
     string c_buf;
     int i_buf;
     double f_buf = 0.0;
-    gzifstream zinf;
-    zinf.open(zinfofile.c_str());
-    if (!zinf.is_open()) LOGGER.e(0, "cannot open the file [" + zinfofile + "] to read.");
+    std::ifstream raw_file(zinfofile, std::ios::binary);
+    if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + zinfofile + "] to read.");
+    boost::iostreams::filtering_istream zinf;
+    zinf.push(boost::iostreams::gzip_decompressor());
+    zinf.push(raw_file);
     LOGGER << "Reading summary information of the imputed SNPs (BEAGLE output) ..." << endl;
-    zinf.getline(buf, MAX_LINE_LENGTH, '\n'); // skip the header
-    while (1) {
-        zinf.getline(buf, MAX_LINE_LENGTH, '\n');
-        if (zinf.fail() || !zinf.good()) break;
+    std::getline(zinf, buf); // skip the header
+    while (std::getline(zinf, buf)) {
         stringstream ss(buf);
         string nerr = errmsg + "\nError line: " + ss.str();
         if (!(ss >> i_buf)) LOGGER.e(0, nerr);
@@ -1056,8 +1062,8 @@ void gcta::read_imp_info_beagle(string zinfofile) {
         if (!(ss >> f_buf)) LOGGER.e(0, nerr);
         if (ss >> f_buf) LOGGER.e(0, nerr);
     }
-    zinf.clear();
-    zinf.close();
+    zinf.reset();
+    raw_file.close();
     _snp_num = _snp_name.size();
     LOGGER << _snp_num << " SNPs to be included from [" + zinfofile + "]." << endl;
     _genet_dst.resize(_snp_num);
@@ -1074,15 +1080,16 @@ void gcta::read_imp_dose_beagle(string zdosefile, string kp_indi_file, string rm
     vector<int> rsnp;
     get_rsnp(rsnp);
 
-    const int MAX_LINE_LENGTH = 10000000;
-    char buf[MAX_LINE_LENGTH];
+    string buf;
     string str_buf;
 
-    gzifstream zinf;
-    zinf.open(zdosefile.c_str());
-    if (!zinf.is_open()) LOGGER.e(0, "cannot open the file [" + zdosefile + "] to read.");
+    std::ifstream raw_file(zdosefile, std::ios::binary);
+    if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + zdosefile + "] to read.");
+    boost::iostreams::filtering_istream zinf;
+    zinf.push(boost::iostreams::gzip_decompressor());
+    zinf.push(raw_file);
     LOGGER << "Reading imputed dosage scores (BEAGLE output) ..." << endl;
-    zinf.getline(buf, MAX_LINE_LENGTH, '\n');
+    std::getline(zinf, buf);
     stringstream ss(buf);
     for (i = 0; i < 3; i++) ss >> str_buf;
     while (ss >> str_buf) {
@@ -1109,9 +1116,7 @@ void gcta::read_imp_dose_beagle(string zdosefile, string kp_indi_file, string rm
     int line = 0;
     int k = 0;
     double d_buf = 0.0;
-    while (1) {
-        zinf.getline(buf, MAX_LINE_LENGTH, '\n');
-        if (zinf.fail() || !zinf.good()) break;
+    while (std::getline(zinf, buf)) {
         if (!rsnp[line++]) continue;
         stringstream ss(buf);
         ss >> str_buf;
@@ -1130,8 +1135,8 @@ void gcta::read_imp_dose_beagle(string zdosefile, string kp_indi_file, string rm
         }
         k++;
     }
-    zinf.clear();
-    zinf.close();
+    zinf.reset();
+    raw_file.close();
 }
 
 void gcta::save_plink() {
@@ -1757,7 +1762,7 @@ void gcta::read_indi_blup(string blup_indi_file) {
     LOGGER << "BLUP solution to the total genetic effects for " << _keep.size() << " individuals have been read from [" + blup_indi_file + "]." << endl;
 }
 
-bool gcta::make_XMat(MatrixXf &X)
+bool gcta::make_XMat(Eigen::MatrixXf &X)
 {
     if (_mu.empty()) calcu_mu();
 
@@ -1798,7 +1803,7 @@ bool gcta::make_XMat(MatrixXf &X)
     return have_mis;
 }
 
-bool gcta::make_XMat_d(MatrixXf &X)
+bool gcta::make_XMat_d(Eigen::MatrixXf &X)
 {
     if (_mu.empty()) calcu_mu();
 
@@ -1845,14 +1850,14 @@ bool gcta::make_XMat_d(MatrixXf &X)
     return have_mis;
 }
 
-void gcta::std_XMat(MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std)
+void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std)
 {
     if (_mu.empty()) calcu_mu();
 
     unsigned long i = 0, j = 0, n = _keep.size(), m = _include.size();
     sd_SNP.resize(m);
     if (_dosage_flag) {
-        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - VectorXf::Constant(n, _mu[_include[j]])).squaredNorm() / (n - 1.0);
+        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - Eigen::VectorXf::Constant(n, _mu[_include[j]])).squaredNorm() / (n - 1.0);
     } 
     else {
         for (j = 0; j < m; j++) sd_SNP[j] = _mu[_include[j]]*(1.0 - 0.5 * _mu[_include[j]]);
@@ -1892,7 +1897,7 @@ void gcta::std_XMat(MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool m
     }
 }
 
-void gcta::std_XMat_d(MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu, bool divid_by_std)
+void gcta::std_XMat_d(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu, bool divid_by_std)
 {
     if (_mu.empty()) calcu_mu();
 
@@ -1988,9 +1993,11 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
     // Save matrix X
     double x_buf = 0.0;
     string X_zFile = _out + ".xmat.gz";
-    gzofstream zoutf;
-    zoutf.open(X_zFile.c_str());
-    if (!zoutf.is_open()) LOGGER.e(0, "cannot open the file [" + X_zFile + "] to write.");
+    std::ofstream raw_file(X_zFile, std::ios::binary);
+    if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + X_zFile + "] to write.");
+    boost::iostreams::filtering_ostream zoutf;
+    zoutf.push(boost::iostreams::gzip_compressor());
+    zoutf.push(raw_file);
     LOGGER << "Saving the recoded genotype matrix to the file [" + X_zFile + "]." << endl;
     zoutf << "FID IID ";
     for (j = 0; j < _include.size(); j++) zoutf << _snp_name[_include[j]] << " ";
@@ -2033,11 +2040,12 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
         }
         zoutf << endl;
     }
-    zoutf.close();
+    zoutf.reset();
+    raw_file.close();
     LOGGER << "The recoded genotype matrix has been saved in the file [" + X_zFile + "] (in compressed text format)." << endl;
 }
 
-bool gcta::make_XMat_subset(MatrixXf &X, vector<int> &snp_indx, bool divid_by_std)
+bool gcta::make_XMat_subset(Eigen::MatrixXf &X, vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
     if (_mu.empty()) calcu_mu();
@@ -2091,7 +2099,7 @@ bool gcta::make_XMat_subset(MatrixXf &X, vector<int> &snp_indx, bool divid_by_st
     return true;
 }
 
-bool gcta::make_XMat_d_subset(MatrixXf &X, vector<int> &snp_indx, bool divid_by_std)
+bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
     if (_mu.empty()) calcu_mu();

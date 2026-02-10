@@ -61,54 +61,46 @@ void LD::calcLD(){
     int nc1 = cur_buffer_offset[cacl_index_buffer] / nr;
     double alpha = 1.0 / (nr - 1);
     double *ptr1 = geno_buffer[cacl_index_buffer].get();
-    double *res1 = new double[nc1 * nc1];
-    cblas_dsyrk(CblasColMajor, CblasLower, CblasTrans, nc1, nr, alpha, ptr1, nr, zero, res1, nc1);
+    std::vector<double> res1(static_cast<size_t>(nc1) * nc1);
+    cblas_dsyrk(CblasColMajor, CblasLower, CblasTrans, nc1, nr, alpha, ptr1, nr, zero, res1.data(), nc1);
 
-    double *res2 = nullptr;
+    std::vector<double> res2;
     // is previous buffer active?
     int nc2 = 0;
     if(geno_buffer[!cacl_index_buffer]){
         //TODO: reduce half calculation
         nc2 = cur_buffer_offset[!cacl_index_buffer] / nr;
         double *ptr2 = geno_buffer[!cacl_index_buffer].get();
-        res2 = new double[nc2 * nc1];
-        cblas_dgemm(CblasColMajor, CblasTrans, CblasNoTrans, nc2, nc1, nr, alpha, ptr2, nr, ptr1, nr, zero, res2, nc2);
+        res2.resize(static_cast<size_t>(nc2) * nc1);
+        cblas_dgemm(CblasColMajor, CblasTrans, CblasNoTrans, nc2, nc1, nr, alpha, ptr2, nr, ptr1, nr, zero, res2.data(), nc2);
     }
     
     for(int i = 0; i < nc1; i++){
         uint32_t cur_size;
-        float *buffer;
-        if(res2){ 
+        std::vector<float> buffer;
+        if(!res2.empty()){ 
             cur_size = geno->marker->getNextWindowSize(cur_process_marker_index, ld_window);
-            buffer = new float[cur_size];
+            buffer.resize(cur_size);
             uint32_t cur_size1 = nc1 - i;
             uint32_t cur_size2 = cur_size - cur_size1;
-            double* temp_ptr = res1 + i + i*nc1;
-            double* temp_ptr2 = res2 + i * nc2;
-            std::transform(temp_ptr, temp_ptr + cur_size1, buffer, static_cast_func<float>());
-            std::transform(temp_ptr2, temp_ptr2 + cur_size2, buffer + cur_size1, static_cast_func<float>());
+            double* temp_ptr = res1.data() + i + i*nc1;
+            double* temp_ptr2 = res2.data() + i * nc2;
+            std::transform(temp_ptr, temp_ptr + cur_size1, buffer.data(), static_cast_func<float>());
+            std::transform(temp_ptr2, temp_ptr2 + cur_size2, buffer.data() + cur_size1, static_cast_func<float>());
         }else{
             cur_size = nc1 - i;
-            buffer = new float[cur_size];
-            double* temp_ptr = res1 + i + i * nc1;
-            std::transform(temp_ptr, temp_ptr + cur_size, buffer, static_cast_func<float>());
+            buffer.resize(cur_size);
+            double* temp_ptr = res1.data() + i + i * nc1;
+            std::transform(temp_ptr, temp_ptr + cur_size, buffer.data(), static_cast_func<float>());
         }
         // write to file
         if(fwrite(&cur_size, sizeof(uint32_t), 1, h_ld) != 1){
             LOGGER.e(0, "can't write to " + options["out"] + ".");
         }
-        if(fwrite(buffer, sizeof(float), cur_size, h_ld) != cur_size){
+        if(fwrite(buffer.data(), sizeof(float), cur_size, h_ld) != cur_size){
             LOGGER.e(0, "can't write to " + options["out"] + ".");
         }
-        delete[] buffer;
         cur_process_marker_index++;
-    }
-    //clean 
-    if(res1){
-        delete[] res1;
-    }
-    if(res2){
-        delete[] res2;
     }
     geno_buffer[cacl_index_buffer].reset(nullptr);
     fflush(h_ld);

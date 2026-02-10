@@ -21,6 +21,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
 #include <algorithm>
+#include <ranges>
 #include <numeric>
 #include "utils.hpp"
 #include "StatLib.h"
@@ -48,8 +49,7 @@ bool common_3vector(vector<string> **idListP, vector<vector<double>> **valueP,
     }
     vector<string> sample_id;
     sample_id.reserve(remain_size);
-    std::transform(s1_index.begin(), s1_index.end(), 
-            std::back_inserter(sample_id), [&s1](int pos){return s1[pos];}); 
+    std::ranges::transform(s1_index, std::back_inserter(sample_id), [&s1](int pos){return s1[pos];}); 
 
     vector<int> s3_index, s4_index;
     if(s3.size() != 0){
@@ -62,20 +62,17 @@ bool common_3vector(vector<string> **idListP, vector<vector<double>> **valueP,
         vector<int> temp_s1, temp_s2;
         temp_s1.reserve(remain_size);
         temp_s2.reserve(remain_size);
-        std::transform(sa_index.begin(), sa_index.end(), 
-                std::back_inserter(temp_s1), [&s1_index](int pos){return s1_index[pos];});
+        std::ranges::transform(sa_index, std::back_inserter(temp_s1), [&s1_index](int pos){return s1_index[pos];});
         s1_index.resize(remain_size);
         s1_index = temp_s1;
 
-        std::transform(sa_index.begin(), sa_index.end(), 
-                std::back_inserter(temp_s2), [&s2_index](int pos){return s2_index[pos];});
+        std::ranges::transform(sa_index, std::back_inserter(temp_s2), [&s2_index](int pos){return s2_index[pos];});
         s2_index.resize(remain_size);
         s2_index = temp_s2;
 
         sample_id.clear();
         sample_id.reserve(remain_size);
-        std::transform(s1_index.begin(), s1_index.end(), 
-                       std::back_inserter(sample_id), [&s1](int pos){return s1[pos];}); 
+        std::ranges::transform(s1_index, std::back_inserter(sample_id), [&s1](int pos){return s1[pos];}); 
         
         if(s4.size() != 0){
             vector<int> sc_index;
@@ -91,18 +88,15 @@ bool common_3vector(vector<string> **idListP, vector<vector<double>> **valueP,
             temp_s2.reserve(remain_size);
             temp_s3.reserve(remain_size);
             
-            std::transform(sc_index.begin(), sc_index.end(), 
-                           std::back_inserter(temp_s1), [&s1_index](int pos){return s1_index[pos];});
+            std::ranges::transform(sc_index, std::back_inserter(temp_s1), [&s1_index](int pos){return s1_index[pos];});
             s1_index.resize(remain_size);
             s1_index = temp_s1;
             
-            std::transform(sc_index.begin(), sc_index.end(), 
-                           std::back_inserter(temp_s2), [&s2_index](int pos){return s2_index[pos];});
+            std::ranges::transform(sc_index, std::back_inserter(temp_s2), [&s2_index](int pos){return s2_index[pos];});
             s2_index.resize(remain_size);
             s2_index = temp_s2;
             
-            std::transform(sc_index.begin(), sc_index.end(), 
-                           std::back_inserter(temp_s3), [&s3_index](int pos){return s3_index[pos];});
+            std::ranges::transform(sc_index, std::back_inserter(temp_s3), [&s3_index](int pos){return s3_index[pos];});
             s3_index.resize(remain_size);
             s3_index = temp_s3;
             
@@ -110,8 +104,7 @@ bool common_3vector(vector<string> **idListP, vector<vector<double>> **valueP,
     }
 
     target_id->resize(remain_size);
-    std::transform(s1_index.begin(), s1_index.end(), target_id->begin(), 
-            [&s1](int pos){return s1[pos];});
+    std::ranges::transform(s1_index, target_id->begin(), [&s1](int pos){return s1[pos];});
 
     auto &value1 = *valueP[0];
     auto &value2 = *valueP[1];
@@ -133,8 +126,7 @@ bool common_3vector(vector<string> **idListP, vector<vector<double>> **valueP,
         vector<double> t_value(temp_index.size());
         for(int j = 0; j < temp_value.size(); j++){
             auto &pvalue = temp_value[j];
-            std::transform(temp_index.begin(), temp_index.end(), 
-                    t_value.begin(), [&pvalue](int pos){return pvalue[pos];}); 
+            std::ranges::transform(temp_index, t_value.begin(), [&pvalue](int pos){return pvalue[pos];});
             temp_target[j] = t_value;
         }
     }
@@ -444,7 +436,7 @@ bool Covar::setCovarMapping(bool is_rcovar, vector<vector<string>> *map_order){
                 elements.push_back(key);
             }
         }
-        std::sort(elements.begin(), elements.end());
+        std::ranges::sort(elements);
         if(elements.size() == 1){
             LOGGER.e(0, "column " + to_string(i) + ", " + err_string);
             return false;
@@ -472,21 +464,19 @@ bool Covar::setCovarMapping(bool is_rcovar, vector<vector<string>> *map_order){
             }
         }else{
             int n = elements.size();
-            double *Z = new double[n*n];
-            if(StatLib::rankContrast(n, Z)){
+            std::vector<double> Z(static_cast<size_t>(n) * n);
+            if(StatLib::rankContrast(n, Z.data())){
                 for(int j = 1; j < n; j++){
                     vector<double> item(n);
                     int base_index_z = j * n;
-                    std::transform(elements.begin(), elements.end(), item.begin(),
-                            [&map_item, Z, &base_index_z](string t){return Z[base_index_z + map_item[t]];});
+                    std::ranges::transform(elements, item.begin(),
+                            [&map_item, &Z, &base_index_z](string t){return Z[base_index_z + map_item[t]];});
 
                     labels_covar_mapping[start_col_X[i] + j - 1] = item;
                 }
             }else{
-                delete[] Z;
                 return false;
             }
-            delete[] Z;
         }
     }
 
@@ -571,7 +561,7 @@ bool Covar::getCovarX(const vector<string> &sampleIDs, vector<double> &X, vector
         int base_pos = (start_col_X[base_covar + i]) * common_sample_size;
         for(int j = 0; j < labelp["LABEL_MAX_VALUE"]; j++){
             auto &cur_table = labels_covar_mapping[map_index];
-            std::transform(covar_index.begin(), covar_index.end(), X.begin() + base_pos + j * common_sample_size, [&cur_table, &covarp](int pos){ return cur_table[(int)covarp[pos]];});
+            std::ranges::transform(covar_index, X.begin() + base_pos + j * common_sample_size, [&cur_table, &covarp](int pos){ return cur_table[(int)covarp[pos]];});
             map_index++;
         }
     }
@@ -584,7 +574,7 @@ bool Covar::getCovarX(const vector<string> &sampleIDs, vector<double> &X, vector
         int base_pos = (start_col_X[base_rcovar + i]) * common_sample_size;
         for(int j = 0; j < labelp["LABEL_MAX_VALUE"]; j++){
             auto &cur_table = labels_rcovar_mapping[map_rindex];
-            std::transform(covar_index.begin(), covar_index.end(), X.begin() + base_pos + j * common_sample_size, [&cur_table, &covarp](int pos){ return cur_table[(int)covarp[pos]];});
+            std::ranges::transform(covar_index, X.begin() + base_pos + j * common_sample_size, [&cur_table, &covarp](int pos){ return cur_table[(int)covarp[pos]];});
             //std::transform(covarp.begin(), covarp.end(), X.begin() + base_pos + j * common_sample_size, [&cur_table](double covar){ return cur_table[(int)covar];});
             map_rindex++;
         }
@@ -594,7 +584,7 @@ bool Covar::getCovarX(const vector<string> &sampleIDs, vector<double> &X, vector
     for(int i = 0; i < envir.size(); i++){
         auto &covarp = this->envir[i];
         int base_pos = (start_col_X[base_envir + i]) * common_sample_size;
-        std::transform(covar_index.begin(), covar_index.end(), X.begin() + base_pos,
+        std::ranges::transform(covar_index, X.begin() + base_pos,
                        [&covarp](int pos){return covarp[pos];});
     }
 
@@ -667,7 +657,7 @@ bool Covar::getEnvirX(const vector<string> &sampleIDs, vector<double> &X, vector
   for(int i = 0; i < envir.size(); i++){
     auto &covarp = this->envir[i];
     int base_pos = i * common_sample_size;
-    std::transform(covar_index.begin(), covar_index.end(), X.begin() + base_pos,
+    std::ranges::transform(covar_index, X.begin() + base_pos,
                    [&covarp](int pos){return covarp[pos];});
   }
   return true;
@@ -726,7 +716,7 @@ void Covar::read_covar(string filename, vector<string>& sub_list, vector<vector<
         nkeep = keep_col.size();
     }else{
         keep_col.resize(nkeep);
-        std::transform(keep_row_p->begin(), keep_row_p->end(), keep_col.begin(), [](int value){return ++value;});
+        std::ranges::transform(*keep_row_p, keep_col.begin(), [](int value){return ++value;});
     }
 
     if(has_covar){

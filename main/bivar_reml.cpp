@@ -388,7 +388,7 @@ void gcta::constrain_rg(eigenVector &varcmp) {
         G(1, 1) = varcmp[_bivar_pos[1][v_pos]];
         G(0, 1) = G(1, 0) = varcmp[_bivar_pos[2][c_pos]];
 
-        SelfAdjointEigenSolver<eigenMatrix> eigensolver(G);
+        Eigen::SelfAdjointEigenSolver<eigenMatrix> eigensolver(G);
         eigenVector eval = eigensolver.eigenvalues();
         if (eval.minCoeff() <= 0.0) {
             if (count == 0) {

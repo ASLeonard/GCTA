@@ -22,17 +22,14 @@
 #include <boost/math/distributions/beta.hpp>
 #include "cpu.h"
 
-using namespace boost::math;
-
-
 namespace StatLib{
-    chi_squared dist1(1);
-    chi_squared dist2(2); 
-    normal_distribution<> norm_dist(0.0, 1.0);
+    boost::math::chi_squared dist1(1);
+    boost::math::chi_squared dist2(2); 
+    boost::math::normal_distribution<> norm_dist(0.0, 1.0);
 
     double pchisqd1(double x){
         if(x > 0 && std::isfinite(x)){
-            return cdf(complement(dist1, x));
+            return boost::math::cdf(boost::math::complement(dist1, x));
         }else{
             return std::numeric_limits<double>::quiet_NaN();
         }
@@ -40,7 +37,7 @@ namespace StatLib{
 
     double pchisqd2(double x){
         if(x > 0 && std::isfinite(x)){
-            return cdf(complement(dist2, x));
+            return boost::math::cdf(boost::math::complement(dist2, x));
         }else{
             return std::numeric_limits<double>::quiet_NaN();
         }
@@ -48,7 +45,7 @@ namespace StatLib{
 
     double qchisqd1(double x){
         if(x > 0 && x <= 1){
-            return quantile(complement(dist1, x));
+            return boost::math::quantile(boost::math::complement(dist1, x));
         }else if(x == 0){
             return std::numeric_limits<double>::infinity();
         }else{
@@ -56,13 +53,13 @@ namespace StatLib{
         }
     }
 
-    VectorXd weightBetaMAF(const VectorXd& MAF, double weight_alpha, double weight_beta){
-        beta_distribution<> beta_weight(weight_alpha, weight_beta);
+    Eigen::VectorXd weightBetaMAF(const Eigen::VectorXd& MAF, double weight_alpha, double weight_beta){
+        boost::math::beta_distribution<> beta_weight(weight_alpha, weight_beta);
         int p_len = MAF.size();
-        VectorXd weights(p_len);
+        Eigen::VectorXd weights(p_len);
         for(int i = 0; i < p_len; i++){
             double af = MAF[i];
-            weights[i] = pdf(beta_weight, af);
+            weights[i] = boost::math::pdf(beta_weight, af);
         }
         return weights;
     }
@@ -73,9 +70,9 @@ namespace StatLib{
             return std::numeric_limits<double>::quiet_NaN();
         }
         if(bLowerTail){
-            return cdf(norm_dist, x);
+            return boost::math::cdf(norm_dist, x);
         }else{
-            return cdf(complement(norm_dist, x));
+            return boost::math::cdf(boost::math::complement(norm_dist, x));
         }
     }
 
@@ -85,7 +82,7 @@ namespace StatLib{
         double mean = 1.0 - (1.0 + n) / 2.0;
 
         //outer op
-        double* X = new double[n * n];
+        std::vector<double> X(static_cast<size_t>(n) * n);
         for(int i = 0; i < n; i++){
             int base_index = i * n;
             for(int j = 0; j < n; j++){
@@ -93,19 +90,19 @@ namespace StatLib{
             }
         }
 
-        double* tau = new double[n];
+        std::vector<double> tau(n);
         gcta_blas_int n_lapack = (gcta_blas_int)n;
         gcta_blas_int info = 0;
         gcta_blas_int lda = n_lapack;
         gcta_blas_int lwork = -1;
         double work_query = 0;
-        dgeqrf(&n_lapack, &n_lapack, X, &lda, tau, &work_query, &lwork, &info);
+        dgeqrf(&n_lapack, &n_lapack, X.data(), &lda, tau.data(), &work_query, &lwork, &info);
         lwork = (gcta_blas_int)work_query;
         std::vector<double> work(lwork);
-        dgeqrf(&n_lapack, &n_lapack, X, &lda, tau, work.data(), &lwork, &info);
+        dgeqrf(&n_lapack, &n_lapack, X.data(), &lda, tau.data(), work.data(), &lwork, &info);
         double *c = Z;
         char side = 'L', trans = 'T';
-        dormqr(&side, &trans, &n_lapack, &n_lapack, &n_lapack, X, &lda, tau, c, &lda, work.data(), &lwork, &info);
+        dormqr(&side, &trans, &n_lapack, &n_lapack, &n_lapack, X.data(), &lda, tau.data(), c, &lda, work.data(), &lwork, &info);
         if(info != 0){
             return false;
         }
