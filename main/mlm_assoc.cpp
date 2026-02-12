@@ -197,7 +197,7 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
 
             read_weight(weight_file, weight_ID, weights);
             update_id_map_kp(weight_ID, _id_map, _keep);
-        //}
+
         //if(!weight_file.empty()){
             // contruct weight
             Eigen::VectorXd v_weight(_n);
@@ -224,6 +224,7 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     vector<eigenMatrix> E_float;
     eigenMatrix qE_float;
     construct_X(_n, uni_id_map, qcovar_flag, qcovar_num, qcovar_ID, qcovar, covar_flag, covar_num, covar_ID, covar, E_float, qE_float);
+
     
     // names of variance component
     if (!skip_grm_loading) {

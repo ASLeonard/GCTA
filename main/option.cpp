@@ -81,7 +81,7 @@ void option(int option_num, char* option_str[])
     double grm_adj_fac = -2.0, grm_cutoff = -2.0, rm_high_ld_cutoff = -1.0, bK_threshold = -10.0;
     int dosage_compen = -2, out_pc_num = 20, make_grm_mtd = 0;
     string grm_file = "", paa_file = "", pc_file = "";
-    string genetic_model = "additive"; // genetic model for dosage calculation
+    string genetic_model = ""; // genetic model for dosage calculation
     //pca projection
     string project_file = "";
     int project_N = 0;
@@ -1333,7 +1333,8 @@ void option(int option_num, char* option_str[])
     // Implement
     LOGGER << endl;
     gcta *pter_gcta = new gcta(autosome_num, rm_high_ld_cutoff, out); //, *pter_gcta2=new gcta(autosome_num, rm_high_ld_cutoff, out);
-    pter_gcta->set_genetic_model(genetic_model);
+
+    if (!genetic_model.empty()) pter_gcta->set_genetic_model(genetic_model);
     if(ldscore_adj_flag) pter_gcta->set_ldscore_adj_flag(ldscore_adj_flag);
     if(reml_force_inv_fac_flag) pter_gcta->set_reml_force_inv();
     if(reml_force_converge_flag) pter_gcta->set_reml_force_converge();
@@ -1377,59 +1378,53 @@ void option(int option_num, char* option_str[])
             if (!rm_indi_file.empty()) pter_gcta->remove_indi(rm_indi_file);
             if (!update_sex_file.empty()) pter_gcta->update_sex(update_sex_file);
             if (!blup_indi_file.empty()) pter_gcta->read_indi_blup(blup_indi_file);
-            bool mlma_reml_only = mlma_flag && !save_reml_file.empty() && load_reml_file.empty();
-            bool skip_snp_loading = mlma_reml_only && (!grm_file.empty() || m_grm_flag || !subtract_grm_file.empty());
-            if (skip_snp_loading) {
-                LOGGER << "Skipping SNP/genotype loading because --save-reml is used with an external GRM." << endl;
-            } else {
-                if(bfile_flag==1) pter_gcta->read_bimfile(bfile + ".bim");
-                else pter_gcta->read_multi_bimfiles(multi_bfiles);
-                if (!extract_snp_file.empty()) pter_gcta->extract_snp(extract_snp_file);
-                if (extract_chr_start > 0) pter_gcta->extract_chr(extract_chr_start, extract_chr_end);
-                if(extract_region_chr>0) pter_gcta->extract_region_bp(extract_region_chr, extract_region_bp, extract_region_wind);
-                if (!extract_snp_name.empty()){
-                    if(extract_region_wind>0) pter_gcta->extract_region_snp(extract_snp_name, extract_region_wind);
-                    else pter_gcta->extract_single_snp(extract_snp_name);
-                }
-                if (!exclude_snp_file.empty()) pter_gcta->exclude_snp(exclude_snp_file);
-                if(exclude_region_chr>0) pter_gcta->exclude_region_bp(exclude_region_chr, exclude_region_bp, exclude_region_wind);
-                if (!exclude_snp_name.empty()) {
-                    if(exclude_region_wind>0) pter_gcta->exclude_region_snp(exclude_snp_name, exclude_region_wind);
-                    else pter_gcta->exclude_single_snp(exclude_snp_name);
-                }
-                if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
-                if (LD) pter_gcta->read_LD_target_SNPs(LD_file);
-                if(gsmr_flag) pter_gcta->read_gsmrfile(expo_file_list, outcome_file_list, gwas_thresh, nsnp_gsmr, gsmr_so_alg);
-                if(mtcojo_flag) nsnp_read = pter_gcta->read_mtcojofile(mtcojolist_file, gwas_thresh, nsnp_gsmr);
-                if(mtcojo_flag && nsnp_read>0) {
-                    if(bfile_flag==1) {
-                        if (genetic_model != "additive") {
-                            pter_gcta->read_bed_dosage(bfile + ".bed");
-                        } else {
-                            pter_gcta->read_bedfile(bfile + ".bed");
-                        }
-                    } else {
-                        pter_gcta->read_multi_bedfiles(multi_bfiles);
-                    }
-                }
-                if(!mtcojo_flag){
-                    if(bfile_flag==1) {
-                        if (genetic_model != "additive") {
-                            pter_gcta->read_bed_dosage(bfile + ".bed");
-                        } else {
-                            pter_gcta->read_bedfile(bfile + ".bed");
-                        }
-                    } else {
-                        pter_gcta->read_multi_bedfiles(multi_bfiles);
-                    }
-                }
-
-                if (!update_impRsq_file.empty()) pter_gcta->update_impRsq(update_impRsq_file);
-                if (!update_freq_file.empty()) pter_gcta->update_freq(update_freq_file);
-                if (dose_Rsq_cutoff > 0.0) pter_gcta->filter_impRsq(dose_Rsq_cutoff);
-                if (maf > 0) pter_gcta->filter_snp_maf(maf);
-                if (max_maf > 0.0) pter_gcta->filter_snp_max_maf(max_maf);
+            if(bfile_flag==1) pter_gcta->read_bimfile(bfile + ".bim");
+            else pter_gcta->read_multi_bimfiles(multi_bfiles);
+            if (!extract_snp_file.empty()) pter_gcta->extract_snp(extract_snp_file);
+            if (extract_chr_start > 0) pter_gcta->extract_chr(extract_chr_start, extract_chr_end);
+            if(extract_region_chr>0) pter_gcta->extract_region_bp(extract_region_chr, extract_region_bp, extract_region_wind);
+            if (!extract_snp_name.empty()){
+                if(extract_region_wind>0) pter_gcta->extract_region_snp(extract_snp_name, extract_region_wind);
+                else pter_gcta->extract_single_snp(extract_snp_name);
             }
+            if (!exclude_snp_file.empty()) pter_gcta->exclude_snp(exclude_snp_file);
+            if(exclude_region_chr>0) pter_gcta->exclude_region_bp(exclude_region_chr, exclude_region_bp, exclude_region_wind);
+            if (!exclude_snp_name.empty()) {
+                if(exclude_region_wind>0) pter_gcta->exclude_region_snp(exclude_snp_name, exclude_region_wind);
+                else pter_gcta->exclude_single_snp(exclude_snp_name);
+            }
+            if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
+            if (LD) pter_gcta->read_LD_target_SNPs(LD_file);
+            if(gsmr_flag) pter_gcta->read_gsmrfile(expo_file_list, outcome_file_list, gwas_thresh, nsnp_gsmr, gsmr_so_alg);
+            if(mtcojo_flag) nsnp_read = pter_gcta->read_mtcojofile(mtcojolist_file, gwas_thresh, nsnp_gsmr);
+            if(mtcojo_flag && nsnp_read>0) {
+                if(bfile_flag==1) {
+                    if (genetic_model != "") {
+                        pter_gcta->read_bed_dosage(bfile + ".bed");
+                    } else {
+                        pter_gcta->read_bedfile(bfile + ".bed");
+                    }
+                } else {
+                    pter_gcta->read_multi_bedfiles(multi_bfiles);
+                }
+            }
+            if(!mtcojo_flag){
+                if(bfile_flag==1) {
+                    if (genetic_model != "") {
+                        pter_gcta->read_bed_dosage(bfile + ".bed");
+                    } else {
+                        pter_gcta->read_bedfile(bfile + ".bed");
+                    }
+                } else {
+                    pter_gcta->read_multi_bedfiles(multi_bfiles);
+                }
+            }
+
+            if (!update_impRsq_file.empty()) pter_gcta->update_impRsq(update_impRsq_file);
+            if (!update_freq_file.empty()) pter_gcta->update_freq(update_freq_file);
+            if (dose_Rsq_cutoff > 0.0) pter_gcta->filter_impRsq(dose_Rsq_cutoff);
+            if (maf > 0) pter_gcta->filter_snp_maf(maf);
+            if (max_maf > 0.0) pter_gcta->filter_snp_max_maf(max_maf);
             if (out_freq_flag) pter_gcta->save_freq(out_ssq_flag);
             else if (!paa_file.empty()) pter_gcta->paa(paa_file);
             else if (ibc) pter_gcta->ibc(ibc_all);
@@ -1479,15 +1474,9 @@ void option(int option_num, char* option_str[])
         if (!exclude_snp_name.empty()) pter_gcta->exclude_single_snp(exclude_snp_name);
         if (extract_chr_start > 0) LOGGER << "Warning: the option --chr, --autosome or --nonautosome is inactive for dosage data." << endl;
         if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
-        bool mlma_reml_only_dosage = mlma_flag && save_reml_flag && !load_reml_flag;
-        bool skip_dose_geno = mlma_reml_only_dosage && (!grm_file.empty() || m_grm_flag || !subtract_grm_file.empty());
-        if (skip_dose_geno) {
-            LOGGER << "Skipping dosage genotype loading because --save-reml is used with an external GRM." << endl;
-        } else {
-            if (dose_mach_flag) pter_gcta->read_imp_dose_mach(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
-            else if (dose_mach_gz_flag) pter_gcta->read_imp_dose_mach_gz(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
-            else if (dose_beagle_flag) pter_gcta->read_imp_dose_beagle(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
-        }
+        if (dose_mach_flag) pter_gcta->read_imp_dose_mach(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
+        else if (dose_mach_gz_flag) pter_gcta->read_imp_dose_mach_gz(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
+        else if (dose_beagle_flag) pter_gcta->read_imp_dose_beagle(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
         if (!update_sex_file.empty()) pter_gcta->update_sex(update_sex_file);
         if (!update_impRsq_file.empty()) pter_gcta->update_impRsq(update_impRsq_file);
         if (!update_freq_file.empty()) pter_gcta->update_freq(update_freq_file);
