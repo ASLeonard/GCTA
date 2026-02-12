@@ -20,6 +20,7 @@
 #include "StatLib.h"
 #include <cmath>
 #include <algorithm>
+#include <ranges>
 #include <Eigen/SparseCholesky>
 
 #if GCTA_CPU_x86
@@ -386,8 +387,8 @@ void FastFAM::loadBinModel(){
         covar.resize(num_indi, covar_col);
         H.resize(covar_col, num_indi);
 
-        double *tempVec = new double[num_indi];
-        if(fread(tempVec, sizeof(double), num_indi, ibin) != num_indi){
+        std::vector<double> tempVec(num_indi);
+        if(fread(tempVec.data(), sizeof(double), num_indi, ibin) != num_indi){
             LOGGER.e(0, "failed to read mu.");
         }
         //switch order;
@@ -395,18 +396,17 @@ void FastFAM::loadBinModel(){
             mu[i] = tempVec[id2[i]];
         }
 
-        if(fread(tempVec, sizeof(double), num_indi, ibin) != num_indi){
+        if(fread(tempVec.data(), sizeof(double), num_indi, ibin) != num_indi){
             LOGGER.e(0, "failed to read phenotype.");
         }
         //switch order;
         for(int i = 0; i < num_indi; i++){
             phenoVec[i] = tempVec[id2[i]];
         }
-        delete[] tempVec;
         uint64_t num_covar_elements = (uint64_t)num_indi * covar_col;
-        double *tempCovar = new double[num_covar_elements];
+        std::vector<double> tempCovar(num_covar_elements);
         //covariate
-        if(fread(tempCovar, sizeof(double), num_covar_elements, ibin) != num_covar_elements){
+        if(fread(tempCovar.data(), sizeof(double), num_covar_elements, ibin) != num_covar_elements){
             LOGGER.e(0, "failed to read covariates from the saved model.");
         }
         for(uint64_t i = 0; i < covar_col; i++){
@@ -416,7 +416,7 @@ void FastFAM::loadBinModel(){
             }
         }
         // H
-        if(fread(tempCovar, sizeof(double), num_covar_elements, ibin) != num_covar_elements){
+        if(fread(tempCovar.data(), sizeof(double), num_covar_elements, ibin) != num_covar_elements){
             LOGGER.e(0, "failed to read H from the saved model.");
         }
         for(uint64_t i = 0; i < num_indi; i++){
@@ -425,7 +425,6 @@ void FastFAM::loadBinModel(){
                 H(j, i) = tempCovar[cur_base + j];
             }
         }
-        delete[] tempCovar;
 
         initVar();
 
@@ -492,7 +491,7 @@ void FastFAM::loadModel(){
         // read the phenotype
         LOGGER << "  loading phenotypes..." << std::endl;
         double *phenoP;
-        double *tempP = new double[num_indi];
+        std::vector<double> tempP(num_indi);
         if (has_envir){
             Vi_y.resize(num_indi);
             phenoP = Vi_y.data();
@@ -504,22 +503,21 @@ void FastFAM::loadModel(){
             phenoP = Vi_y_cinf.data();
         }
         fseek(ibin, head.phenoVec_start, SEEK_SET);
-        if(fread(tempP, sizeof(double), num_indi, ibin) != num_indi){
+        if(fread(tempP.data(), sizeof(double), num_indi, ibin) != num_indi){
             LOGGER.e(0, "failed to read phenotype from the saved model.");
         }
         // switch order;
         for(int i = 0; i < num_indi; i++){
             phenoP[i] = tempP[id2[i]];
         }
-        delete[] tempP;
 
         // read covariates
         LOGGER << "  loading covariates..." << std::endl;
         uint64_t num_covar_elements = (uint64_t)num_indi * head.covarVec_cols;
         fseek(ibin, head.covarVec_start, SEEK_SET);
         this->covar.resize(num_indi, head.covarVec_cols);
-        double *tempCovar = new double[num_covar_elements];
-        if(fread(tempCovar, sizeof(double), num_covar_elements, ibin) != num_covar_elements){
+        std::vector<double> tempCovar(num_covar_elements);
+        if(fread(tempCovar.data(), sizeof(double), num_covar_elements, ibin) != num_covar_elements){
             LOGGER.e(0, "failed to read covariates from the saved model.");
         }
         for(uint64_t i = 0; i < head.covarVec_cols; i++){
@@ -533,7 +531,7 @@ void FastFAM::loadModel(){
             LOGGER << "  loading " << head.covarVec_cols << " covariates..." << std::endl;
             //TODO  H seems incorrect;
             H.resize(num_indi, head.covarVec_cols);
-            if(fread(tempCovar, sizeof(double), num_covar_elements, ibin) != num_covar_elements){
+            if(fread(tempCovar.data(), sizeof(double), num_covar_elements, ibin) != num_covar_elements){
                 LOGGER.e(0, "failed to read covariates from the saved model.");
             }
             for(uint64_t i = 0; i < head.covarVec_cols; i++){
@@ -543,24 +541,22 @@ void FastFAM::loadModel(){
                 }
             }
         }
-        delete[] tempCovar;
 
         //read the environment variable
         if (has_envir){
             LOGGER << "  loading the environment variable..." << std::endl;
             double *envirE;
-            double *tempE = new double[num_indi];
+            std::vector<double> tempE(num_indi);
             envirVec_scaled.resize(num_indi);
             envirE = envirVec_scaled.data();
             fseek(ibin, head.envirVec_start, SEEK_SET);
-            if(fread(tempE, sizeof(double), num_indi, ibin) != num_indi){
+            if(fread(tempE.data(), sizeof(double), num_indi, ibin) != num_indi){
                 LOGGER.e(0, "failed to read the environment variable from the saved model.");
             }
             // switch order;
             for(int i = 0; i < num_indi; i++){
                 envirE[i] = tempE[id2[i]];
             }
-            delete[] tempE;
         }
 
         if(fam_flag && (!bGrammar)){
@@ -678,7 +674,7 @@ FastFAM::FastFAM(){
     }
 
     vector<string> remain_ids(remain_index.size());
-    std::transform(remain_index.begin(), remain_index.end(), remain_ids.begin(), [&ids](size_t pos){return ids[pos];});
+    std::ranges::transform(remain_index, remain_ids.begin(), [&ids](size_t pos){return ids[pos];});
 
     // read fam
     string ffam_file = "";
@@ -1340,21 +1336,14 @@ void FastFAM::conditionCovarReg(VectorXd &y, VectorXd &condPheno){
 }
 
 void FastFAM::conditionCovarBinReg(Eigen::Ref<VectorXd> y){
-    double *Hy = new double[num_indi];
-    const char nT = 'N';
+    std::vector<double> Hy(num_indi);
     const double a1 = 1.0;
     const double a2 = -1.0;
     const double b1 = 0;
     const double b2 = 1.0;
     const int incr = 1;
-#if GCTA_CPU_x86
-    dgemv(&nT, &num_covar, &numi_indi, &a1, H.data(), &num_covar, y.data(), &incr, &b1, Hy, &incr);
-    dgemv(&nT, &numi_indi, &num_covar, &a2, covar.data(), &numi_indi, Hy, &incr, &b2, y.data(), &incr);
-#else 
-    dgemv_(&nT, &num_covar, &numi_indi, &a1, H.data(), &num_covar, y.data(), &incr, &b1, Hy, &incr);
-    dgemv_(&nT, &numi_indi, &num_covar, &a2, covar.data(), &numi_indi, Hy, &incr, &b2, y.data(), &incr);
-#endif
-    delete[] Hy;
+    cblas_dgemv(CblasColMajor, CblasNoTrans, (int)num_covar, (int)numi_indi, a1, H.data(), (int)num_covar, y.data(), incr, b1, Hy.data(), incr);
+    cblas_dgemv(CblasColMajor, CblasNoTrans, (int)numi_indi, (int)num_covar, a2, covar.data(), (int)numi_indi, Hy.data(), incr, b2, y.data(), incr);
 }
 
 void FastFAM::conditionCovarReg(Eigen::Ref<VectorXd> y){
@@ -2112,9 +2101,9 @@ void FastFAM::readFAM(string filename, SpMat& fam, const vector<string> &ids, ve
     vector<size_t> index_list_order = sort_indexes(remain_index);
     vector<uint32_t> ordered_fam_index(remain_index.size(), 0);
     vector<uint32_t> ordered_remain_index(remain_index.size(), 0);
-    std::transform(index_list_order.begin(), index_list_order.end(), ordered_fam_index.begin(), [&fam_index](size_t pos){
+    std::ranges::transform(index_list_order, ordered_fam_index.begin(), [&fam_index](size_t pos){
             return fam_index[pos];});
-    std::transform(index_list_order.begin(), index_list_order.end(), ordered_remain_index.begin(), [&remain_index](size_t pos){
+    std::ranges::transform(index_list_order, ordered_remain_index.begin(), [&remain_index](size_t pos){
             return remain_index[pos];});
     remain_index = ordered_remain_index;
 
@@ -2268,13 +2257,13 @@ void FastFAM::grammar(SpMat& fam, double VG, double VR){
     for(int i = 0; i < num_marker_rand; i++){
         seq_marker_index[i] = distribution(generator);
     }
-    std::sort(seq_marker_index.begin(), seq_marker_index.end());
-    auto last = std::unique(seq_marker_index.begin(), seq_marker_index.end());
-    seq_marker_index.erase(last, seq_marker_index.end());
+    std::ranges::sort(seq_marker_index);
+    auto last = std::ranges::unique(seq_marker_index);
+    seq_marker_index.erase(last.begin(), seq_marker_index.end());
 
     num_marker_rand = seq_marker_index.size();
     vector<uint32_t> marker_index(num_marker_rand);
-    std::transform(seq_marker_index.begin(), seq_marker_index.end(), marker_index.begin(), [&total_markers_index](size_t pos){return total_markers_index[pos];});
+    std::ranges::transform(seq_marker_index, marker_index.begin(), [&total_markers_index](size_t pos){return total_markers_index[pos];});
 
     int nMarker = 100;
 
@@ -3075,34 +3064,40 @@ void FastFAM::processFAM(vector<function<void (uintptr_t *, const vector<uint32_
 
     int nMarker = 1024;
  
-    beta = new float[nMarker];
-    se = new float[nMarker];
-    p = new double[nMarker];
+    std::vector<float> beta(nMarker);
+    std::vector<float> se(nMarker);
+    std::vector<double> p(nMarker);
    
-    countMarkers = new uint32_t[nMarker];
-    af = new float[nMarker];
-    info = new float[nMarker];
+    std::vector<uint32_t> countMarkers(nMarker);
+    std::vector<float> af(nMarker);
+    std::vector<float> info(nMarker);
 
     numMarkerOutput = 0;
 
     bool bCenter = true;
+    std::vector<float> Tscore, Tse;
+    std::vector<double> padj;
+    std::vector<uint8_t> rConverge;
     if(bBinary){
-        Tscore = new float[nMarker];
-        Tse = new float[nMarker];
-        padj = new double[nMarker];
-        rConverge = new uint8_t[nMarker];
+        Tscore.resize(nMarker);
+        Tse.resize(nMarker);
+        padj.resize(nMarker);
+        rConverge.resize(nMarker);
     }
+    std::vector<float> beta_geno, beta_interaction, se_geno, se_interaction;
+    std::vector<float> cov_geno_interaction, score_geno, score_interaction, score;
+    std::vector<double> p_geno, p_interaction;
     if(has_envir){
-        beta_geno = new float[nMarker];
-        beta_interaction = new float[nMarker];
-        se_geno = new float[nMarker];
-        se_interaction = new float[nMarker];
-        cov_geno_interaction = new float[nMarker];
-        score_geno = new float[nMarker];
-        score_interaction = new float[nMarker];
-        score = new float[nMarker];
-        p_geno = new double[nMarker];
-        p_interaction = new double[nMarker];
+        beta_geno.resize(nMarker);
+        beta_interaction.resize(nMarker);
+        se_geno.resize(nMarker);
+        se_interaction.resize(nMarker);
+        cov_geno_interaction.resize(nMarker);
+        score_geno.resize(nMarker);
+        score_interaction.resize(nMarker);
+        score.resize(nMarker);
+        p_geno.resize(nMarker);
+        p_interaction.resize(nMarker);
     }
     geno->loopDouble(extractIndex, nMarker, true, bCenter, false, false, callBacks);
 
@@ -3113,31 +3108,6 @@ void FastFAM::processFAM(vector<function<void (uintptr_t *, const vector<uint32_
         fclose(bOut);
     }
     LOGGER << "Saved " << numMarkerOutput << " SNPs." << std::endl;
-
-    delete[] beta;
-    delete[] se;
-    delete[] p;
-    delete[] countMarkers;
-    delete[] af;
-    delete[] info;
-    if(bBinary){
-        delete[] padj;
-        delete[] rConverge;
-        delete[] Tscore;
-        delete[] Tse;
-    }
-    if(has_envir){
-        delete[] beta_geno;
-        delete[] beta_interaction;
-        delete[] se_geno;
-        delete[] se_interaction;
-        delete[] cov_geno_interaction;
-        delete[] score_geno;
-        delete[] score_interaction;
-        delete[] score;
-        delete[] p_geno;
-        delete[] p_interaction;
-    }
 }
 
 int FastFAM::registerOption(map<string, vector<string>>& options_in){
@@ -4306,7 +4276,7 @@ void FastFAM::estBinGamma(){
         bValids.resize(curNumModel);
 
         vector<uint32_t> marker_index(total_markers_index.begin() + curNumModel - nModelSNP, total_markers_index.begin() + curNumModel);
-        std::sort(marker_index.begin(), marker_index.end());
+        std::ranges::sort(marker_index);
        geno->loopDouble(marker_index, nMarker, true, true, false, false, callBacks);
 
         if(curNumModel != num_grammar_markers){

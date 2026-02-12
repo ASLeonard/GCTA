@@ -2,6 +2,7 @@
  * Implementations of the statistical functions
  *
  * 2010 by Jian Yang <jian.yang.qt@gmail.com>
+ * Modernized 2026 with C++20/23/26 features
  *
  * This file is distributed under the GNU General Public
  * License, Version 3.  Please see the file LICENSE for more
@@ -9,8 +10,11 @@
  */
 
 #include "StatFunc.h"
-#include "numeric"
+#include <numeric>
 #include <random>
+#include <ranges>
+#include <numbers>
+#include <algorithm>
 #include "Logger.h"
 
 ////////// P-value Calculatiion Functions Start ////////////////
@@ -39,52 +43,57 @@ double StatFunc::betai(double a, double b, double x) {
     else return 1.0 - bt * betacf(b, a, 1.0 - x) / b;
 }
 
-double StatFunc::gammln(double xx) {
-    int j;
-    double x, y, tmp, ser;
-    static const double cof[6] = {76.18009172947146, -86.50532032941677,
-        24.01409824083091, -1.231739572450155, 0.1208650973866179e-2,
-        -0.5395239384953e-5};
+double StatFunc::gammln(double xx) noexcept {
+    static constexpr std::array<double, 6> cof = {
+        76.18009172947146, -86.50532032941677,
+        24.01409824083091, -1.231739572450155, 
+        0.1208650973866179e-2, -0.5395239384953e-5
+    };
 
-    y = x = xx;
-    tmp = x + 5.5;
-    tmp -= (x + 0.5) * log(tmp);
-    ser = 1.000000000190015;
-    for (j = 0; j < 6; j++) ser += cof[j] / ++y;
-    return -tmp + log(2.5066282746310005 * ser / x);
+    double y = xx;
+    double x = xx;
+    double tmp = x + 5.5;
+    tmp -= (x + 0.5) * std::log(tmp);
+    double ser = 1.000000000190015;
+    
+    for (const auto c : cof) {
+        ser += c / ++y;
+    }
+    
+    return -tmp + std::log(2.5066282746310005 * ser / x);
 }
 
 double StatFunc::betacf(double a, double b, double x) {
-    const int MAXIT = 300;
-    const double Eps = 1.0e-08;
-    const double FPMIN = (std::numeric_limits<double>::min)() / numeric_limits<double>::epsilon();
-    int m, m2;
-    double aa, c, d, del, h, qab, qam, qap;
+    constexpr int MAXIT = 300;
+    constexpr double Eps = 1.0e-08;
+    constexpr double FPMIN = std::numeric_limits<double>::min() / std::numeric_limits<double>::epsilon();
 
-    qab = a + b;
-    qap = a + 1.0;
-    qam = a - 1.0;
-    c = 1.0;
-    d = 1.0 - qab * x / qap;
+    const double qab = a + b;
+    const double qap = a + 1.0;
+    const double qam = a - 1.0;
+    
+    double c = 1.0;
+    double d = 1.0 - qab * x / qap;
     if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
     d = 1.0 / d;
-    h = d;
-    for (m = 1; m <= MAXIT; m++) {
-        m2 = 2 * m;
-        aa = m * (b - m) * x / ((qam + m2)*(a + m2));
-        d = 1.0 + aa*d;
+    double h = d;
+    
+    for (int m = 1; m <= MAXIT; ++m) {
+        const int m2 = 2 * m;
+        double aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+        d = 1.0 + aa * d;
         if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
         c = 1.0 + aa / c;
         if (CommFunc::Abs(c) < FPMIN) c = FPMIN;
         d = 1.0 / d;
-        h *= d*c;
-        aa = -(a + m)*(qab + m) * x / ((a + m2)*(qap + m2));
-        d = 1.0 + aa*d;
+        h *= d * c;
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+        d = 1.0 + aa * d;
         if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
         c = 1.0 + aa / c;
         if (CommFunc::Abs(c) < FPMIN) c = FPMIN;
         d = 1.0 / d;
-        del = d*c;
+        const double del = d * c;
         h *= del;
         if (CommFunc::Abs(del - 1.0) <= Eps) break;
     }
@@ -95,11 +104,12 @@ double StatFunc::chi_prob(double df, double chi_sqr_val) {
     return 1 - StatFunc::gammp(df * 0.5, chi_sqr_val * 0.5);
 }
 
-double StatFunc::gammp(const double a, const double x) {
+double StatFunc::gammp(double a, double x) {
+    if (x < 0.0 || a <= 0.0) {
+        LOGGER.e(0, "invalid arguments in routine gammp");
+    }
+
     double gamser, gammcf, gln;
-
-    if (x < 0.0 || a <= 0.0) LOGGER.e(0, "invalid arguments in routine gammp");
-
     if (x < a + 1.0) {
         gser(gamser, a, x, gln);
         return gamser;
@@ -109,113 +119,125 @@ double StatFunc::gammp(const double a, const double x) {
     }
 }
 
-void StatFunc::gser(double &gamser, const double a, const double x, double &gln) {
-    const int ITMAX = 500;
-    const double Eps = 1.0e-08;
-    int n;
-    double sum, del, ap;
+void StatFunc::gser(double &gamser, double a, double x, double &gln) {
+    constexpr int ITMAX = 500;
+    constexpr double Eps = 1.0e-08;
 
     gln = gammln(a);
     if (x <= 0.0) {
-        if (x < 0.0) LOGGER.e(0, "x is less than 0 in routine gser");
+        if (x < 0.0) {
+            LOGGER.e(0, "x is less than 0 in routine gser");
+        }
         gamser = 0.0;
         return;
-    } else {
-        ap = a;
-        del = sum = 1.0 / a;
-        for (n = 0; n < ITMAX; n++) {
-            ++ap;
-            del *= x / ap;
-            sum += del;
-            if (CommFunc::Abs(del) < CommFunc::Abs(sum) * Eps) {
-                gamser = sum * exp(-x + a * log(x) - gln);
-                return;
-            }
-        }
-        LOGGER.e(0, "a is too large, and ITMAX is too small in routine gser");
-        return;
     }
+    
+    double ap = a;
+    double sum = 1.0 / a;
+    double del = sum;
+    
+    for (int n = 0; n < ITMAX; ++n) {
+        ++ap;
+        del *= x / ap;
+        sum += del;
+        if (CommFunc::Abs(del) < CommFunc::Abs(sum) * Eps) {
+            gamser = sum * std::exp(-x + a * std::log(x) - gln);
+            return;
+        }
+    }
+    LOGGER.e(0, "a is too large, and ITMAX is too small in routine gser");
 }
 
-void StatFunc::gcf(double &gammcf, const double a, const double x, double &gln) {
-    const int ITMAX = 100;
-    const double EPS = numeric_limits<double>::epsilon();
-    const double FPMIN = (std::numeric_limits<double>::min)() / EPS;
-    int i;
-    double an, b, c, d, del, h;
+void StatFunc::gcf(double &gammcf, double a, double x, double &gln) {
+    constexpr int ITMAX = 100;
+    constexpr double EPS = std::numeric_limits<double>::epsilon();
+    constexpr double FPMIN = std::numeric_limits<double>::min() / EPS;
 
     gln = gammln(a);
-    b = x + 1.0 - a;
-    c = 1.0 / FPMIN;
-    d = 1.0 / b;
-    h = d;
-    for (i = 1; i <= ITMAX; i++) {
-        an = -i * (i - a);
+    double b = x + 1.0 - a;
+    double c = 1.0 / FPMIN;
+    double d = 1.0 / b;
+    double h = d;
+    
+    for (int i = 1; i <= ITMAX; ++i) {
+        const double an = -i * (i - a);
         b += 2.0;
         d = an * d + b;
         if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
         c = b + an / c;
         if (CommFunc::Abs(c) < FPMIN) c = FPMIN;
         d = 1.0 / d;
-        del = d*c;
+        const double del = d * c;
         h *= del;
-        if (CommFunc::Abs(del - 1.0) <= EPS) break;
+        if (CommFunc::Abs(del - 1.0) <= EPS) {
+            gammcf = std::exp(-x + a * std::log(x) - gln) * h;
+            return;
+        }
     }
-    if (i > ITMAX) LOGGER.e(0, "a is too large, and ITMAX is too small in gcf");
-    gammcf = exp(-x + a * log(x) - gln) * h;
+    LOGGER.e(0, "a is too large, and ITMAX is too small in gcf");
 }
 ////////// P-value Calculatiion Functions End ////////////////
 
 ///////// Random Number Generation Functions Start ////////
 
-void StatFunc::gasdev_seq(int &idum, vector<double> &vec, int size, double means, double var) {
+void StatFunc::gasdev_seq(int &idum, std::vector<double> &vec, int size, double means, double var) {
     vec.clear();
     vec.resize(size);
 
-    int i = 0;
-    for (i = 0; i < size; i++) vec[i] = means + sqrt(var) * StatFunc::gasdev(idum);
+    const double sd = std::sqrt(var);
+    for (auto& v : vec) {
+        v = means + sd * gasdev(idum);
+    }
 }
 
-void StatFunc::gasdev_seq(int &idum, vector<double> &vec, int size, double var) {
-    if (size < 2) LOGGER.e(0, "invalid size. StatFunc::gasdev_seq");
+void StatFunc::gasdev_seq(int &idum, std::vector<double> &vec, int size, double var) {
+    if (size < 2) {
+        LOGGER.e(0, "invalid size. StatFunc::gasdev_seq");
+    }
     if (CommFunc::FloatEqual(var, 0.0)) {
-        vec.clear();
-        vec.resize(size);
+        vec.assign(size, 0.0);
         return;
     }
 
-    int i = 0;
-    double ave = 0.0, s_square = 0.0;
-    double n = (double) size;
+    const double n = static_cast<double>(size);
+    double s_square = 0.0;
 
     while (s_square < 0.01 * var) {
-        StatFunc::gasdev_seq(idum, vec, size, 0.0, var);
-        for (i = 0; i < size; i++) ave += vec[i];
-        ave /= n;
-        for (i = 0; i < size; i++) vec[i] -= ave;
-        for (i = 0, s_square = 0.0; i < size; i++) s_square += vec[i] * vec[i];
-        s_square = s_square / (n - 1.0);
+        gasdev_seq(idum, vec, size, 0.0, var);
+        
+        // Calculate and subtract mean
+        const double ave = std::accumulate(vec.begin(), vec.end(), 0.0) / n;
+        std::ranges::for_each(vec, [ave](double& v) { v -= ave; });
+        
+        // Calculate variance
+        s_square = std::transform_reduce(
+            vec.begin(), vec.end(), 0.0, std::plus<>{},
+            [](double v) { return v * v; }
+        ) / (n - 1.0);
     }
-    double c = sqrt(var / s_square);
-    for (i = 0; i < size; i++) vec[i] *= c;
+    
+    const double c = std::sqrt(var / s_square);
+    std::ranges::for_each(vec, [c](double& v) { v *= c; });
 }
 
 double StatFunc::gasdev(int &idum) {
     static int iset = 0;
     static double gset;
-    double fac, rsq, v1, v2;
 
     if (idum < 0) iset = 0;
+    
     if (iset == 0) {
+        double v1, v2, rsq;
         do {
             v1 = 2.0 * ran1(idum) - 1.0;
             v2 = 2.0 * ran1(idum) - 1.0;
-            rsq = v1 * v1 + v2*v2;
+            rsq = v1 * v1 + v2 * v2;
         } while (rsq >= 1.0 || rsq == 0.0);
-        fac = sqrt(-2.0 * log(rsq) / rsq);
-        gset = v1*fac;
+        
+        const double fac = std::sqrt(-2.0 * std::log(rsq) / rsq);
+        gset = v1 * fac;
         iset = 1;
-        return v2*fac;
+        return v2 * fac;
     } else {
         iset = 0;
         return gset;
@@ -266,60 +288,73 @@ double StatFunc::ran1(int &idum) {
 }
 */
 
-double StatFunc::chidev(int &idum, const double df) {
-    if (df > 2.0) return 2.0 * cheng_gamdev(idum, df * 0.5);
-    else LOGGER.e(0, "invalid degree of freedom. StatFunc::chidev");
-    return 0;
+double StatFunc::chidev(int &idum, double df) {
+    if (df > 2.0) {
+        return 2.0 * cheng_gamdev(idum, df * 0.5);
+    }
+    LOGGER.e(0, "invalid degree of freedom. StatFunc::chidev");
+    return 0.0;
 }
 
-double StatFunc::cheng_gamdev(int &idum, const double alpha) {
-    double u1 = 0.0, u2 = 0.0, nu = 0.0, d_buf = 0.0;
-    double beta = (alpha - 1.0);
-    while (1) {
-        u1 = StatFunc::UniformDev(0.0, 1.0, idum);
-        u2 = StatFunc::UniformDev(0.0, 1.0, idum);
-        ;
-        nu = (alpha - 1.0 / (6.0 * alpha)) * u1;
-        nu /= (beta * u2);
-        d_buf = 2.0 * (u2 - 1.0) / beta + nu + 1.0 / nu;
-        if (d_buf < 2.0) return beta * nu;
-        else {
-            d_buf = 2.0 * log(u2) / beta - log(nu) + nu;
-            if (d_buf < 1.0) return beta * nu;
+double StatFunc::cheng_gamdev(int &idum, double alpha) {
+    const double beta = alpha - 1.0;
+    
+    while (true) {
+        const double u1 = UniformDev(0.0, 1.0, idum);
+        const double u2 = UniformDev(0.0, 1.0, idum);
+        
+        const double nu = (alpha - 1.0 / (6.0 * alpha)) * u1 / (beta * u2);
+        const double d_buf = 2.0 * (u2 - 1.0) / beta + nu + 1.0 / nu;
+        
+        if (d_buf < 2.0) {
+            return beta * nu;
+        }
+        
+        const double d_buf2 = 2.0 * std::log(u2) / beta - std::log(nu) + nu;
+        if (d_buf2 < 1.0) {
+            return beta * nu;
         }
     }
 }
 
-int StatFunc::RandAbs(int a, int b, int &seed) { //a,bΪ������Ҷ˵㣬seedΪ����
-    int rand;
+int StatFunc::RandAbs(int a, int b, int &seed) {
     int stk = b - a + 1;
     int stl = 2;
-    while (stl < stk) stl = stl + stl;
-    int modul = 4 * stl;
+    while (stl < stk) {
+        stl = stl + stl;
+    }
+    
+    const int modul = 4 * stl;
     stk = seed;
     int sti = 1;
+    int rand = 0;
+    
     while (sti <= 1) {
         stk = 5 * stk;
         stk = stk % modul;
         stl = stk / 4 + a;
         if (stl <= b) {
             rand = stl;
-            sti = sti + 1;
+            ++sti;
         }
     }
     seed = stk;
-    return (rand);
+    return rand;
 }
 
 ///////// Random Number Generation Functions End ////////
 
 double StatFunc::chi_val(double df, double prob) {
+    constexpr double eps = 1.0e-08;
     double walk = 100.0;
     double chi_val = walk;
-    double way = 0.0, preway = 0.0;
+    double way = 0.0;
+    double preway = 0.0;
     double prob_buf = chi_prob(df, chi_val);
 
-    if (CommFunc::Abs(prob_buf - prob) < 1.0e-08) return chi_val;
+    if (CommFunc::Abs(prob_buf - prob) < eps) {
+        return chi_val;
+    }
 
     if (prob_buf > prob) {
         preway = way = 1.0;
@@ -331,27 +366,31 @@ double StatFunc::chi_val(double df, double prob) {
 
     while (true) {
         prob_buf = chi_prob(df, chi_val);
+        way = (prob_buf > prob) ? 1.0 : -1.0;
 
-        if (prob_buf > prob) way = 1.0;
-        else way = -1.0;
-
-        if (CommFunc::Abs(preway - way) > 1.0e-08) walk *= 0.5;
-        chi_val += walk*way;
+        if (CommFunc::Abs(preway - way) > eps) {
+            walk *= 0.5;
+        }
+        chi_val += walk * way;
         preway = way;
 
-        if (walk < 1.0e-08) break;
+        if (walk < eps) break;
     }
 
     return chi_val;
 }
 
 double StatFunc::t_val(double df, double prob) {
+    constexpr double eps = 1.0e-08;
     double walk = 100.0;
     double t_val = walk;
-    double way = 0.0, preway = 0.0;
+    double way = 0.0;
+    double preway = 0.0;
     double prob_buf = t_prob(df, t_val, false);
 
-    if (CommFunc::Abs(prob_buf - prob) < 1.0e-08) return t_val;
+    if (CommFunc::Abs(prob_buf - prob) < eps) {
+        return t_val;
+    }
 
     if (prob_buf > prob) {
         preway = way = 1.0;
@@ -363,27 +402,31 @@ double StatFunc::t_val(double df, double prob) {
 
     while (true) {
         prob_buf = t_prob(df, t_val, false);
+        way = (prob_buf > prob) ? 1.0 : -1.0;
 
-        if (prob_buf > prob) way = 1.0;
-        else way = -1.0;
-
-        if (CommFunc::Abs(preway - way) > 1.0e-08) walk *= 0.5;
-        t_val += walk*way;
+        if (CommFunc::Abs(preway - way) > eps) {
+            walk *= 0.5;
+        }
+        t_val += walk * way;
         preway = way;
 
-        if (walk < 1.0e-08) break;
+        if (walk < eps) break;
     }
 
     return t_val;
 }
 
 double StatFunc::F_val(double df_1, double df_2, double prob) {
+    constexpr double eps = 1.0e-08;
     double walk = 100.0;
     double F_val = walk;
-    double way = 0.0, preway = 0.0;
+    double way = 0.0;
+    double preway = 0.0;
     double prob_buf = F_prob(df_1, df_2, F_val);
 
-    if (CommFunc::Abs(prob_buf - prob) < 1.0e-08) return F_val;
+    if (CommFunc::Abs(prob_buf - prob) < eps) {
+        return F_val;
+    }
 
     if (prob_buf > prob) {
         preway = way = 1.0;
@@ -395,54 +438,62 @@ double StatFunc::F_val(double df_1, double df_2, double prob) {
 
     while (true) {
         prob_buf = F_prob(df_1, df_2, F_val);
+        way = (prob_buf > prob) ? 1.0 : -1.0;
 
-        if (prob_buf > prob) way = 1.0;
-        else way = -1.0;
-
-        if (CommFunc::Abs(preway - way) > 1.0e-08) walk *= 0.5;
-        F_val += walk*way;
+        if (CommFunc::Abs(preway - way) > eps) {
+            walk *= 0.5;
+        }
+        F_val += walk * way;
         preway = way;
 
-        if (walk < 1.0e-08) break;
+        if (walk < eps) break;
     }
 
     return F_val;
 }
 
-double StatFunc::ControlFDR(const vector<double> &P_Value, double alpha, bool Restrict) {
-    int i = 0, Size = P_Value.size();
-    if (Size <= 1) LOGGER.e(0, "invalid size. StatFunc::ControlFDR");
+double StatFunc::ControlFDR(std::span<const double> P_Value, double alpha, bool Restrict) {
+    const int Size = static_cast<int>(P_Value.size());
+    if (Size <= 1) {
+        LOGGER.e(0, "invalid size. StatFunc::ControlFDR");
+    }
+    
+    std::vector<double> P_ValueBuf(P_Value.begin(), P_Value.end());
+    std::ranges::stable_sort(P_ValueBuf);
+    
     double FDR_Threshold = 0.0;
-    vector<double> P_ValueBuf(Size);
-    for (i = 0; i < Size; i++) P_ValueBuf[i] = P_Value[i];
-    stable_sort(P_ValueBuf.begin(), P_ValueBuf.end());
-    for (i = 0; i < Size; i++) {
-        double d_Buf = ((double) (i + 1)) * alpha / ((double) Size);
+    for (int i = 0; i < Size; ++i) {
+        const double d_Buf = (static_cast<double>(i + 1) * alpha) / static_cast<double>(Size);
+        
         if (i == Size - 1) {
-            if (P_ValueBuf[i] <= d_Buf || Restrict) FDR_Threshold = d_Buf;
-            else FDR_Threshold = -1.0;
+            FDR_Threshold = (P_ValueBuf[i] <= d_Buf || Restrict) ? d_Buf : -1.0;
             break;
         }
+        
         if (P_ValueBuf[i] <= d_Buf && P_ValueBuf[i + 1] > d_Buf) {
             FDR_Threshold = d_Buf;
             break;
-        } else if (i == Size - 1) FDR_Threshold = -1.0;
+        } else if (i == Size - 1) {
+            FDR_Threshold = -1.0;
+        }
     }
     return FDR_Threshold;
 }
 
-double StatFunc::ControlFDR_Zou(const vector<double> &GenePValue, double FDR) {
-    int i = 0, Size = GenePValue.size();
+double StatFunc::ControlFDR_Zou(std::span<const double> GenePValue, double FDR) {
+    const int Size = static_cast<int>(GenePValue.size());
+    std::vector<double> Temp(GenePValue.begin(), GenePValue.end());
+    std::ranges::sort(Temp);
+    
     double PValue = 0.0;
-    vector<double> Temp(Size);
-    for (i = 0; i < Size; i++) Temp[i] = GenePValue[i];
-    sort(Temp.begin(), Temp.end());
-    for (i = 0; i < Size; i++) {
-        if (Temp[i] <= (i + 1) * FDR / Size && Temp[i + 1]>(i + 1) * FDR / Size) {
-            PValue = (i + 1) * FDR / Size;
+    for (int i = 0; i < Size; ++i) {
+        const double threshold = (i + 1) * FDR / Size;
+        
+        if (Temp[i] <= threshold && Temp[i + 1] > threshold) {
+            PValue = threshold;
             break;
-        } else if (Temp[i] <= (i + 1) * FDR / Size && i == Size - 1) {
-            PValue = (i + 1) * FDR / Size;
+        } else if (Temp[i] <= threshold && i == Size - 1) {
+            PValue = threshold;
             break;
         } else if (i == Size - 1) {
             PValue = FDR;
@@ -451,122 +502,149 @@ double StatFunc::ControlFDR_Zou(const vector<double> &GenePValue, double FDR) {
     return PValue;
 }
 
-double StatFunc::ControlFDR_Storey(vector<double> &P_Value, vector<double> &Q_Value, double CrtQ, double &FDR) {
-    if (P_Value.empty()) return CrtQ;
+double StatFunc::ControlFDR_Storey(std::vector<double> &P_Value, std::vector<double> &Q_Value, double CrtQ, double &FDR) {
+    if (P_Value.empty()) {
+        return CrtQ;
+    }
 
     // Initialize Lambda
-    double dBuf = 0.0;
-    vector<double> Lambda;
-    for (dBuf = 0.0; dBuf < 0.9001; dBuf += 0.05) Lambda.push_back(dBuf);
+    std::vector<double> Lambda;
+    for (double dBuf = 0.0; dBuf < 0.9001; dBuf += 0.05) {
+        Lambda.push_back(dBuf);
+    }
 
     // Calculate Pi0
-    stable_sort(P_Value.begin(), P_Value.end());
-    double Pi0 = CalcuPi0(P_Value, Lambda);
+    std::ranges::stable_sort(P_Value);
+    const double Pi0 = CalcuPi0(P_Value, Lambda);
 
     // Calculate q-value
-    int i = 0, m = P_Value.size();
-    double m0 = Pi0 * (double) m;
+    const int m = static_cast<int>(P_Value.size());
+    const double m0 = Pi0 * static_cast<double>(m);
+    
     Q_Value.clear();
     Q_Value.resize(m);
     Q_Value[m - 1] = Pi0 * P_Value[m - 1];
-    for (i = m - 2; i >= 0; i--) {
-        Q_Value[i] = (m0 * P_Value[i]) / (double) (i + 1);
-        if (Q_Value[i] > Q_Value[i + 1]) Q_Value[i] = Q_Value[i + 1];
+    
+    for (int i = m - 2; i >= 0; --i) {
+        Q_Value[i] = (m0 * P_Value[i]) / static_cast<double>(i + 1);
+        if (Q_Value[i] > Q_Value[i + 1]) {
+            Q_Value[i] = Q_Value[i + 1];
+        }
     }
 
     // Calculate FDR-adjusted critical p-value
     bool Flag = false;
     double CrtVal = 1.0;
-    for (i = 0; i < m - 1; i++) {
+    for (int i = 0; i < m - 1; ++i) {
         if (Q_Value[i] < CrtQ && Q_Value[i + 1] > CrtQ) {
             CrtVal = 0.5 * (P_Value[i] + P_Value[i + 1]);
             Flag = true;
             break;
         }
     }
-    if (!Flag) CrtVal = 0.5 * (P_Value[0] + P_Value[1]);
+    if (!Flag) {
+        CrtVal = 0.5 * (P_Value[0] + P_Value[1]);
+    }
 
     // Estimate FDR
-    int iBuf = 0;
-    for (i = 0; i < m; i++) {
-        if (P_Value[i] < CrtVal) iBuf++;
+    const int iBuf = std::ranges::count_if(P_Value, [CrtVal](double p) { return p < CrtVal; });
+    FDR = (CrtVal * m0) / static_cast<double>(iBuf);
+    if (FDR > 1.0) {
+        FDR = 1.0;
     }
-    FDR = (CrtVal * m0) / (double) iBuf;
-    if (FDR > 1.0) FDR = 1.0;
 
     return CrtVal;
 }
 
-double StatFunc::CalcuPi0(vector<double> &P_Value, vector<double> &Lambda) {
-    int i = 0, j = 0, P_Size = P_Value.size(), LambdaSize = Lambda.size();
-    vector<double> Pi(LambdaSize), NewPi(LambdaSize);
-    for (i = 0; i < LambdaSize; i++) {
-        int Count = 0;
-        for (j = 0; j < P_Size; j++) {
-            if (P_Value[j] > Lambda[i]) Count++;
-        }
+double StatFunc::CalcuPi0(std::vector<double> &P_Value, std::vector<double> &Lambda) {
+    const int P_Size = static_cast<int>(P_Value.size());
+    const int LambdaSize = static_cast<int>(Lambda.size());
+    
+    std::vector<double> Pi(LambdaSize);
+    std::vector<double> NewPi(LambdaSize);
+    
+    for (int i = 0; i < LambdaSize; ++i) {
+        const int Count = std::ranges::count_if(P_Value, [lambda = Lambda[i]](double p) {
+            return p > lambda;
+        });
         Pi[i] = Count / (P_Size * (1.0 - Lambda[i]));
     }
+    
     double PrePi = 0.0;
     spline(Lambda, Pi, 0.0, 0.0, NewPi);
     splint(Lambda, Pi, NewPi, Lambda[LambdaSize - 1], PrePi);
-    return PrePi < 1.0 ? PrePi : 1.0;
+    return std::min(PrePi, 1.0);
 }
 
-void StatFunc::spline(vector<double> &x, vector<double> &y, const double yp1, const double ypn, vector<double> &y2) {
-    int i, k;
-    double p, qn, sig, un;
-
-    int n = y2.size();
-    vector<double> u(n - 1);
-    if (yp1 > 0.99e30)
+void StatFunc::spline(std::vector<double> &x, std::vector<double> &y, double yp1, double ypn, std::vector<double> &y2) {
+    const int n = static_cast<int>(y2.size());
+    std::vector<double> u(n - 1);
+    
+    if (yp1 > 0.99e30) {
         y2[0] = u[0] = 0.0;
-    else {
+    } else {
         y2[0] = -0.5;
-        u[0] = (3.0 / (x[1] - x[0]))*((y[1] - y[0]) / (x[1] - x[0]) - yp1);
+        u[0] = (3.0 / (x[1] - x[0])) * ((y[1] - y[0]) / (x[1] - x[0]) - yp1);
     }
-    for (i = 1; i < n - 1; i++) {
-        sig = (x[i] - x[i - 1]) / (x[i + 1] - x[i - 1]);
-        p = sig * y2[i - 1] + 2.0;
+    
+    for (int i = 1; i < n - 1; ++i) {
+        const double sig = (x[i] - x[i - 1]) / (x[i + 1] - x[i - 1]);
+        const double p = sig * y2[i - 1] + 2.0;
         y2[i] = (sig - 1.0) / p;
         u[i] = (y[i + 1] - y[i]) / (x[i + 1] - x[i]) - (y[i] - y[i - 1]) / (x[i] - x[i - 1]);
         u[i] = (6.0 * u[i] / (x[i + 1] - x[i - 1]) - sig * u[i - 1]) / p;
     }
-    if (ypn > 0.99e30)
+    
+    double qn, un;
+    if (ypn > 0.99e30) {
         qn = un = 0.0;
-    else {
+    } else {
         qn = 0.5;
-        un = (3.0 / (x[n - 1] - x[n - 2]))*(ypn - (y[n - 1] - y[n - 2]) / (x[n - 1] - x[n - 2]));
+        un = (3.0 / (x[n - 1] - x[n - 2])) * (ypn - (y[n - 1] - y[n - 2]) / (x[n - 1] - x[n - 2]));
     }
+    
     y2[n - 1] = (un - qn * u[n - 2]) / (qn * y2[n - 2] + 1.0);
-    for (k = n - 2; k >= 0; k--)
+    for (int k = n - 2; k >= 0; --k) {
         y2[k] = y2[k] * y2[k + 1] + u[k];
+    }
 }
 
-void StatFunc::splint(vector<double> &xa, vector<double> &ya, vector<double> &y2a, const double x, double &y) {
-    int k;
-    double h, b, a;
-
-    int n = xa.size();
+void StatFunc::splint(std::vector<double> &xa, std::vector<double> &ya, std::vector<double> &y2a, double x, double &y) {
+    const int n = static_cast<int>(xa.size());
     int klo = 0;
     int khi = n - 1;
+    
     while (khi - klo > 1) {
-        k = (khi + klo) >> 1;
-        if (xa[k] > x) khi = k;
-        else klo = k;
+        const int k = (khi + klo) >> 1;
+        if (xa[k] > x) {
+            khi = k;
+        } else {
+            klo = k;
+        }
     }
-    h = xa[khi] - xa[klo];
-    if (h == 0.0) LOGGER.e(0, "bad xa input to routine splint");
-    a = (xa[khi] - x) / h;
-    b = (x - xa[klo]) / h;
-    y = a * ya[klo] + b * ya[khi]+((a * a * a - a) * y2a[klo]
-            +(b * b * b - b) * y2a[khi])*(h * h) / 6.0;
+    
+    const double h = xa[khi] - xa[klo];
+    if (h == 0.0) {
+        LOGGER.e(0, "bad xa input to routine splint");
+    }
+    
+    const double a = (xa[khi] - x) / h;
+    const double b = (x - xa[klo]) / h;
+    y = a * ya[klo] + b * ya[khi] + 
+        ((a * a * a - a) * y2a[klo] + (b * b * b - b) * y2a[khi]) * (h * h) / 6.0;
 }
 
-double StatFunc::erf(double x) {
-    double a1 = 0.070523084, a2 = 0.0422820123, a3 = 0.0092705272, a4 = 0.0001520143, a5 = 0.0002765672, a6 = 0.0000430638;
-    double tmp = 1 + a1 * x + a2 * pow(x, 2) + a3 * pow(x, 3) + a4 * pow(x, 4) + a5 * pow(x, 5) + a6 * pow(x, 6);
-    return (1 - pow(tmp, -16));
+double StatFunc::erf(double x) noexcept {
+    constexpr double a1 = 0.070523084;
+    constexpr double a2 = 0.0422820123;
+    constexpr double a3 = 0.0092705272;
+    constexpr double a4 = 0.0001520143;
+    constexpr double a5 = 0.0002765672;
+    constexpr double a6 = 0.0000430638;
+    
+    const double tmp = 1.0 + a1 * x + a2 * std::pow(x, 2) + a3 * std::pow(x, 3) + 
+                       a4 * std::pow(x, 4) + a5 * std::pow(x, 5) + a6 * std::pow(x, 6);
+    return 1.0 - std::pow(tmp, -16);
 }
 
 /*
@@ -578,53 +656,68 @@ ro <- order(o) #This is the index of the initial p-values, highest to lowest
 pmin(1, cummin(n/i * p[o]))[ro]
 */
 
-vector<double> StatFunc::ControlFDR_BH(const vector<double> p_value) {
-    int i = 0, n = p_value.size();
-
-    double c = 0.0, min_val = 1.0;
-    vector<double> fdr(n);
-    vector<pair<double, int>> pval_buf(n);
-    vector<pair<int, int>> indx_buf(n);
-
-    for( i = 0; i < n; i++ ) pval_buf[i] = make_pair(p_value[i], i);
-    stable_sort(pval_buf.begin(), pval_buf.end(), [](const pair<double,int> a, const pair<double,int> b) {return a.first > b.first; });
-
-    for( i = 0; i < n; i++ ) {
-        c = (double) n / (double) (n-i) * pval_buf[i].first;
-        if(c < min_val) min_val = c;
-        fdr[pval_buf[i].second] = CommFunc::Min(1.0, min_val);
+std::vector<double> StatFunc::ControlFDR_BH(std::span<const double> p_value) {
+    const int n = static_cast<int>(p_value.size());
+    
+    std::vector<std::pair<double, int>> pval_buf(n);
+    for (int i = 0; i < n; ++i) {
+        pval_buf[i] = {p_value[i], i};
     }
-
-    return (fdr);
+    
+    std::ranges::stable_sort(pval_buf, [](const auto& a, const auto& b) {
+        return a.first > b.first;
+    });
+    
+    std::vector<double> fdr(n);
+    double min_val = 1.0;
+    
+    for (int i = 0; i < n; ++i) {
+        const double c = static_cast<double>(n) / static_cast<double>(n - i) * pval_buf[i].first;
+        min_val = std::min(c, min_val);
+        fdr[pval_buf[i].second] = std::min(1.0, min_val);
+    }
+    
+    return fdr;
 }
 
-// Default: upper-tail
-double StatFunc::pnorm(double x) {
-    double z = 0.0;
-    if(x>0) z = -1.0 * x;
-    else z = x;
-    double sqrt2pi = 2.50662827463;
-    double t0, z1, p0;
-    t0 = 1 / (1 + 0.2316419 * fabs(z));
-    z1 = exp(-0.5 * z * z) / sqrt2pi;
-    p0 = z1 * t0 * (0.31938153 + t0 * (-0.356563782 + t0 * (1.781477937 + t0 * (-1.821255978 + 1.330274429 * t0))));
-    return x >= 0 ? p0 : 1.0 - p0;
+double StatFunc::pnorm(double x) noexcept {
+    const double z = (x > 0) ? -x : x;
+    constexpr double sqrt2pi = 2.50662827463;
+    
+    const double t0 = 1.0 / (1.0 + 0.2316419 * std::fabs(z));
+    const double z1 = std::exp(-0.5 * z * z) / sqrt2pi;
+    const double p0 = z1 * t0 * (0.31938153 + t0 * (-0.356563782 + 
+                      t0 * (1.781477937 + t0 * (-1.821255978 + 1.330274429 * t0))));
+    
+    return (x >= 0) ? p0 : 1.0 - p0;
 }
 
-double StatFunc::dnorm(double x) {
-    return (0.39894228 * exp(-0.5 * pow(x, 2)));
+double StatFunc::dnorm(double x) noexcept {
+    constexpr double inv_sqrt_2pi = 0.39894228;
+    return inv_sqrt_2pi * std::exp(-0.5 * x * x);
 }
 
 double StatFunc::qnorm_sub(double x, double y) {
-    return (y + 0.5 * x * pow(y, 2)+(2 * pow(x, 2) + 1) * pow(y, 3) / 6 + (6 * pow(x, 3) + 7 * x) * pow(y, 4) / 12);
+    const double y2 = y * y;
+    const double y3 = y2 * y;
+    const double y4 = y3 * y;
+    const double x2 = x * x;
+    const double x3 = x2 * x;
+    
+    return y + 0.5 * x * y2 + (2 * x2 + 1) * y3 / 6.0 + 
+           (6 * x3 + 7 * x) * y4 / 12.0;
 }
 
-// Default: lower-tail
 double StatFunc::qnorm(double p, bool upper) {
-    double x = 0;
-    if (upper) p = 1 - p;
-    for (int i = 0; i < 4; i++) x = x + qnorm_sub(x, (pnorm(x) - p) / dnorm(x));
-    return (x);
+    if (upper) {
+        p = 1.0 - p;
+    }
+    
+    double x = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        x = x + qnorm_sub(x, (pnorm(x) - p) / dnorm(x));
+    }
+    return x;
 }
 
 double StatFunc::pchisq(double x, double df) {
@@ -668,13 +761,13 @@ double StatFunc::qchisq(double q, double df) {
 //#################
 // functions to calculate pchisqsum 
 
-double StatFunc::pchisqsum(double x, VectorXd lambda) {
+double StatFunc::pchisqsum(double x, Eigen::VectorXd lambda) {
     double pval = psadd(x, lambda);
     if (pval > 1.0) pval = psatt(x, lambda);
     return pval;
 }
 
-double StatFunc::psadd(double x, VectorXd lambda) {
+double StatFunc::psadd(double x, Eigen::VectorXd lambda) {
     double d = lambda.maxCoeff();
     if (d <= 0.0) return 2.0;
     lambda = lambda.array() / d;
@@ -703,7 +796,7 @@ double StatFunc::psadd(double x, VectorXd lambda) {
     else return pnorm(w + log(v / w) / w);
 }
 
-double StatFunc::psatt(double x, VectorXd lambda) {
+double StatFunc::psatt(double x, Eigen::VectorXd lambda) {
     double sum=lambda.sum();
     if(CommFunc::FloatEqual(sum,0.0)) return 2.0;
   
@@ -715,23 +808,23 @@ double StatFunc::psatt(double x, VectorXd lambda) {
     return pchisq(x/a, b);
 }
 
-double StatFunc::K(double zeta, VectorXd &lambda) {
+double StatFunc::K(double zeta, Eigen::VectorXd &lambda) {
     return -0.5*(1.0 - 2.0 * zeta * lambda.array()).log().sum();
 }
 
-double StatFunc::Kp(double zeta, VectorXd &lambda) {
+double StatFunc::Kp(double zeta, Eigen::VectorXd &lambda) {
     return (lambda.array() / (1.0 - 2.0 * zeta * lambda.array())).sum();
 }
 
-double StatFunc::Kpp(double zeta, VectorXd &lambda) {
+double StatFunc::Kpp(double zeta, Eigen::VectorXd &lambda) {
     return 2.0 * (lambda.array().square() / (1.0 - 2.0 * zeta * lambda.array()).array().square()).sum();
 }
 
-double StatFunc::Kp_min_x(double zeta, VectorXd &lambda, double x) {
+double StatFunc::Kp_min_x(double zeta, Eigen::VectorXd &lambda, double x) {
     return Kp(zeta, lambda) - x;
 }
 
-double StatFunc::Brents_Kp_min_x(VectorXd &lambda, double x, double lowerLimit, double upperLimit, double errorTol) {
+double StatFunc::Brents_Kp_min_x(Eigen::VectorXd &lambda, double x, double lowerLimit, double upperLimit, double errorTol) {
     double a = lowerLimit;
     double b = upperLimit;
     double c = 0;
@@ -814,12 +907,13 @@ double StatFunc::Brents_Kp_min_x(VectorXd &lambda, double x, double lowerLimit, 
 }
 
 
-vector<size_t> StatFunc::sort_re_index(const vector<double> &x) {
-  vector<size_t> x_index(x.size());
-  std::iota(x_index.begin(), x_index.end(), 0);
+std::vector<size_t> StatFunc::sort_re_index(std::span<const double> x) {
+    std::vector<size_t> x_index(x.size());
+    std::iota(x_index.begin(), x_index.end(), 0);
 
-  sort(x_index.begin(), x_index.end(), [&x](size_t index1, size_t index2) {
-          return x[index1] > x[index2];});
+    std::ranges::sort(x_index, [&x](size_t index1, size_t index2) {
+        return x[index1] > x[index2];
+    });
 
-  return x_index;
+    return x_index;
 }

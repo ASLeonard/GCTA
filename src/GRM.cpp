@@ -16,11 +16,12 @@
    If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include "cpu_f77blas.h"
 #include "GRM.h"
 #include "Logger.h"
+#include "cpu.h"
 #include <iterator>
 #include <algorithm>
+#include <ranges>
 #include <iomanip>
 #include <sstream>
 #include <cstring>
@@ -140,7 +141,7 @@ void GRM::subtract_grm(string mgrm_file, string out_file){
     std::ofstream o_id(out_file + ".grm.id");
     if(!o_id) LOGGER.e(0, "can't write to [" + options["out"] + ".grm.id]");
     LOGGER.i(2, "Saving " + to_string(common_id.size()) + " individual IDs");
-    std::copy(common_id.begin(), common_id.end(), std::ostream_iterator<string>(o_id, "\n"));
+    std::ranges::copy(common_id, std::ostream_iterator<string>(o_id, "\n"));
     o_id.close();
 
     uint64_t grm_size = (1 + common_id.size()) * common_id.size() / 2;
@@ -164,12 +165,12 @@ void GRM::subtract_grm(string mgrm_file, string out_file){
     }
 
     uint64_t itemRead = 26214400;
-    float *buf1 = new float[itemRead];
-    float *buf2 = new float[itemRead];
-    float *buf = new float[itemRead];
-    float *bufN1 = new float[itemRead];
-    float *bufN2 = new float[itemRead];
-    float *bufN = new float[itemRead];
+    std::vector<float> buf1(itemRead);
+    std::vector<float> buf2(itemRead);
+    std::vector<float> buf(itemRead);
+    std::vector<float> bufN1(itemRead);
+    std::vector<float> bufN2(itemRead);
+    std::vector<float> bufN(itemRead);
     
     int loop_num = (grm_size + itemRead - 1) / itemRead;
     uint64_t remain_item = grm_size % itemRead;
@@ -179,29 +180,22 @@ void GRM::subtract_grm(string mgrm_file, string out_file){
 
     for(int i = 0; i < loop_num; i++){
         if(i == loop_num - 1 && remain_item != 0) itemRead = remain_item;
-        readBytes(h_grm1, itemRead, buf1);
-        readBytes(h_grm2, itemRead, buf2);
-        readBytes(h_grmN1, itemRead, bufN1);
-        readBytes(h_grmN2, itemRead, bufN2);
+        readBytes(h_grm1, itemRead, buf1.data());
+        readBytes(h_grm2, itemRead, buf2.data());
+        readBytes(h_grmN1, itemRead, bufN1.data());
+        readBytes(h_grmN2, itemRead, bufN2.data());
         for(int j = 0; j < itemRead; j++){
             bufN[j] = bufN1[j] - bufN2[j];
             buf[j] = (float)(((double)buf1[j] * bufN1[j] - (double)buf2[j] * bufN2[j]) / bufN[j]);
         }
-        if(fwrite(buf, sizeof(float), itemRead, ho_grm) != itemRead){
+        if(fwrite(buf.data(), sizeof(float), itemRead, ho_grm) != itemRead){
             LOGGER.e(0, "can't write to [" + out_file + ".grm.bin].");
         }
-        if(fwrite(bufN, sizeof(float), itemRead, ho_grmN) != itemRead){
+        if(fwrite(bufN.data(), sizeof(float), itemRead, ho_grmN) != itemRead){
             LOGGER.e(0, "can't write to [" + out_file + ".grm.N.bin].");
         }
     }
     LOGGER.i(0, "The subtracted GRM has been written to [" + out_file + ".grm.bin, .grm.N.bin].");
-
-    delete[] buf1;
-    delete[] buf2;
-    delete[] bufN1;
-    delete[] bufN2;
-    delete[] buf;
-    delete[] bufN;
 }
 
 
@@ -249,7 +243,7 @@ void GRM::unify_grm(string mgrm_file, string out_file){
         vector<uint32_t> index1, index2;
         vector_commonIndex_sorted1(common_id, ids[i], index1, index2); 
         vector<string> temp_common_id(index1.size());
-        std::transform(index1.begin(), index1.end(),temp_common_id.begin(), [&common_id](uint32_t v){
+        std::ranges::transform(index1, temp_common_id.begin(), [&common_id](uint32_t v){
                 return common_id[v];});
         common_id = temp_common_id;
         LOGGER << common_id.size() << " common samples in GRMs" << std::endl;
@@ -261,7 +255,7 @@ void GRM::unify_grm(string mgrm_file, string out_file){
         vector<uint32_t> index1, index2;
         vector_commonIndex_sorted1(common_id, keep_id, index1, index2);
         vector<string> temp_common_id(index1.size());
-        std::transform(index1.begin(), index1.end(), temp_common_id.begin(), [&common_id](uint32_t v){
+        std::ranges::transform(index1, temp_common_id.begin(), [&common_id](uint32_t v){
                 return common_id[v];});
         common_id = temp_common_id;
         LOGGER << common_id.size() << " common samples after merging." << std::endl;
@@ -277,7 +271,7 @@ void GRM::unify_grm(string mgrm_file, string out_file){
         vector<uint32_t> remain_index;
         std::set_difference(keeps.begin(), keeps.end(), index1.begin(), index1.end(), std::back_inserter(remain_index));
         vector<string> remain_ids(remain_index.size());
-        std::transform(remain_index.begin(), remain_index.end(), remain_ids.begin(), [&common_id](uint32_t v){
+        std::ranges::transform(remain_index, remain_ids.begin(), [&common_id](uint32_t v){
                 return common_id[v];});
         common_id = remain_ids;
         LOGGER << common_id.size() << " common samples after merging." << std::endl;
@@ -324,8 +318,8 @@ void GRM::unify_grm(string mgrm_file, string out_file){
             LOGGER.e(0, "can't write to " + wfile_name + ".");
         }
 
-        float *buf = new float[largest_grm_size];
-        float *wbuf = new float[size_grm];
+        std::vector<float> buf(largest_grm_size);
+        std::vector<float> wbuf(size_grm);
 
         vector<uint64_t> start_pos(largest_grm_size);
         for(int j = 0; j < largest_grm_size; j++){
@@ -338,7 +332,7 @@ void GRM::unify_grm(string mgrm_file, string out_file){
             uint64_t num_grm = grm_index + 1;
             uint64_t byte_start_grm = start_pos[grm_index];
             fseek(h_grm, byte_start_grm, SEEK_SET);
-            if(fread(buf, sizeof(float), num_grm, h_grm) != num_grm){
+            if(fread(buf.data(), sizeof(float), num_grm, h_grm) != num_grm){
                 LOGGER.e(0, "error in reading [" + file_name + "], in position " + to_string(ftell(h_grm)), ".");
             }
             uint64_t size_write = j + 1;
@@ -346,7 +340,7 @@ void GRM::unify_grm(string mgrm_file, string out_file){
                 uint32_t cur_index = p_index[k];
                 float grm_value;
                 if(cur_index < num_grm){
-                    grm_value = *(buf + cur_index);
+                    grm_value = buf[cur_index];
                 }else{
                     //fill the other parts
                     auto bytes_offset = start_pos[cur_index] + grm_index * sizeof(float);
@@ -355,17 +349,15 @@ void GRM::unify_grm(string mgrm_file, string out_file){
                         LOGGER.e(0, "error in reading [" + file_name + "], in position " + to_string(bytes_offset), ".");
                     }
                 }
-                *(wbuf + k) = grm_value;
+                wbuf[k] = grm_value;
             }
             //last element
             //*(wbuf + j) = *(buf + grm_index);
 
-            if(size_write != fwrite(wbuf, sizeof(float), size_write, h_wgrm)){
+            if(size_write != fwrite(wbuf.data(), sizeof(float), size_write, h_wgrm)){
                 LOGGER.e(0, "error in writing to [" + wfile_name + "], pos: " + std::to_string(ftell(h_wgrm)) + "."); 
             }
         }
-        delete[] buf;
-        delete[] wbuf;
         fclose(h_grm);
         fclose(h_wgrm);
         LOGGER.i(0, "GRM has been written to [" + wfile_name + "].");
@@ -396,7 +388,7 @@ void GRM::prune_fam(float thresh, bool isSparse, float *value){
         keep_ID.emplace_back(grm_ids[index]);
     }
     LOGGER.i(2, "Saving " + to_string(keep_ID.size()) + " individual IDs");
-    std::copy(keep_ID.begin(), keep_ID.end(), std::ostream_iterator<string>(o_id, "\n"));
+    std::ranges::copy(keep_ID, std::ostream_iterator<string>(o_id, "\n"));
     o_id.close();
     keep_ID.clear();
     keep_ID.shrink_to_fit();
@@ -404,23 +396,23 @@ void GRM::prune_fam(float thresh, bool isSparse, float *value){
 
     // Save pair1 par2 GRM
     std::unordered_set<int> keeps_ori(index_keep.begin(), index_keep.end());
-    float *grm_buf = new float[num_byte_buffer];
+    std::vector<float> grm_buf(num_byte_buffer);
     float cur_grm, *cur_grm_pos0;
     vector<float> rm_grm;
     vector<int> rm_grm_ID1, rm_grm_ID2;
-    float *out_grm_buf = new float[num_byte_buffer];
+    std::vector<float> out_grm_buf(num_byte_buffer);
     float *cur_grm_buf;
     int new_id1 = 0;
     for(int part_index = 0; part_index != index_grm_pairs.size(); part_index++){
-        if(fread(grm_buf, sizeof(float), byte_part_grms[part_index], grmFile) != byte_part_grms[part_index]){
+        if(fread(grm_buf.data(), sizeof(float), byte_part_grms[part_index], grmFile) != byte_part_grms[part_index]){
             LOGGER.e(0, "Failed to read GRM between line " + to_string(index_grm_pairs[part_index].first + 1) + " and "
                         + to_string(index_grm_pairs[part_index].second + 1));
         };
         if(part_index % 50 == 0){
             LOGGER.i(2, "Processing part " + to_string(part_index + 1));
         }
-        cur_grm_pos0 = grm_buf;
-        cur_grm_buf = out_grm_buf;
+        cur_grm_pos0 = grm_buf.data();
+        cur_grm_buf = out_grm_buf.data();
 
         for(int id1 = index_grm_pairs[part_index].first; id1 != index_grm_pairs[part_index].second + 1; id1++){
             if (keeps_ori.find(id1) == keeps_ori.end()) {
@@ -462,15 +454,13 @@ void GRM::prune_fam(float thresh, bool isSparse, float *value){
             cur_grm_pos0 += id1 + 1;
         }
         if(!isSparse){
-            int write_items = cur_grm_buf - out_grm_buf;
-            if(fwrite(out_grm_buf, sizeof(float), write_items, o_bk) != write_items){
+            int write_items = cur_grm_buf - out_grm_buf.data();
+            if(fwrite(out_grm_buf.data(), sizeof(float), write_items, o_bk) != write_items){
                 LOGGER.e(0, "Failed to write the output"); 
             }
         }
 
     }
-    delete [] grm_buf;
-    delete [] out_grm_buf;
     fclose(grmFile);
     if(!isSparse){
         fclose(o_bk);
@@ -493,12 +483,12 @@ void GRM::prune_fam(float thresh, bool isSparse, float *value){
 
     FILE *NFile = fopen((grm_file + ".grm.N.bin").c_str(), "rb");
     FILE *ONFile = fopen((options["out"] + ".grm.N.bin").c_str(), "wb");
-    float *N_buf = new float[num_byte_buffer];
+    std::vector<float> N_buf(num_byte_buffer);
     float *cur_N_pos0;
-    float *out_N_buf = new float[num_byte_buffer];
+    std::vector<float> out_N_buf(num_byte_buffer);
     float *cur_N_buf;
     for(int part_index = 0; part_index != index_grm_pairs.size(); part_index++){
-        if(fread(N_buf, sizeof(float), byte_part_grms[part_index], NFile) != byte_part_grms[part_index]){
+        if(fread(N_buf.data(), sizeof(float), byte_part_grms[part_index], NFile) != byte_part_grms[part_index]){
             LOGGER.w(0, "Reading GRM N failed between line " + to_string(index_grm_pairs[part_index].first + 1) + " and "
                         + to_string(index_grm_pairs[part_index].second + 1));
             LOGGER.i(0, "Stop pruning the GRM N");
@@ -507,8 +497,8 @@ void GRM::prune_fam(float thresh, bool isSparse, float *value){
         if(part_index % 50 == 0){
             LOGGER.i(2, "Processing part " + to_string(part_index + 1));
         }
-        cur_N_pos0 = N_buf;
-        cur_N_buf = out_N_buf;
+        cur_N_pos0 = N_buf.data();
+        cur_N_buf = out_N_buf.data();
 
         for(int id1 = index_grm_pairs[part_index].first; id1 != index_grm_pairs[part_index].second + 1; id1++){
             if (keeps_ori.find(id1) == keeps_ori.end()) {
@@ -522,14 +512,12 @@ void GRM::prune_fam(float thresh, bool isSparse, float *value){
             cur_N_pos0 += id1 + 1;
         }
 
-        int write_items = cur_N_buf - out_N_buf;
-        if(fwrite(out_N_buf, sizeof(float), write_items, ONFile) != write_items){
+        int write_items = cur_N_buf - out_N_buf.data();
+        if(fwrite(out_N_buf.data(), sizeof(float), write_items, ONFile) != write_items){
             LOGGER.e(0, "Failed to write the GRM N"); 
         }
 
     }
-    delete [] out_N_buf;
-    delete [] N_buf;
     fclose(ONFile);
     fclose(NFile);
     LOGGER.i(0, "GRM N has been saved to [" + options["out"] + ".grm.N.bin]");
@@ -564,19 +552,19 @@ void GRM::cut_rel(float thresh, bool no_grm){
 
     std::unordered_set<int> keeps_ori(index_keep.begin(), index_keep.end());
 
-    float *grm_buf = new float[num_byte_buffer];
+    std::vector<float> grm_buf(num_byte_buffer);
     float cur_grm, *cur_grm_pos0;
     vector<float> rm_grm;
     vector<int> rm_grm_ID1, rm_grm_ID2;
     for(int part_index = 0; part_index != index_grm_pairs.size(); part_index++){
-        if(fread(grm_buf, sizeof(float), byte_part_grms[part_index], grmFile) != byte_part_grms[part_index]){
+        if(fread(grm_buf.data(), sizeof(float), byte_part_grms[part_index], grmFile) != byte_part_grms[part_index]){
             LOGGER.e(0, "Failed to read GRM between line " + to_string(index_grm_pairs[part_index].first + 1) + " and "
                         + to_string(index_grm_pairs[part_index].second + 1));
         };
         if(part_index % 50 == 0){
             LOGGER.i(2, "Processing part " + to_string(part_index + 1));
         }
-        cur_grm_pos0 = grm_buf;
+        cur_grm_pos0 = grm_buf.data();
         for(int id1 = index_grm_pairs[part_index].first; id1 != index_grm_pairs[part_index].second + 1; id1++){
             if (keeps_ori.find(id1) == keeps_ori.end()) {
                 cur_grm_pos0 += id1 + 1;
@@ -594,7 +582,6 @@ void GRM::cut_rel(float thresh, bool no_grm){
             cur_grm_pos0 += id1 + 1;
         }
     }
-    delete [] grm_buf;
 
     if(detail_flag){
         for(int index = 0; index != rm_grm.size(); index++){
@@ -637,7 +624,7 @@ void GRM::cut_rel(float thresh, bool no_grm){
     auto diff = [&rm_grm_ID1](int value) ->bool{
         return std::binary_search(rm_grm_ID1.begin(), rm_grm_ID1.end(), value);
     };
-    index_keep.erase(std::remove_if(index_keep.begin(), index_keep.end(), diff), index_keep.end());
+    std::erase_if(index_keep, diff);
 
     vector<string> keep_ID;
     keep_ID.reserve(index_keep.size());
@@ -647,13 +634,13 @@ void GRM::cut_rel(float thresh, bool no_grm){
 
     LOGGER.i(0, "After pruning the GRM, there are " + to_string(keep_ID.size()) + " individuals (" + to_string(removed_ID.size()) + " individuals removed).");
     if(!no_grm){
-        std::copy(keep_ID.begin(), keep_ID.end(), std::ostream_iterator<string>(o_keep, "\n"));
+        std::ranges::copy(keep_ID, std::ostream_iterator<string>(o_keep, "\n"));
         o_keep.close();
         LOGGER.i(2, "Pruned unrelated IDs have been saved to " + options["out"] + ".grm.id");
     }
 
     if(detail_flag){
-        std::copy(keep_ID.begin(), keep_ID.end(), std::ostream_iterator<string>(o_single, "\n"));
+        std::ranges::copy(keep_ID, std::ostream_iterator<string>(o_single, "\n"));
         o_single.close();
         LOGGER.i(2, "Pruned singleton IDs have been saved to " + options["out"] + ".singleton.txt");
     }
@@ -694,19 +681,19 @@ void GRM::cut_rel(float thresh, bool no_grm){
 
 void GRM::outBinFile(FILE *sFile, FILE *dFile) {
     std::unordered_set<int> keeps(index_keep.begin(), index_keep.end());
-    float *grm_buf = new float[num_byte_buffer];
-    float *grm_out_buffer = new float[num_byte_buffer];
+    std::vector<float> grm_buf(num_byte_buffer);
+    std::vector<float> grm_out_buffer(num_byte_buffer);
     float *cur_grm_pos, *cur_out_pos;
     for(int part_index = 0; part_index != index_grm_pairs.size(); part_index++){
-        if(fread(grm_buf, sizeof(float), byte_part_grms[part_index], sFile) != byte_part_grms[part_index]){
+        if(fread(grm_buf.data(), sizeof(float), byte_part_grms[part_index], sFile) != byte_part_grms[part_index]){
             LOGGER.e(0, "Failed to read GRM between line " + to_string(index_grm_pairs[part_index].first + 1) + " and "
                         + to_string(index_grm_pairs[part_index].second + 1));
         };
         if(part_index % 50 == 0){
             LOGGER.i(2, "Processing part " + to_string(part_index + 1));
         }
-        cur_grm_pos = grm_buf;
-        cur_out_pos = grm_out_buffer;
+        cur_grm_pos = grm_buf.data();
+        cur_out_pos = grm_out_buffer.data();
         for(int id1 = index_grm_pairs[part_index].first; id1 != index_grm_pairs[part_index].second + 1; id1++) {
             if (keeps.find(id1) == keeps.end()) {
                 cur_grm_pos += id1 + 1;
@@ -718,13 +705,11 @@ void GRM::outBinFile(FILE *sFile, FILE *dFile) {
             }
             cur_grm_pos += id1 + 1;
         }
-        uint64_t size_write = cur_out_pos - grm_out_buffer;
-        if(fwrite(grm_out_buffer, sizeof(float), size_write, dFile) != size_write){
+        uint64_t size_write = cur_out_pos - grm_out_buffer.data();
+        if(fwrite(grm_out_buffer.data(), sizeof(float), size_write, dFile) != size_write){
             LOGGER.e(0, "Failed to write the output file, please check the disk condition or permission");
         };
     }
-    delete [] grm_buf;
-    delete [] grm_out_buffer;
 }
 
 
@@ -817,7 +802,7 @@ GRM::GRM(Pheno* pheno, Marker* marker) {
     }
     memset(N, 0, fill_N * sizeof(uint32_t));
 
-    sub_miss = new uint32_t[index_keep.size() + 64]();
+    std::vector<uint32_t> sub_miss(index_keep.size() + 64);
 
     //calculate each index in pair thread;
     int num_thread = omp_get_max_threads();
@@ -972,24 +957,12 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
     static char uplo='L';
    // A * At 
     if(part_keep_indices.first == 0){
-#if GCTA_CPU_x86
-        dsyrk(&uplo, &notrans, &n, &curNumValidMarkers, &alpha, stdGeno, &n_sample, &beta, grm, &m);
-#else
-        dsyrk_(&uplo, &notrans, &n, &curNumValidMarkers, &alpha, stdGeno, &n_sample, &beta, grm, &m);
-#endif
+        cblas_dsyrk(CblasColMajor, CblasLower, CblasNoTrans, n, curNumValidMarkers, alpha, stdGeno, n_sample, beta, grm, m);
     }else{
         //dgemm(&notrans, &trans, &m, &n, &num_marker, &alpha, stdGeno + part_keep_indices.first, &n_sample, stdGeno, &n_sample, &beta, grm, &m);
-#if GCTA_CPU_x86
-        dgemm(&notrans, &trans, &m, &s_n, &curNumValidMarkers, &alpha, stdGeno + part_keep_indices.first, &n_sample, stdGeno, &n_sample, &beta, grm, &m);
-#else
-        dgemm_(&notrans, &trans, &m, &s_n, &curNumValidMarkers, &alpha, stdGeno + part_keep_indices.first, &n_sample, stdGeno, &n_sample, &beta, grm, &m);
-#endif
+        cblas_dgemm(CblasColMajor, CblasNoTrans, CblasTrans, m, s_n, curNumValidMarkers, alpha, stdGeno + part_keep_indices.first, n_sample, stdGeno, n_sample, beta, grm, m);
         double * grm_start = grm + ((uint64_t)s_n) * m;
-#if GCTA_CPU_x86
-        dsyrk(&uplo, &notrans, &m, &curNumValidMarkers, &alpha, stdGeno + part_keep_indices.first, &n_sample, &beta, grm_start, &m); 
-#else
-        dsyrk_(&uplo, &notrans, &m, &curNumValidMarkers, &alpha, stdGeno + part_keep_indices.first, &n_sample, &beta, grm_start, &m); 
-#endif
+        cblas_dsyrk(CblasColMajor, CblasLower, CblasNoTrans, m, curNumValidMarkers, alpha, stdGeno + part_keep_indices.first, n_sample, beta, grm_start, m); 
     }
 
     //memset(this->cmask_buf, 0, num_byte_cmask);
@@ -1000,7 +973,7 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
     static int numNSampleBlock = (n + markerPerN - 1) / markerPerN;
     //LOGGER << "marker block: " << numNblock << ", sample block:" << numNSampleBlock << ", MarkerPerN: " << markerPerN << std::endl;
     //LOGGER << ", n: " << n << std::endl;
-    uintptr_t *sample_miss = new uintptr_t[numNSampleBlock * markerPerN]; // don't need to set to 0
+    std::vector<uintptr_t> sample_miss(numNSampleBlock * markerPerN); // don't need to set to 0
     for(int i = 0; i < numNblock; i++){
         int lastIndex = markerPerN * (i + 1);
         int lastValidIndex = lastIndex > curNumValidMarkers ? curNumValidMarkers : lastIndex;
@@ -1026,10 +999,9 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
         #pragma omp parallel for
         for(int index = 0; index < index_grm_pairs.size(); index++){
             auto index_pair = index_grm_pairs[index];
-            N_thread(index_pair.first, index_pair.second, sample_miss);
+            N_thread(index_pair.first, index_pair.second, sample_miss.data());
         }
     }
-    delete[] sample_miss;
 
     finished_marker += num_marker;
 
@@ -1418,8 +1390,8 @@ void GRM::deduce_GRM(){
     */
 
     uint32_t num_sample = index_keep.size();
-    float *w_grm = new float[num_sample];
-    float *w_N = new float[num_sample];
+    std::vector<float> w_grm(num_sample);
+    std::vector<float> w_N(num_sample);
 
     double *po_grm = grm;
     uint32_t *po_N = N;
@@ -1452,7 +1424,7 @@ void GRM::deduce_GRM(){
             }
             //fwrite(w_grm, sizeof(float), pair1 + 1, grm_out);
             //fwrite(w_N, sizeof(float), pair1 + 1, N_out);
-            write_GRM(w_grm, w_N, grm_out, N_out, pair1, thresh);
+            write_GRM(w_grm.data(), w_N.data(), grm_out, N_out, pair1, thresh);
             po_N = po_N + pair1 + 1;
             po_grm = po_grm + 1;
         }
@@ -1476,7 +1448,7 @@ void GRM::deduce_GRM(){
                 }
                 //fwrite(w_grm, sizeof(float), pair1 + 1, grm_out);
                 //fwrite(w_N, sizeof(float), pair1 + 1, N_out);
-                write_GRM(w_grm, w_N, grm_out, N_out, pair1, thresh);
+                write_GRM(w_grm.data(), w_N.data(), grm_out, N_out, pair1, thresh);
             }
         }else{
             for(uint32_t pair1 = part_keep_indices.first; pair1 != part_keep_indices.second + 1; pair1++){
@@ -1498,7 +1470,7 @@ void GRM::deduce_GRM(){
                 }
                 //fwrite(w_grm, sizeof(float), pair1 + 1, grm_out);
                 //fwrite(w_N, sizeof(float), pair1 + 1, N_out);
-                write_GRM(w_grm, w_N, grm_out, N_out, pair1, thresh);
+                write_GRM(w_grm.data(), w_N.data(), grm_out, N_out, pair1, thresh);
             }
         }
     }
@@ -1507,8 +1479,6 @@ void GRM::deduce_GRM(){
 
     if(grm_out)fclose(grm_out);
     if(N_out)fclose(N_out);
-    delete[] w_grm;
-    delete[] w_N;
     //t_print(begin, "  GRM deduce finished");
     if(!isSparse){
         LOGGER.i(0, "GRM has been saved in the file [" + o_name + ".grm.bin]");
@@ -1945,7 +1915,7 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
 
     options["use_blas"] = "yes";
     /*
-    auto it = std::find(processFunctions.begin(), processFunctions.end(), "make_grm");
+    auto it = std::ranges::find(processFunctions, "make_grm");
     if(it != processFunctions.end()){
         if((!options_b["isDominance"]) && (!options_b["isMtd"])){
         }

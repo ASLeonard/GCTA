@@ -26,23 +26,16 @@ bool _LLT(MatrixType &A, double &logdet){
     Eigen::Matrix<typename MatrixType::Scalar, Eigen::Dynamic, 1> diag = A.diagonal();
     //auto diag = A.diagonal();
 
-    int info, cols = (int)A.cols();
+    gcta_blas_int info = 0;
+    gcta_blas_int cols = (gcta_blas_int)A.cols();
     char uplo = 'L';
     LOGGER.ts("LLT");
-#if GCTA_CPU_x86
     dpotrf(&uplo, &cols, vi, &cols, &info);
-#else
-    dpotrf_(&uplo, &cols, vi, &cols, &info);
-#endif    
     //LOGGER << "  LLT time: " << LOGGER.tp("LLT") << std::endl;
     if(info == 0){
         logdet = A.diagonal().array().square().log().sum();
         //LOGGER.ts("LLT_INV");
-#if GCTA_CPU_x86        
         dpotri(&uplo, &cols, vi, &cols, &info);
-#else
-        dpotri_(&uplo, &cols, vi, &cols, &info);
-#endif
         //LOGGER << "  LLT inverse time: " << LOGGER.tp("LLT_INV") << std::endl;
         if(info == 0){
             A.template triangularView<Eigen::Upper>() = A.transpose();

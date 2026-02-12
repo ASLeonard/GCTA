@@ -23,6 +23,9 @@
 #include <map>
 #include <set>
 #include <algorithm>
+#include <fstream>
+#include <boost/iostreams/filter/gzip.hpp>
+#include <boost/iostreams/filtering_stream.hpp>
 
 double eps = 1e-6;
 
@@ -355,28 +358,28 @@ vector<string> gcta::read_snp_metafile_gz(string metafile, map<string,int> &gws_
     string strbuf="", snpbuf="";
     vector<string> snplist;
     int line_number=0;
-    const int MAX_LINE_LENGTH = 1024;
-    char buf[MAX_LINE_LENGTH];
     
-    gzifstream meta_snp(metafile.c_str());
-    if (!meta_snp)
+    std::ifstream raw_file(metafile, std::ios::binary);
+    if (!raw_file.is_open())
          LOGGER.e(0, "cannot open the file [" + metafile + "] to read.");
+    boost::iostreams::filtering_istream meta_snp;
+    meta_snp.push(boost::iostreams::gzip_decompressor());
+    meta_snp.push(raw_file);
     
     string err_msg = "Failed to read [" + metafile + "]. An error occurs in line ";
 
     // Read the summary data
-    while(1) {
-        meta_snp.getline(buf, MAX_LINE_LENGTH, '\n');
-        if(meta_snp.fail() || !meta_snp.good()) break;
+    string line;
+    while(std::getline(meta_snp, line)) {
         line_number ++;
         if(line_number==1) continue;
-        stringstream ss(buf);
-        if (!(ss >> snpbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        stringstream ss(line);
+        if (!(ss >> snpbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         // Save the SNPs
         snplist.push_back(snpbuf);
         int i = 0;
         for( i=0; i<6; i++)
-            if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+            if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         // Save the p-value
         double pval_buf = 1.0;
         if(strbuf!="." && strbuf!="NA" && strbuf!="NAN") pval_buf = atof(strbuf.c_str());
@@ -386,7 +389,8 @@ vector<string> gcta::read_snp_metafile_gz(string metafile, map<string,int> &gws_
         }
     }
 
-    meta_snp.close();
+    meta_snp.reset();
+    raw_file.close();
     return snplist;
 }
 
@@ -459,12 +463,12 @@ double gcta::read_single_metafile_gz(string metafile, map<string, int> id_map,
                          eigenVector &snp_se, eigenVector &snp_pval,
                          eigenVector &snp_n, vector<bool> &snp_flag) {
    
-    const int MAX_LINE_LENGTH = 1024;
-    char buf[MAX_LINE_LENGTH];
-
-    gzifstream meta_raw(metafile.c_str());
-    if (!meta_raw)
+    std::ifstream raw_file(metafile, std::ios::binary);
+    if (!raw_file.is_open())
         LOGGER.e(0, "cannot open the file [" + metafile + "] to read.");
+    boost::iostreams::filtering_istream meta_raw;
+    meta_raw.push(boost::iostreams::gzip_decompressor());
+    meta_raw.push(raw_file);
     string err_msg = "Failed to read [" + metafile + "]. An error occurs in line ";
 
     int line_number=0, snp_indx=0;
@@ -474,46 +478,45 @@ double gcta::read_single_metafile_gz(string metafile, map<string, int> id_map,
     bool missing_flag = false;
     string strbuf = "";
     vector<double> vec_vp_buf;
-    while(1) {
-        meta_raw.getline(buf, MAX_LINE_LENGTH, '\n');
-        if(meta_raw.fail() || !meta_raw.good()) break;
+    string line;
+    while(std::getline(meta_raw, line)) {
         missing_flag = false;
         line_number++;
         if(line_number==1) continue;
          
         string snpbuf = "", strbuf = "", valbuf = "";
-        stringstream ss(buf);
+        stringstream ss(line);
         // SNP
-        if (!(ss >> snpbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> snpbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         iter = id_map.find(snpbuf);
         if(iter == id_map.end()) continue;     
         snp_indx = iter->second;
         // a1 
-        if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         StrFunc::to_upper(strbuf);
         snp_a1[snp_indx] = strbuf;
         // a2
-        if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         StrFunc::to_upper(strbuf);
         snp_a2[snp_indx] = strbuf;
         // freq
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_freq(snp_indx) = atof(valbuf.c_str());
         else { snp_freq(snp_indx) = nan(""); missing_flag=true; }
         // b
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_b(snp_indx) = atof(valbuf.c_str());
         else { snp_b(snp_indx) = nan(""); missing_flag=true; }
         // se
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_se(snp_indx) = atof(valbuf.c_str());
         else { snp_se(snp_indx) = nan(""); missing_flag=true; }
         // p-value
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_pval(snp_indx) = atof(valbuf.c_str());
         else { snp_pval(snp_indx) = nan(""); missing_flag=true; }
         // n
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + buf);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_n(snp_indx) = atof(valbuf.c_str());
         else { snp_n(snp_indx) = nan(""); missing_flag=true; }
         snp_flag[snp_indx] = true;
@@ -524,7 +527,8 @@ double gcta::read_single_metafile_gz(string metafile, map<string, int> id_map,
             vec_vp_buf.push_back(vp_buf);
         }        
     }
-    meta_raw.close();
+    meta_raw.reset();
+    raw_file.close();
     if(vec_vp_buf.size()>0) median_vp = CommFunc::median(vec_vp_buf);
 
     return median_vp;
@@ -1129,9 +1133,9 @@ vector<double> est_bxy_gsmr(eigenVector bxy_sort, eigenVector bxy, vector<string
     for(i = 0; i < n_indices_snp; i++) bxy_kept(i) = bxy(kept_ID[i]);
 
     // gsmr
-    VectorXd vec_1= VectorXd::Ones(n_indices_snp);
+    Eigen::VectorXd vec_1= Eigen::VectorXd::Ones(n_indices_snp);
     cov_bxy = cov_bxy + eps*eigenMatrix::Identity(n_indices_snp, n_indices_snp);
-    LDLT<eigenMatrix> ldlt_cov_bxy(cov_bxy);
+    Eigen::LDLT<eigenMatrix> ldlt_cov_bxy(cov_bxy);
 
     if( ldlt_cov_bxy.vectorD().minCoeff() <= 0 )
         LOGGER.e(0, "the variance-covariance matrix of bxy is not invertible.");
@@ -1251,7 +1255,7 @@ double global_heidi_pvalue(double bxy_hat, double bxy_hat_se, eigenVector bzx, e
         for(int j=i+1; j<n_indices_snp; j++) 
             corr_d(i,j) = corr_d(j,i) = var_d(i,j) / sqrt(var_d(i,i)*var_d(j,j));
     double chival = (d.array()*d.array()/var_d.diagonal().array()).sum();
-    SelfAdjointEigenSolver<eigenMatrix> saes(corr_d);
+    Eigen::SelfAdjointEigenSolver<eigenMatrix> saes(corr_d);
     global_heidi_pval = StatFunc::pchisqsum(chival, saes.eigenvalues().cast<double>());
 
     return(global_heidi_pval);  
@@ -1406,7 +1410,7 @@ double heidi_outlier_topsnp(eigenVector &indi_het_pval, eigenVector bxy, eigenMa
             for(int j=i+1; j<(n_indices_snp-1); j++) 
                 corr_d(i,j) = corr_d(j,i) = var_d(i,j) / sqrt(var_d(i,i)*var_d(j,j));
         double chival = (d.array()*d.array()/var_d.diagonal().array()).sum();            
-        SelfAdjointEigenSolver<eigenMatrix> saes(corr_d);
+        Eigen::SelfAdjointEigenSolver<eigenMatrix> saes(corr_d);
         double global_heidi_pval = StatFunc::pchisqsum(chival, saes.eigenvalues().cast<double>());
         return(global_heidi_pval);
     }
@@ -1533,7 +1537,7 @@ vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eige
     }
 
     // LD r
-    MatrixXf x_sub(nindi, n_indices_snp);
+    Eigen::MatrixXf x_sub(nindi, n_indices_snp);
     vector<int> snp_sn(n_indices_snp);
     map<string, int>::iterator iter;
     int i_buf = 0;
@@ -1548,7 +1552,7 @@ vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eige
     make_XMat_subset(x_sub, snp_sn, true);
 
     double x_sd1 = 0.0, x_sd2 = 0.0, x_cov = 0.0;
-    ld_r_mat = MatrixXd::Identity(n_indices_snp, n_indices_snp);
+    ld_r_mat = Eigen::MatrixXd::Identity(n_indices_snp, n_indices_snp);
     for(i=0; i<(n_indices_snp-1); i++) {
         x_sd1 = x_sub.col(i).norm();
         for(j=(i+1); j<n_indices_snp; j++) {
@@ -1761,14 +1765,15 @@ vector<string> read_ld_score_gz(string filestr, map<string,int> snplist_map, vec
 
     string err_msg = "Failed to read [" + filestr + "]. An error occurs in line ";
 
-    const int MAX_LINE_LENGTH = 1024;
-    char strbuf[MAX_LINE_LENGTH];
-    gzifstream ldsc_marker(filestr.c_str());
-    while(1) {
-        ldsc_marker.getline(strbuf, MAX_LINE_LENGTH, '\n');
-        if (ldsc_marker.fail() || !ldsc_marker.good()) break;
+    std::ifstream raw_file(filestr, std::ios::binary);
+    if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + filestr + "] to read.");
+    boost::iostreams::filtering_istream ldsc_marker;
+    ldsc_marker.push(boost::iostreams::gzip_decompressor());
+    ldsc_marker.push(raw_file);
+    string line;
+    while(std::getline(ldsc_marker, line)) {
         line_number ++;
-        std::istringstream linebuf(strbuf);
+        std::istringstream linebuf(line);
         std::istream_iterator<string> begin(linebuf), end;
         vector<string> line_elements(begin, end);
         if(line_elements.size() == 4) {
@@ -1790,7 +1795,8 @@ vector<string> read_ld_score_gz(string filestr, map<string,int> snplist_map, vec
             ld_score_snps.push_back(snpbuf);
         }
     }
-    ldsc_marker.close();
+    ldsc_marker.reset();
+    raw_file.close();
     return ld_score_snps;
 }
 
@@ -2274,7 +2280,7 @@ eigenMatrix mtcojo_cond_multiple_covars(eigenVector bzy, eigenVector bzy_se,  ei
 
     double var_bzx_buf = 0.0, cov_bzx_bzy = 0.0;
     eigenVector bjxy(ncovar);
-    MatrixXd d_mat = MatrixXd::Zero(ncovar,ncovar), r_mat = MatrixXd::Identity(ncovar, ncovar);
+    Eigen::MatrixXd d_mat = Eigen::MatrixXd::Zero(ncovar,ncovar), r_mat = Eigen::MatrixXd::Identity(ncovar, ncovar);
     
     for(i=0; i<ncovar; i++) {
         d_mat(i,i) = sqrt(ldsc_slope(i+1, i+1)*vp_trait(i+1));
@@ -2288,7 +2294,7 @@ eigenMatrix mtcojo_cond_multiple_covars(eigenVector bzy, eigenVector bzy_se,  ei
     
     double d_buf = 0.0;
     eigenVector bjxy_buf(ncovar), se_bzx_bzy(ncovar);
-    eigenMatrix bzx_se_buf=MatrixXd::Zero(ncovar,ncovar), bzx_intercept=MatrixXd::Identity(ncovar,ncovar);
+    eigenMatrix bzx_se_buf=Eigen::MatrixXd::Zero(ncovar,ncovar), bzx_intercept=Eigen::MatrixXd::Identity(ncovar,ncovar);
     for(i=0; i<(ncovar-1); i++) {
         for(j=i+1; j<ncovar; j++) {
             bzx_intercept(i,j) = bzx_intercept(j,i) = ldsc_intercept(i+1, j+1);

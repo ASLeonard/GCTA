@@ -11,6 +11,9 @@
  */
 
 #include "gcta.h"
+#include <fstream>
+#include <boost/iostreams/filter/gzip.hpp>
+#include <boost/iostreams/filtering_stream.hpp>
 
 /////////////////
 // data functions
@@ -195,7 +198,7 @@ void gcta::make_grm_mkl(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool o
 
     // count the number of missing genotypes
     vector< vector<int> > miss_pos(n);
-    bool * X_bool = new bool[n * m];
+    std::vector<bool> X_bool(static_cast<size_t>(n) * m);
     for (i = 0; i < n; i++) {
         for (j = 0; j < m; j++) {
             k = i * m + j;
@@ -276,7 +279,6 @@ void gcta::make_grm_mkl(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool o
                 else _geno_mkl[k] = 0.0;
             }
         }
-        delete[] X_bool;
     } else {
         // Output A_N and A
         string out_buf = _out;
@@ -286,7 +288,6 @@ void gcta::make_grm_mkl(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool o
 
         // free memory
         delete[] _geno_mkl;
-        delete[] X_bool;
         delete[] _grm_mkl;
     }
 }
@@ -320,16 +321,19 @@ void gcta::output_grm_mkl(float* A, bool output_grm_bin)
     } else {
         // Save A matrix in txt format
         grm_file = _out + ".grm.gz";
-        gzofstream zoutf;
-        zoutf.open(grm_file.c_str());
-        if (!zoutf.is_open()) LOGGER.e(0, "cannot open the file [" + grm_file + "] to write.");
+        std::ofstream raw_file(grm_file, std::ios::binary);
+        if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + grm_file + "] to write.");
+        boost::iostreams::filtering_ostream zoutf;
+        zoutf.push(boost::iostreams::gzip_compressor());
+        zoutf.push(raw_file);
         LOGGER << "Saving the genetic relationship matrix to the file [" + grm_file + "] (in compressed text format)." << endl;
         zoutf.setf(ios::scientific);
         zoutf.precision(6);
         for (i = 0; i < n; i++) {
             for (j = 0; j <= i; j++) zoutf << i + 1 << '\t' << j + 1 << '\t' << _grm_N(i,j) << '\t' << A[i * n + j] << endl;
         }
-        zoutf.close();
+        zoutf.reset();
+        raw_file.close();
         LOGGER << "The genetic relationship matrix has been saved in the file [" + grm_file + "] (in compressed text format)." << endl;
     }
 
@@ -359,14 +363,11 @@ bool gcta::comput_inverse_logdet_LDLT_mkl(eigenMatrix &Vi, double &logdet)
     }
     //LOGGER << "Finished copy" << endl;
 
-    // MKL's Cholesky decomposition
-    int info = 0, int_n = (int) n;
+    // Cholesky decomposition
+    gcta_blas_int info = 0;
+    gcta_blas_int int_n = (gcta_blas_int) n;
     char uplo = 'L';
-#if GCTA_CPU_x86
     dpotrf(&uplo, &int_n, Vi_mkl, &int_n, &info);
-#else
-    dpotrf_(&uplo, &int_n, Vi_mkl, &int_n, &info);
-#endif
     //LOGGER << "Finished decompose" << endl;
     //spotrf( &uplo, &n, Vi_mkl, &n, &info );
     if (info < 0){
@@ -383,11 +384,7 @@ bool gcta::comput_inverse_logdet_LDLT_mkl(eigenMatrix &Vi, double &logdet)
 
         //LOGGER << "start inverse" << endl;
         // Calcualte V inverse
-#if GCTA_CPU_x86
         dpotri(&uplo, &int_n, Vi_mkl, &int_n, &info);
-#else
-        dpotri_(&uplo, &int_n, Vi_mkl, &int_n, &info);
-#endif
         //LOGGER << "Inverse finished" << endl;
         //spotri( &uplo, &n, Vi_mkl, &n, &info );
         if (info < 0){
@@ -423,20 +420,15 @@ bool gcta::comput_inverse_logdet_LU_mkl(eigenMatrix &Vi, double &logdet)
         }
     }
 
-    int N = (int) n;
-    int *IPIV = new int[n + 1];
-    int LWORK = N*N;
+    gcta_blas_int N = (gcta_blas_int) n;
+    std::vector<gcta_blas_int> IPIV(n + 1);
+    gcta_blas_int LWORK = N * N;
     double *WORK = new double[n * n];
-    int INFO;
-#if GCTA_CPU_x86
-    dgetrf(&N, &N, Vi_mkl, &N, IPIV, &INFO);
-#else
-    dgetrf_(&N, &N, Vi_mkl, &N, IPIV, &INFO);
-#endif
+    gcta_blas_int INFO = 0;
+    dgetrf(&N, &N, Vi_mkl, &N, IPIV.data(), &INFO);
     if (INFO < 0) LOGGER.e(0, "LU decomposition failed. Invalid values found in the matrix.\n");
     else if (INFO > 0) {
         delete[] Vi_mkl;
-        delete[] IPIV;
         delete[] WORK;
         return false;
     } else {
@@ -447,16 +439,11 @@ bool gcta::comput_inverse_logdet_LU_mkl(eigenMatrix &Vi, double &logdet)
         }
 
         // Calcualte V inverse
-#if GCTA_CPU_x86
-        dgetri(&N, Vi_mkl, &N, IPIV, WORK, &LWORK, &INFO);
-#else
-        dgetri_(&N, Vi_mkl, &N, IPIV, WORK, &LWORK, &INFO);
-#endif
+        dgetri(&N, Vi_mkl, &N, IPIV.data(), WORK, &LWORK, &INFO);
         if (INFO < 0){
             LOGGER.e(0, "invalid values found in the variance-covariance (V) matrix.\n");
         }else if (INFO > 0){
             delete[] Vi_mkl;
-            delete[] IPIV;
             delete[] WORK;
             return false;
         }else {
@@ -469,7 +456,6 @@ bool gcta::comput_inverse_logdet_LU_mkl(eigenMatrix &Vi, double &logdet)
 
     // free memory
     delete[] Vi_mkl;
-    delete[] IPIV;
     delete[] WORK;
 
     return true;
@@ -485,21 +471,16 @@ bool gcta::comput_inverse_logdet_LU_mkl_array(int n, float *Vi, double &logdet) 
         }
     }
 
-    int N = (int) n;
-    int *IPIV = new int[n + 1];
-    int LWORK = N*N;
+    gcta_blas_int N = (gcta_blas_int) n;
+    std::vector<gcta_blas_int> IPIV(n + 1);
+    gcta_blas_int LWORK = N * N;
     double *WORK = new double[n * n];
-    int INFO;
-#if GCTA_CPU_x86
-    dgetrf(&N, &N, Vi_mkl, &N, IPIV, &INFO);
-#else
-    dgetrf_(&N, &N, Vi_mkl, &N, IPIV, &INFO);    
-#endif
+    gcta_blas_int INFO = 0;
+    dgetrf(&N, &N, Vi_mkl, &N, IPIV.data(), &INFO);
     if (INFO < 0) LOGGER.e(0, "LU decomposition failed. Invalid values found in the matrix.\n");
     else if (INFO > 0) {
         // free memory
         delete[] Vi_mkl;
-        delete[] IPIV;
         delete[] WORK;
 
         return (false); //Vi.diagonal()=Vi.diagonal().array()+Vi.diagonal().mean()*1e-3;
@@ -511,16 +492,11 @@ bool gcta::comput_inverse_logdet_LU_mkl_array(int n, float *Vi, double &logdet) 
         }
 
         // Calcualte V inverse
-#if GCTA_CPU_x86
-        dgetri(&N, Vi_mkl, &N, IPIV, WORK, &LWORK, &INFO);
-#else
-        dgetri_(&N, Vi_mkl, &N, IPIV, WORK, &LWORK, &INFO);
-#endif
+        dgetri(&N, Vi_mkl, &N, IPIV.data(), WORK, &LWORK, &INFO);
         if (INFO < 0) LOGGER.e(0, "invalid values found in the variance-covariance (V) matrix.\n");
         else if (INFO > 0) {
             // free memory
             delete[] Vi_mkl;
-            delete[] IPIV;
             delete[] WORK;
             return (false); // Vi.diagonal()=Vi.diagonal().array()+Vi.diagonal().mean()*1e-3;
         }else {
@@ -533,7 +509,6 @@ bool gcta::comput_inverse_logdet_LU_mkl_array(int n, float *Vi, double &logdet) 
 
     // free memory
     delete[] Vi_mkl;
-    delete[] IPIV;
     delete[] WORK;
 
     return true;
