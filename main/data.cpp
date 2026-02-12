@@ -14,11 +14,15 @@
 #include <iterator>
 #include <set>
 #include <fstream>
+#include <limits>
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
 #include "gcta.h"
 #include "Logger.h"
 #include "StrFunc.h"
+
+// Constant for missing dosage values
+const double DOSAGE_NA = std::numeric_limits<double>::infinity();
 
 gcta::gcta(int autosome_num, double rm_ld_cutoff, string out)
 {
@@ -280,7 +284,7 @@ void gcta::read_bedfile(string bedfile)
  * 
  * Genotype encoding in PLINK bed format (SNP-major):
  *   00 -> Homozygous for allele 1 (coded as 2)
- *   01 -> Missing (coded as 1e6)
+ *   01 -> Missing (coded as DOSAGE_NA)
  *   10 -> Heterozygous (coded as 1)
  *   11 -> Homozygous for allele 2 (coded as 0)
  *
@@ -300,7 +304,7 @@ void gcta::read_bedfile(string bedfile)
  *   - RR (homozygous for reference) = 0
  *   - RA (heterozygous) = 2p (where p is allele frequency)
  *   - AA (homozygous for alternate) = 4p - 2
- *   - Missing values are set to 1e6
+ *   - Missing values are set to DOSAGE_NA
  * 
  * Prerequisites:
  *   - read_famfile() must be called first to initialize individuals
@@ -317,14 +321,40 @@ void gcta::read_bedfile(string bedfile)
  *   mydata.read_bed_dosage("mydata.bed");
  *   // Now _geno_dose matrix is filled with dosage values
  */
- //TODO: check allele order is correct
- //TODO: write _geno_dose to file for debugging
- //TODO: check additive mode matches direct bfile reading
- //TODO: file is wrong
+
+// Helper function: Convert PLINK BED genotype bits to reference allele count
+// Returns: -1 for missing, 0-2 for reference allele count
+inline int gcta::bed_to_ref_allele_count(bool bit1, bool bit2, int snp_indx) {
+    // Check for missing genotype (01 in original encoding)
+    if (bit2 && !bit1) {
+        return -1; // Missing
+    }
+    
+    // Valid genotype: bit1 + bit2 gives count of allele1
+    int geno = bit1 + bit2; // geno: 2=homA1, 1=het, 0=homA2
+    
+    // Convert to reference allele count
+    if (_allele1[_include[snp_indx]] == _ref_A[_include[snp_indx]]) {
+        // allele1 is reference
+        return geno;
+    } else if (_allele2[_include[snp_indx]] == _ref_A[_include[snp_indx]]) {
+        // allele2 is reference
+        return 2 - geno;
+    } else {
+        // Neither allele matches reference (shouldn't happen)
+        LOGGER.e(0, "Reference allele [" + _ref_A[_include[snp_indx]] +
+                 "] for SNP [" + _snp_name[_include[snp_indx]] +
+                 "] doesn't match either allele1 [" + _allele1[_include[snp_indx]] +
+                 "] or allele2 [" + _allele2[_include[snp_indx]] + "]");
+        return -1; // unreachable
+    }
+}
+
 void gcta::read_bed_dosage(string bedfile)
 {
     // This function reads plink bed files and fills _geno_dose matrix
     // with dosage values calculated from genotypes and allele frequencies
+    // Uses a two-pass approach to avoid loading all genotypes into memory
     
     int i = 0, j = 0, k = 0;
     
@@ -346,11 +376,6 @@ void gcta::read_bed_dosage(string bedfile)
         _geno_dose[i].resize(_include.size());
     }
     
-    // Temporary storage for raw genotypes: [SNP][individual]
-    // We'll use a two-pass approach:
-    // Pass 1: Calculate allele frequencies
-    // Pass 2: Fill dosage matrix
-    
     LOGGER << "Reading PLINK BED file from [" + bedfile + "] in SNP-major format ..." << endl;
     
     // Calculate allele frequencies using _mu
@@ -364,6 +389,7 @@ void gcta::read_bed_dosage(string bedfile)
         
         char ch[1];
         bitset<8> b;
+        bool missing_warned = false;
         
         // Skip the first three bytes (magic numbers)
         for (i = 0; i < 3; i++) BIT.read(ch, 1);
@@ -391,35 +417,15 @@ void gcta::read_bed_dosage(string bedfile)
                     bool bit2 = !b[k++];
                     
                     if (rindi[i]) {
-                        // Calculate genotype per PLINK BED spec: 00->homA1, 01->missing, 10->het, 11->homA2
-                        // After bit flip: bit2=1,bit1=1 -> homA1(2), bit2=1,bit1=0 -> missing,
-                        //                 bit2=0,bit1=1 -> het(1), bit2=0,bit1=0 -> homA2(0)
-                        if (bit2 && !bit1) {
-                            // Missing genotype (01 in original encoding)
-                            // Skip missing data
-                        } else {
-                            // Valid genotype
-                            int geno = bit1 + bit2; // geno: 2=homA1, 1=het, 0=homA2
-
-                            // Count copies of the reference allele
-                            // geno represents count of allele1, so:
-                            // - If allele1 is reference: count = geno
-                            // - If allele2 is reference: count = 2 - geno
-                            int ref_allele_count;
-                            if (_allele1[_include[snp_indx]] == _ref_A[_include[snp_indx]]) {
-                                // allele1 is reference
-                                ref_allele_count = geno;
-                            } else if (_allele2[_include[snp_indx]] == _ref_A[_include[snp_indx]]) {
-                                // allele2 is reference
-                                ref_allele_count = 2 - geno;
-                            } else {
-                                // Neither allele matches reference (shouldn't happen)
-                                LOGGER.e(0, "Reference allele [" + _ref_A[_include[snp_indx]] +
-                                         "] for SNP [" + _snp_name[_include[snp_indx]] +
-                                         "] doesn't match either allele1 [" + _allele1[_include[snp_indx]] +
-                                         "] or allele2 [" + _allele2[_include[snp_indx]] + "]");
+                        int ref_allele_count = bed_to_ref_allele_count(bit1, bit2, snp_indx);
+                        
+                        if (ref_allele_count == -1) {
+                            // Missing genotype
+                            if (!missing_warned) {
+                                LOGGER << "Warning: missing values detected in the genotype data." << endl;
+                                missing_warned = true;
                             }
-
+                        } else {
                             allele_count += ref_allele_count;
                             valid_count++;
                         }
@@ -429,8 +435,6 @@ void gcta::read_bed_dosage(string bedfile)
             }
             
             // Calculate mean reference allele count (dosage: 0-2)
-            // This represents the mean number of reference alleles per individual
-            // Dividing by 2 gives the reference allele frequency (0-1)
             if (valid_count > 0) {
                 _mu[_include[snp_indx]] = (double)allele_count / (double)valid_count;
             } else {
@@ -458,14 +462,15 @@ void gcta::read_bed_dosage(string bedfile)
         for (i = 0; i < 3; i++) BIT.read(ch, 1);
         
         int snp_indx = 0;
-        bool missing_warned = false;
-        
         for (j = 0, snp_indx = 0; j < _snp_num; j++) {
             if (!rsnp[j]) {
                 // Skip SNPs not in _include
                 for (i = 0; i < _indi_num; i += 4) BIT.read(ch, 1);
                 continue;
             }
+            
+            // Get allele frequency for reference allele
+            double p = _mu[_include[snp_indx]] / 2.0; // Convert from dosage (0-2) to frequency (0-1)
             
             int indi_indx = 0;
             for (i = 0; i < _indi_num;) {
@@ -479,38 +484,14 @@ void gcta::read_bed_dosage(string bedfile)
                     bool bit2 = !b[k++];
                     
                     if (rindi[i]) {
-                        // Convert genotype to dosage
-                        if (bit2 && !bit1) {
-                            // Missing genotype (01 in original encoding)
-                            //const float DOSAGE_NA = -9999.0f;
-                            _geno_dose[indi_indx][snp_indx] = 1e6; // Missing value indicator
-                            if (!missing_warned) {
-                                LOGGER << "Warning: missing values detected in the genotype data." << endl;
-                                missing_warned = true;
-                            }
+                        int geno = bed_to_ref_allele_count(bit1, bit2, snp_indx);
+                        
+                        if (geno == -1) {
+                            // Missing genotype
+                            _geno_dose[indi_indx][snp_indx] = DOSAGE_NA;
                         } else {
                             // Valid genotype: convert to dosage based on model
                             float dosage = 0.0f;
-                            int geno = bit1 + bit2; // Raw genotype: geno=2 is homA1, geno=0 is homA2, geno=1 is het
-                            
-                            // Convert geno to count of reference alleles
-                            // geno represents count of allele1, so we need to adjust if allele2 is reference
-                            if (_allele1[_include[snp_indx]] == _ref_A[_include[snp_indx]]) {
-                                // allele1 is reference, geno already represents reference allele count
-                                // geno stays as is: 0, 1, or 2
-                            } else if (_allele2[_include[snp_indx]] == _ref_A[_include[snp_indx]]) {
-                                // allele2 is reference, flip to count allele2 instead
-                                geno = 2 - geno; // Flip: 0->2, 1->1, 2->0
-                            } else {
-                                // Neither allele matches reference (shouldn't happen)
-                                LOGGER.e(0, "Reference allele [" + _ref_A[_include[snp_indx]] +
-                                         "] for SNP [" + _snp_name[_include[snp_indx]] +
-                                         "] doesn't match either allele1 [" + _allele1[_include[snp_indx]] +
-                                         "] or allele2 [" + _allele2[_include[snp_indx]] + "]");
-                            }
-                            
-                            // Get allele frequency for reference allele (already calculated in first pass)
-                            double p = _mu[_include[snp_indx]] / 2.0; // Convert from dosage (0-2) to frequency (0-1)
                             
                             switch (_genetic_model) {
                                 case GeneticModel::ADDITIVE:
@@ -520,7 +501,6 @@ void gcta::read_bed_dosage(string bedfile)
                                     
                                 case GeneticModel::NONADDITIVE:
                                     // Nonadditive model: RR=0, RA=2p, AA=4p-2
-                                    // geno is now with respect to reference allele
                                     if (geno == 0) {
                                         dosage = 0.0f; // RR (homozygous non-reference)
                                     } else if (geno == 1) {
@@ -1173,7 +1153,7 @@ void gcta::read_imp_dose_mach_gz(string zdosefile, string kp_indi_file, string r
                     LOGGER << "Warning: missing values detected in the dosage data." << endl;
                     missing = true;
                 }
-                f_buf = 1e6;
+                f_buf = DOSAGE_NA;
             }
             if (rsnp[i]) {
                 _geno_dose[k][j] = (f_buf);
@@ -1280,7 +1260,7 @@ void gcta::read_imp_dose_mach(string dosefile, string kp_indi_file, string rm_in
                     LOGGER << "Warning: missing values detected in the dosage data." << endl;
                     missing = true;
                 }
-                f_buf = 1e6;
+                f_buf = DOSAGE_NA;
             }
             if (rsnp[i]) {
                 _geno_dose[k][j] = (f_buf);
@@ -1520,7 +1500,7 @@ void gcta::dose2bed() {
     for (i = 0; i < _include.size(); i++) {  
         for (j = 0; j < _keep.size(); j++) {
            d_buf = _geno_dose[_keep[j]][_include[i]];
-            if (d_buf > 1e5) {
+            if (d_buf >= DOSAGE_NA) {
                 _snp_2[_include[i]][_keep[j]] = false;
                 _snp_1[_include[i]][_keep[j]] = true;
             } else if (d_buf >= 1.5) _snp_1[_include[i]][_keep[j]] = _snp_2[_include[i]][_keep[j]] = true;
@@ -1918,7 +1898,7 @@ void gcta::mu_func(int j, vector<double> &fac) {
     double fcount = 0.0, f_buf = 0.0;
     if (_dosage_flag) {
         for (i = 0; i < _keep.size(); i++) {
-            if (_geno_dose[_keep[i]][_include[j]] < 1e5) {
+            if (_geno_dose[_keep[i]][_include[j]] < DOSAGE_NA) {
                 _mu[_include[j]] += fac[i] * _geno_dose[_keep[i]][_include[j]];
                 fcount += fac[i];
             }
@@ -2067,17 +2047,17 @@ bool gcta::make_XMat(Eigen::MatrixXf &X)
     for (i = 0; i < n; i++) {
         if (_dosage_flag) {
             for (j = 0; j < m; j++) {
-                if (_geno_dose[_keep[i]][_include[j]] < 1e5) {
+                if (_geno_dose[_keep[i]][_include[j]] < DOSAGE_NA) {
                     if (_allele1[_include[j]] == _ref_A[_include[j]]) X(i,j) = _geno_dose[_keep[i]][_include[j]];
                     else X(i,j) = 2.0 - _geno_dose[_keep[i]][_include[j]];
                 } 
                 else {
-                    X(i,j) = 1e6;
+                    X(i,j) = DOSAGE_NA;
                     have_mis = true;
                 }
             }
             _geno_dose[i].clear();
-        } 
+        }
         else {
             for (j = 0; j < _include.size(); j++) {
                 if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
@@ -2085,7 +2065,7 @@ bool gcta::make_XMat(Eigen::MatrixXf &X)
                     else X(i,j) = 2.0 - (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
                 } 
                 else {
-                    X(i,j) = 1e6;
+                    X(i,j) = DOSAGE_NA;
                     have_mis = true;
                 }
             }
@@ -2108,7 +2088,7 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
     for (i = 0; i < n; i++) {
         if (_dosage_flag) {
             for (j = 0; j < m; j++) {
-                if (_geno_dose[_keep[i]][_include[j]] < 1e5) {
+                if (_geno_dose[_keep[i]][_include[j]] < DOSAGE_NA) {
                     if (_allele1[_include[j]] == _ref_A[_include[j]]) X(i,j) = _geno_dose[_keep[i]][_include[j]];
                     else X(i,j) = 2.0 - _geno_dose[_keep[i]][_include[j]];
                     if (X(i,j) < 0.5) X(i,j) = 0.0;
@@ -2116,12 +2096,12 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
                     else X(i,j) = (2.0 * _mu[_include[j]] - 2.0);
                 } 
                 else {
-                    X(i,j) = 1e6;
+                    X(i,j) = DOSAGE_NA;
                     have_mis = true;
                 }
             }
             _geno_dose[i].clear();
-        } 
+        }
         else {
             for (j = 0; j < _include.size(); j++) {
                 if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
@@ -2132,7 +2112,7 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
                     else X(i,j) = (2.0 * _mu[_include[j]] - 2.0);
                 } 
                 else{
-                    X(i,j) = 1e6;
+                    X(i,j) = DOSAGE_NA;
                     have_mis = true;
                 }
             }
@@ -2163,7 +2143,7 @@ void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag,
     #pragma omp parallel for private(j)
     for (i = 0; i < n; i++) {
         for (j = 0; j < m; j++) {
-            if (X(i,j) < 1e5) {
+            if (X(i,j) < DOSAGE_NA) {
                 X(i,j) -= _mu[_include[j]];
                 if (divid_by_std) X(i,j) *= sd_SNP[j];
             } 
@@ -2181,7 +2161,7 @@ void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag,
     for (i = 0; i < n; i++) {
         if (_sex[_keep[i]] == 1) {
             for (j = 0; j < m; j++) {
-                if (X(i,j) < 1e5) X(i,j) *= f_buf;
+                if (X(i,j) < DOSAGE_NA) X(i,j) *= f_buf;
                 else if (miss_with_mu) X(i,j) = 0.0;
             }
         }
@@ -2222,7 +2202,7 @@ void gcta::std_XMat_d(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu
     #pragma omp parallel for private(j)
     for (i = 0; i < n; i++) {
         for (j = 0; j < m; j++) {
-            if (X(i,j) < 1e5) {
+            if (X(i,j) < DOSAGE_NA) {
                 X(i,j) -= psq[j];
                 if (divid_by_std) X(i,j) *= sd_SNP[j];
             } 
@@ -2300,7 +2280,7 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
         zoutf << _fid[_keep[i]] << ' ' << _pid[_keep[i]] << ' ';
         if (_dosage_flag) {
             for (j = 0; j < _include.size(); j++) {
-                if (_geno_dose[_keep[i]][_include[j]] < 1e5) {
+                if (_geno_dose[_keep[i]][_include[j]] < DOSAGE_NA) {
                     if (_allele1[_include[j]] == _ref_A[_include[j]]) x_buf = _geno_dose[_keep[i]][_include[j]];
                     else x_buf = 2.0 - _geno_dose[_keep[i]][_include[j]];
                     if(std) x_buf = (x_buf - _mu[_include[j]]) * sd_SNP(j);
@@ -2349,7 +2329,7 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, vector<int> &snp_indx, bool divi
         for (i = 0; i < n; i++) {
             for (j = 0; j < m; j++) {
                 k = _include[snp_indx[j]];
-                if (_geno_dose[_keep[i]][k] < 1e5) {
+                if (_geno_dose[_keep[i]][k] < DOSAGE_NA) {
                     if (_allele1[k] == _ref_A[k]) X(i,j) = _geno_dose[_keep[i]][k];
                     else X(i,j) = 2.0 - _geno_dose[_keep[i]][k];
                     X(i,j) -= _mu[k];

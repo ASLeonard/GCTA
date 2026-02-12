@@ -92,6 +92,7 @@ public:
     void read_bimfile(std::string bimfile);
     void read_bedfile(std::string bedfile);
     void read_bed_dosage(std::string bedfile); // Read bed file and fill _geno_dose with dosage calculated from genotypes
+    int bed_to_ref_allele_count(bool bit1, bool bit2, int snp_indx); // Helper: convert BED bits to reference allele count
     std::vector<std::string> read_bfile_list(std::string bfile_list);
     void read_multi_famfiles(std::vector<std::string> multi_bfiles);
     void read_multi_bimfiles(std::vector<std::string> multi_bfiles);
