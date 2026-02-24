@@ -135,7 +135,7 @@ void option(int option_num, char* option_str[])
 
     // mixed linear model association 
     bool mlma_flag = false, mlma_loco_flag = false, mlma_no_adj_covar = false;
-    bool save_reml_flag = false, load_reml_flag = false;
+    bool save_reml_flag = false;
     string subtract_grm_file = "", save_reml_file = "", load_reml_file = "";
 
     // Fst
@@ -954,8 +954,9 @@ void option(int option_num, char* option_str[])
             save_reml_flag = true;
             LOGGER << "--save-reml" << endl;
         } else if (strcmp(argv[i], "--load-reml") == 0) {
-            load_reml_flag = true;
-            LOGGER << "--load-reml" << endl;
+            load_reml_file = argv[++i];
+            LOGGER << "--load-reml " << load_reml_file << endl;
+            CommFunc::FileExist(load_reml_file);
         } else if (strcmp(argv[i], "--fst") == 0) {
             fst_flag = true;
             LOGGER << "--fst " << endl;
@@ -1229,10 +1230,6 @@ void option(int option_num, char* option_str[])
         }
     }
     if (save_reml_flag) save_reml_file = out + ".reml.bin.gz";
-    if (load_reml_flag) {
-        load_reml_file = out + ".reml.bin.gz";
-        CommFunc::FileExist(load_reml_file);
-    }
 
     // conflicted options
     LOGGER << endl;
@@ -1292,6 +1289,7 @@ void option(int option_num, char* option_str[])
         if ((!save_reml_file.empty() || !load_reml_file.empty()) && mlma_loco_flag) LOGGER.e(0, "--save-reml and --load-reml are not supported with --mlma-loco.");
         if (!load_reml_file.empty() && !mlma_flag) LOGGER.e(0, "--load-reml can only be used with --mlma.");
         if (!save_reml_file.empty() && !mlma_flag) LOGGER.e(0, "--save-reml can only be used with --mlma.");
+        if (!save_reml_file.empty() && !grm_flag && !m_grm_flag) LOGGER.e(0, "--save-reml requires an explicit GRM via --grm or --mgrm.");
     }
     if(bivar_reml_flag && prevalence_flag) LOGGER.e(0, "--prevalence option is not compatible with --reml-bivar option. Please check the --reml-bivar-prevalence option!");
     if(gsmr_flag || mtcojo_flag){
@@ -1371,6 +1369,9 @@ void option(int option_num, char* option_str[])
             }
             // Read the list, if there are multiple bfiles
             if(bfile_flag==2) multi_bfiles = pter_gcta->read_bfile_list(bfile_list);
+            // For --save-reml --mlma only the .fam is needed to build the sample intersection;
+            // the .bim and .bed data are not loaded.
+            const bool fam_only = save_reml_flag && mlma_flag;
             // Start to read the genotypes
             if(bfile_flag==1) pter_gcta->read_famfile(bfile + ".fam");
             else pter_gcta->read_multi_famfiles(multi_bfiles);
@@ -1378,47 +1379,49 @@ void option(int option_num, char* option_str[])
             if (!rm_indi_file.empty()) pter_gcta->remove_indi(rm_indi_file);
             if (!update_sex_file.empty()) pter_gcta->update_sex(update_sex_file);
             if (!blup_indi_file.empty()) pter_gcta->read_indi_blup(blup_indi_file);
-            if(bfile_flag==1) pter_gcta->read_bimfile(bfile + ".bim");
-            else pter_gcta->read_multi_bimfiles(multi_bfiles);
-            if (!extract_snp_file.empty()) pter_gcta->extract_snp(extract_snp_file);
-            if (extract_chr_start > 0) pter_gcta->extract_chr(extract_chr_start, extract_chr_end);
-            if(extract_region_chr>0) pter_gcta->extract_region_bp(extract_region_chr, extract_region_bp, extract_region_wind);
-            if (!extract_snp_name.empty()){
-                if(extract_region_wind>0) pter_gcta->extract_region_snp(extract_snp_name, extract_region_wind);
-                else pter_gcta->extract_single_snp(extract_snp_name);
-            }
-            if (!exclude_snp_file.empty()) pter_gcta->exclude_snp(exclude_snp_file);
-            if(exclude_region_chr>0) pter_gcta->exclude_region_bp(exclude_region_chr, exclude_region_bp, exclude_region_wind);
-            if (!exclude_snp_name.empty()) {
-                if(exclude_region_wind>0) pter_gcta->exclude_region_snp(exclude_snp_name, exclude_region_wind);
-                else pter_gcta->exclude_single_snp(exclude_snp_name);
-            }
-            if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
-            if (LD) pter_gcta->read_LD_target_SNPs(LD_file);
-            if(gsmr_flag) pter_gcta->read_gsmrfile(expo_file_list, outcome_file_list, gwas_thresh, nsnp_gsmr, gsmr_so_alg);
-            if(mtcojo_flag) nsnp_read = pter_gcta->read_mtcojofile(mtcojolist_file, gwas_thresh, nsnp_gsmr);
-            if(mtcojo_flag && nsnp_read>0) {
-                if(bfile_flag==1) {
-                    if (genetic_model != "") {
-                        pter_gcta->read_bed_dosage(bfile + ".bed");
-                    } else {
-                        pter_gcta->read_bedfile(bfile + ".bed");
-                    }
-                } else {
-                    pter_gcta->read_multi_bedfiles(multi_bfiles);
+            if (!fam_only) {
+                if(bfile_flag==1) pter_gcta->read_bimfile(bfile + ".bim");
+                else pter_gcta->read_multi_bimfiles(multi_bfiles);
+                if (!extract_snp_file.empty()) pter_gcta->extract_snp(extract_snp_file);
+                if (extract_chr_start > 0) pter_gcta->extract_chr(extract_chr_start, extract_chr_end);
+                if(extract_region_chr>0) pter_gcta->extract_region_bp(extract_region_chr, extract_region_bp, extract_region_wind);
+                if (!extract_snp_name.empty()){
+                    if(extract_region_wind>0) pter_gcta->extract_region_snp(extract_snp_name, extract_region_wind);
+                    else pter_gcta->extract_single_snp(extract_snp_name);
                 }
-            }
-            if(!mtcojo_flag){
-                if(bfile_flag==1) {
-                    if (genetic_model != "") {
-                        pter_gcta->read_bed_dosage(bfile + ".bed");
-                    } else {
-                        pter_gcta->read_bedfile(bfile + ".bed");
-                    }
-                } else {
-                    pter_gcta->read_multi_bedfiles(multi_bfiles);
+                if (!exclude_snp_file.empty()) pter_gcta->exclude_snp(exclude_snp_file);
+                if(exclude_region_chr>0) pter_gcta->exclude_region_bp(exclude_region_chr, exclude_region_bp, exclude_region_wind);
+                if (!exclude_snp_name.empty()) {
+                    if(exclude_region_wind>0) pter_gcta->exclude_region_snp(exclude_snp_name, exclude_region_wind);
+                    else pter_gcta->exclude_single_snp(exclude_snp_name);
                 }
-            }
+                if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
+                if (LD) pter_gcta->read_LD_target_SNPs(LD_file);
+                if(gsmr_flag) pter_gcta->read_gsmrfile(expo_file_list, outcome_file_list, gwas_thresh, nsnp_gsmr, gsmr_so_alg);
+                if(mtcojo_flag) nsnp_read = pter_gcta->read_mtcojofile(mtcojolist_file, gwas_thresh, nsnp_gsmr);
+                if(mtcojo_flag && nsnp_read>0) {
+                    if(bfile_flag==1) {
+                        if (genetic_model != "") {
+                            pter_gcta->read_bed_dosage(bfile + ".bed");
+                        } else {
+                            pter_gcta->read_bedfile(bfile + ".bed");
+                        }
+                    } else {
+                        pter_gcta->read_multi_bedfiles(multi_bfiles);
+                    }
+                }
+                if(!mtcojo_flag){
+                    if(bfile_flag==1) {
+                        if (genetic_model != "") {
+                            pter_gcta->read_bed_dosage(bfile + ".bed");
+                        } else {
+                            pter_gcta->read_bedfile(bfile + ".bed");
+                        }
+                    } else {
+                        pter_gcta->read_multi_bedfiles(multi_bfiles);
+                    }
+                }
+            } // end !fam_only
 
             if (!update_impRsq_file.empty()) pter_gcta->update_impRsq(update_impRsq_file);
             if (!update_freq_file.empty()) pter_gcta->update_freq(update_freq_file);
