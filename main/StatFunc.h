@@ -17,7 +17,9 @@
 #include <algorithm>
 #include <iostream>
 #include "CommFunc.h"
-#include "dcdflib.h"
+#include <boost/math/distributions.hpp>
+#include <boost/math/special_functions/gamma.hpp>
+#include <cmath>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <unsupported/Eigen/SparseExtra>
@@ -34,19 +36,8 @@ namespace StatFunc
 
     double F_prob(double df_1, double df_2, double F_value);
 
-    double betai(double a, double b, double x);
-
-    double gammln(double xx);
-
-    double betacf(double a, double b, double x);
-
-    double chi_prob(double df, double chi_sqr_val);
-
-    double gammp(const double a, const double x);
-
-    void gser(double &gamser, const double a, const double x, double &gln);
-
-    void gcf(double &gammcf, const double a, const double x, double &gln);
+    // log_p=true returns ln(p) instead of p, avoiding underflow for extreme chi-squared values
+    double chi_prob(double df, double chi_sqr_val, bool log_p = false);
     ////////// P-value Calculatiion Functions End ////////////////
 
     ///////// Random Number Generation Functions Start ////////
@@ -92,15 +83,14 @@ namespace StatFunc
     void splint(vector<double> &xa, vector<double> &ya, vector<double> &y2a, const double x, double &y);
     vector<double> ControlFDR_BH(const vector<double> p_value);
 
-    // normal distribution
-    double erf(double x);
+    // normal distribution (upper-tail CDF, PDF, and quantile)
     double pnorm(double x);
     double dnorm(double x);
-    double qnorm_sub(double x, double y);
     double qnorm(double p, bool upper = true);
 
     // chisq distribution
-    double pchisq(double x, double df);
+    // log_p=true returns ln(p) instead of p, avoiding underflow for extreme chi-squared values
+    double pchisq(double x, double df, bool log_p = false);
     double qchisq(double q, double df);
     
     // sum of chisq distribution

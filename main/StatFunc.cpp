@@ -13,157 +13,48 @@
 #include <random>
 #include "Logger.h"
 
+namespace {
+
+// Returns ln(Q(a, x)) — the log of the upper regularized incomplete gamma —
+// using Boost for moderate x and a log-space asymptotic expansion for extreme x
+// where gamma_q(a, x) would underflow to zero.
+static double log_gamma_q_upper(double a, double x) {
+    double q = boost::math::gamma_q(a, x);
+    if (q > 0.0) return std::log(q);
+    // Asymptotic expansion coefficients: Q(a,x) ~ exp(-x + (a-1)*ln(x) - lgamma(a)) * S
+    // where S = 1 + (a-1)/x + (a-1)(a-2)/x^2 + ... (truncate before diverging)
+    double log_leading = -x + (a - 1.0) * std::log(x) - std::lgamma(a);
+    double s = 1.0, term = 1.0, min_abs = 1.0;
+    for (int k = 1; k <= 50; ++k) {
+        term *= (a - k) / x;
+        if (std::abs(term) >= min_abs) break;
+        min_abs = std::abs(term);
+        s += term;
+    }
+    return log_leading + std::log(std::abs(s));
+}
+
+} // anonymous namespace
+
 ////////// P-value Calculatiion Functions Start ////////////////
 
 double StatFunc::t_prob(double df, double t_value, bool two_tail) {
-    double p = StatFunc::betai(df * 0.5, 0.5, df / (df + (t_value * t_value)));
-
-    if (two_tail) return p;
-
-    return p * 0.5;
+    double p = boost::math::cdf(
+        boost::math::complement(boost::math::students_t(df), std::abs(t_value)));
+    return two_tail ? 2.0 * p : p;
 }
 
 double StatFunc::F_prob(double df_1, double df_2, double F_value) {
-    return StatFunc::betai(df_2 * 0.5, df_1 * 0.5, df_2 / (df_2 + df_1 * F_value));
+    return boost::math::cdf(
+        boost::math::complement(boost::math::fisher_f(df_1, df_2), F_value));
 }
 
-double StatFunc::betai(double a, double b, double x) {
-    double bt;
-
-    if (x < 0.0 || x > 1.0) LOGGER.e(0, "bad x in routine betai!");
-
-    if (x == 0.0 || x == 1.0) bt = 0.0;
-    else bt = exp(gammln(a + b) - gammln(a) - gammln(b) + a * log(x) + b * log(1.0 - x));
-
-    if (x < (a + 1.0) / (a + b + 2.0)) return bt * betacf(a, b, x) / a;
-    else return 1.0 - bt * betacf(b, a, 1.0 - x) / b;
+double StatFunc::chi_prob(double df, double chi_sqr_val, bool log_p) {
+    if (log_p) return log_gamma_q_upper(df * 0.5, chi_sqr_val * 0.5);
+    return boost::math::cdf(
+        boost::math::complement(boost::math::chi_squared(df), chi_sqr_val));
 }
 
-double StatFunc::gammln(double xx) {
-    int j;
-    double x, y, tmp, ser;
-    static const double cof[6] = {76.18009172947146, -86.50532032941677,
-        24.01409824083091, -1.231739572450155, 0.1208650973866179e-2,
-        -0.5395239384953e-5};
-
-    y = x = xx;
-    tmp = x + 5.5;
-    tmp -= (x + 0.5) * log(tmp);
-    ser = 1.000000000190015;
-    for (j = 0; j < 6; j++) ser += cof[j] / ++y;
-    return -tmp + log(2.5066282746310005 * ser / x);
-}
-
-double StatFunc::betacf(double a, double b, double x) {
-    const int MAXIT = 300;
-    const double Eps = 1.0e-08;
-    const double FPMIN = (std::numeric_limits<double>::min)() / numeric_limits<double>::epsilon();
-    int m, m2;
-    double aa, c, d, del, h, qab, qam, qap;
-
-    qab = a + b;
-    qap = a + 1.0;
-    qam = a - 1.0;
-    c = 1.0;
-    d = 1.0 - qab * x / qap;
-    if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
-    d = 1.0 / d;
-    h = d;
-    for (m = 1; m <= MAXIT; m++) {
-        m2 = 2 * m;
-        aa = m * (b - m) * x / ((qam + m2)*(a + m2));
-        d = 1.0 + aa*d;
-        if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
-        c = 1.0 + aa / c;
-        if (CommFunc::Abs(c) < FPMIN) c = FPMIN;
-        d = 1.0 / d;
-        h *= d*c;
-        aa = -(a + m)*(qab + m) * x / ((a + m2)*(qap + m2));
-        d = 1.0 + aa*d;
-        if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
-        c = 1.0 + aa / c;
-        if (CommFunc::Abs(c) < FPMIN) c = FPMIN;
-        d = 1.0 / d;
-        del = d*c;
-        h *= del;
-        if (CommFunc::Abs(del - 1.0) <= Eps) break;
-    }
-    return h;
-}
-
-double StatFunc::chi_prob(double df, double chi_sqr_val) {
-    return 1 - StatFunc::gammp(df * 0.5, chi_sqr_val * 0.5);
-}
-
-double StatFunc::gammp(const double a, const double x) {
-    double gamser, gammcf, gln;
-
-    if (x < 0.0 || a <= 0.0) LOGGER.e(0, "invalid arguments in routine gammp");
-
-    if (x < a + 1.0) {
-        gser(gamser, a, x, gln);
-        return gamser;
-    } else {
-        gcf(gammcf, a, x, gln);
-        return 1.0 - gammcf;
-    }
-}
-
-void StatFunc::gser(double &gamser, const double a, const double x, double &gln) {
-    const int ITMAX = 500;
-    const double Eps = 1.0e-08;
-    int n;
-    double sum, del, ap;
-
-    gln = gammln(a);
-    if (x <= 0.0) {
-        if (x < 0.0) LOGGER.e(0, "x is less than 0 in routine gser");
-        gamser = 0.0;
-        return;
-    } else {
-        ap = a;
-        del = sum = 1.0 / a;
-        for (n = 0; n < ITMAX; n++) {
-            ++ap;
-            del *= x / ap;
-            sum += del;
-            if (CommFunc::Abs(del) < CommFunc::Abs(sum) * Eps) {
-                gamser = sum * exp(-x + a * log(x) - gln);
-                return;
-            }
-        }
-        LOGGER.e(0, "a is too large, and ITMAX is too small in routine gser");
-        return;
-    }
-}
-
-void StatFunc::gcf(double &gammcf, const double a, const double x, double &gln) {
-    const int ITMAX = 100;
-    const double EPS = numeric_limits<double>::epsilon();
-    const double FPMIN = (std::numeric_limits<double>::min)() / EPS;
-    int i;
-    double an, b, c, d, del, h;
-
-    gln = gammln(a);
-    b = x + 1.0 - a;
-    c = 1.0 / FPMIN;
-    d = 1.0 / b;
-    h = d;
-    for (i = 1; i <= ITMAX; i++) {
-        an = -i * (i - a);
-        b += 2.0;
-        d = an * d + b;
-        if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
-        c = b + an / c;
-        if (CommFunc::Abs(c) < FPMIN) c = FPMIN;
-        d = 1.0 / d;
-        del = d*c;
-        h *= del;
-        if (CommFunc::Abs(del - 1.0) <= EPS) break;
-    }
-    if (i > ITMAX) LOGGER.e(0, "a is too large, and ITMAX is too small in gcf");
-    gammcf = exp(-x + a * log(x) - gln) * h;
-}
 ////////// P-value Calculatiion Functions End ////////////////
 
 ///////// Random Number Generation Functions Start ////////
@@ -314,99 +205,18 @@ int StatFunc::RandAbs(int a, int b, int &seed) { //a,bΪ������Ҷ˵�
 ///////// Random Number Generation Functions End ////////
 
 double StatFunc::chi_val(double df, double prob) {
-    double walk = 100.0;
-    double chi_val = walk;
-    double way = 0.0, preway = 0.0;
-    double prob_buf = chi_prob(df, chi_val);
-
-    if (CommFunc::Abs(prob_buf - prob) < 1.0e-08) return chi_val;
-
-    if (prob_buf > prob) {
-        preway = way = 1.0;
-        chi_val += walk;
-    } else {
-        preway = way = -1.0;
-        chi_val -= walk;
-    }
-
-    while (true) {
-        prob_buf = chi_prob(df, chi_val);
-
-        if (prob_buf > prob) way = 1.0;
-        else way = -1.0;
-
-        if (CommFunc::Abs(preway - way) > 1.0e-08) walk *= 0.5;
-        chi_val += walk*way;
-        preway = way;
-
-        if (walk < 1.0e-08) break;
-    }
-
-    return chi_val;
+    return boost::math::quantile(
+        boost::math::complement(boost::math::chi_squared(df), prob));
 }
 
 double StatFunc::t_val(double df, double prob) {
-    double walk = 100.0;
-    double t_val = walk;
-    double way = 0.0, preway = 0.0;
-    double prob_buf = t_prob(df, t_val, false);
-
-    if (CommFunc::Abs(prob_buf - prob) < 1.0e-08) return t_val;
-
-    if (prob_buf > prob) {
-        preway = way = 1.0;
-        t_val += walk;
-    } else {
-        preway = way = -1.0;
-        t_val -= walk;
-    }
-
-    while (true) {
-        prob_buf = t_prob(df, t_val, false);
-
-        if (prob_buf > prob) way = 1.0;
-        else way = -1.0;
-
-        if (CommFunc::Abs(preway - way) > 1.0e-08) walk *= 0.5;
-        t_val += walk*way;
-        preway = way;
-
-        if (walk < 1.0e-08) break;
-    }
-
-    return t_val;
+    return boost::math::quantile(
+        boost::math::complement(boost::math::students_t(df), prob));
 }
 
 double StatFunc::F_val(double df_1, double df_2, double prob) {
-    double walk = 100.0;
-    double F_val = walk;
-    double way = 0.0, preway = 0.0;
-    double prob_buf = F_prob(df_1, df_2, F_val);
-
-    if (CommFunc::Abs(prob_buf - prob) < 1.0e-08) return F_val;
-
-    if (prob_buf > prob) {
-        preway = way = 1.0;
-        F_val += walk;
-    } else {
-        preway = way = -1.0;
-        F_val -= walk;
-    }
-
-    while (true) {
-        prob_buf = F_prob(df_1, df_2, F_val);
-
-        if (prob_buf > prob) way = 1.0;
-        else way = -1.0;
-
-        if (CommFunc::Abs(preway - way) > 1.0e-08) walk *= 0.5;
-        F_val += walk*way;
-        preway = way;
-
-        if (walk < 1.0e-08) break;
-    }
-
-    return F_val;
+    return boost::math::quantile(
+        boost::math::complement(boost::math::fisher_f(df_1, df_2), prob));
 }
 
 double StatFunc::ControlFDR(const vector<double> &P_Value, double alpha, bool Restrict) {
@@ -563,22 +373,27 @@ void StatFunc::splint(vector<double> &xa, vector<double> &ya, vector<double> &y2
             +(b * b * b - b) * y2a[khi])*(h * h) / 6.0;
 }
 
-double StatFunc::erf(double x) {
-    double a1 = 0.070523084, a2 = 0.0422820123, a3 = 0.0092705272, a4 = 0.0001520143, a5 = 0.0002765672, a6 = 0.0000430638;
-    double tmp = 1 + a1 * x + a2 * pow(x, 2) + a3 * pow(x, 3) + a4 * pow(x, 4) + a5 * pow(x, 5) + a6 * pow(x, 6);
-    return (1 - pow(tmp, -16));
+// Default: upper-tail P(Z > x)
+double StatFunc::pnorm(double x) {
+    return boost::math::cdf(
+        boost::math::complement(boost::math::normal(), x));
 }
 
-/*
-n <- length(p)
-lp <- length(p)
-i <- lp:1L
-o <- order(p, decreasing = TRUE)
-ro <- order(o) #This is the index of the initial p-values, highest to lowest
-pmin(1, cummin(n/i * p[o]))[ro]
-*/
+double StatFunc::dnorm(double x) {
+    return boost::math::pdf(boost::math::normal(), x);
+}
 
-vector<double> StatFunc::ControlFDR_BH(const vector<double> p_value) {
+// qnorm(p, upper=true): returns Phi^{-1}(p), the lower-tail normal quantile.
+// The "upper" parameter controls how p is interpreted when upper=false:
+//   upper=false: finds x such that P(Z > x) = p  (upper-tail quantile)
+double StatFunc::qnorm(double p, bool upper) {
+    if (upper)
+        return boost::math::quantile(boost::math::normal(), p);
+    return boost::math::quantile(
+        boost::math::complement(boost::math::normal(), p));
+}
+
+
     int i = 0, n = p_value.size();
 
     double c = 0.0, min_val = 1.0;
@@ -598,71 +413,35 @@ vector<double> StatFunc::ControlFDR_BH(const vector<double> p_value) {
     return (fdr);
 }
 
-// Default: upper-tail
+// Default: upper-tail P(Z > x)
 double StatFunc::pnorm(double x) {
-    double z = 0.0;
-    if(x>0) z = -1.0 * x;
-    else z = x;
-    double sqrt2pi = 2.50662827463;
-    double t0, z1, p0;
-    t0 = 1 / (1 + 0.2316419 * fabs(z));
-    z1 = exp(-0.5 * z * z) / sqrt2pi;
-    p0 = z1 * t0 * (0.31938153 + t0 * (-0.356563782 + t0 * (1.781477937 + t0 * (-1.821255978 + 1.330274429 * t0))));
-    return x >= 0 ? p0 : 1.0 - p0;
+    return boost::math::cdf(
+        boost::math::complement(boost::math::normal(), x));
 }
 
 double StatFunc::dnorm(double x) {
-    return (0.39894228 * exp(-0.5 * pow(x, 2)));
+    return boost::math::pdf(boost::math::normal(), x);
 }
 
-double StatFunc::qnorm_sub(double x, double y) {
-    return (y + 0.5 * x * pow(y, 2)+(2 * pow(x, 2) + 1) * pow(y, 3) / 6 + (6 * pow(x, 3) + 7 * x) * pow(y, 4) / 12);
-}
-
-// Default: lower-tail
+// qnorm(p, upper=true): returns Phi^{-1}(p), the lower-tail normal quantile.
+// When upper=false: finds x such that P(Z > x) = p (upper-tail quantile).
 double StatFunc::qnorm(double p, bool upper) {
-    double x = 0;
-    if (upper) p = 1 - p;
-    for (int i = 0; i < 4; i++) x = x + qnorm_sub(x, (pnorm(x) - p) / dnorm(x));
-    return (x);
+    if (upper)
+        return boost::math::quantile(boost::math::normal(), p);
+    return boost::math::quantile(
+        boost::math::complement(boost::math::normal(), p));
 }
 
-double StatFunc::pchisq(double x, double df) {
-    if (x < 0) return -9;
-
-    double p, q;
-    int st = 0; // error variable
-    int w = 1; // function variable
-    double bnd = 1; // boundary function
-
-    // NCP is set to 0
-    cdfchi(&w, &p, &q, &x, &df, &st, &bnd);
-
-    // Check status
-    if (st != 0) return -9;
-
-    // Return p-value
-    return q;
+double StatFunc::pchisq(double x, double df, bool log_p) {
+    if (x < 0) return log_p ? std::numeric_limits<double>::quiet_NaN() : -9;
+    return chi_prob(df, x, log_p);
 }
 
 double StatFunc::qchisq(double q, double df) {
     if (q < 0) return -9;
-    else if (q >= 1) return 0;
-
-    double x;
-    double p = 1 - q;
-    int st = 0; // error variable
-    int w = 2; // function variable
-    double bnd = 1; // boundary function
-
-    // NCP is set to 0
-    cdfchi(&w, &p, &q, &x, &df, &st, &bnd);
-
-    // Check status
-    if (st != 0) return -9;
-
-    // Return p-value
-    return x;
+    if (q >= 1) return 0;
+    return boost::math::quantile(
+        boost::math::complement(boost::math::chi_squared(df), q));
 }
 
 //#################
