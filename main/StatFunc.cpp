@@ -12,6 +12,7 @@
 #include "numeric"
 #include <random>
 #include "Logger.h"
+#include <cmath>
 
 ////////// P-value Calculatiion Functions Start ////////////////
 
@@ -66,27 +67,27 @@ double StatFunc::betacf(double a, double b, double x) {
     qam = a - 1.0;
     c = 1.0;
     d = 1.0 - qab * x / qap;
-    if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
+    if (std::abs(d) < FPMIN) d = FPMIN;
     d = 1.0 / d;
     h = d;
     for (m = 1; m <= MAXIT; m++) {
         m2 = 2 * m;
         aa = m * (b - m) * x / ((qam + m2)*(a + m2));
         d = 1.0 + aa*d;
-        if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
+        if (std::abs(d) < FPMIN) d = FPMIN;
         c = 1.0 + aa / c;
-        if (CommFunc::Abs(c) < FPMIN) c = FPMIN;
+        if (std::abs(c) < FPMIN) c = FPMIN;
         d = 1.0 / d;
         h *= d*c;
         aa = -(a + m)*(qab + m) * x / ((a + m2)*(qap + m2));
         d = 1.0 + aa*d;
-        if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
+        if (std::abs(d) < FPMIN) d = FPMIN;
         c = 1.0 + aa / c;
-        if (CommFunc::Abs(c) < FPMIN) c = FPMIN;
+        if (std::abs(c) < FPMIN) c = FPMIN;
         d = 1.0 / d;
         del = d*c;
         h *= del;
-        if (CommFunc::Abs(del - 1.0) <= Eps) break;
+        if (std::abs(del - 1.0) <= Eps) break;
     }
     return h;
 }
@@ -127,7 +128,7 @@ void StatFunc::gser(double &gamser, const double a, const double x, double &gln)
             ++ap;
             del *= x / ap;
             sum += del;
-            if (CommFunc::Abs(del) < CommFunc::Abs(sum) * Eps) {
+            if (std::abs(del) < std::abs(sum) * Eps) {
                 gamser = sum * exp(-x + a * log(x) - gln);
                 return;
             }
@@ -153,13 +154,13 @@ void StatFunc::gcf(double &gammcf, const double a, const double x, double &gln) 
         an = -i * (i - a);
         b += 2.0;
         d = an * d + b;
-        if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
+        if (std::abs(d) < FPMIN) d = FPMIN;
         c = b + an / c;
-        if (CommFunc::Abs(c) < FPMIN) c = FPMIN;
+        if (std::abs(c) < FPMIN) c = FPMIN;
         d = 1.0 / d;
         del = d*c;
         h *= del;
-        if (CommFunc::Abs(del - 1.0) <= EPS) break;
+        if (std::abs(del - 1.0) <= EPS) break;
     }
     if (i > ITMAX) LOGGER.e(0, "a is too large, and ITMAX is too small in gcf");
     gammcf = exp(-x + a * log(x) - gln) * h;
@@ -319,7 +320,7 @@ double StatFunc::chi_val(double df, double prob) {
     double way = 0.0, preway = 0.0;
     double prob_buf = chi_prob(df, chi_val);
 
-    if (CommFunc::Abs(prob_buf - prob) < 1.0e-08) return chi_val;
+    if (std::abs(prob_buf - prob) < 1.0e-08) return chi_val;
 
     if (prob_buf > prob) {
         preway = way = 1.0;
@@ -335,7 +336,7 @@ double StatFunc::chi_val(double df, double prob) {
         if (prob_buf > prob) way = 1.0;
         else way = -1.0;
 
-        if (CommFunc::Abs(preway - way) > 1.0e-08) walk *= 0.5;
+        if (std::abs(preway - way) > 1.0e-08) walk *= 0.5;
         chi_val += walk*way;
         preway = way;
 
@@ -351,7 +352,7 @@ double StatFunc::t_val(double df, double prob) {
     double way = 0.0, preway = 0.0;
     double prob_buf = t_prob(df, t_val, false);
 
-    if (CommFunc::Abs(prob_buf - prob) < 1.0e-08) return t_val;
+    if (std::abs(prob_buf - prob) < 1.0e-08) return t_val;
 
     if (prob_buf > prob) {
         preway = way = 1.0;
@@ -367,7 +368,7 @@ double StatFunc::t_val(double df, double prob) {
         if (prob_buf > prob) way = 1.0;
         else way = -1.0;
 
-        if (CommFunc::Abs(preway - way) > 1.0e-08) walk *= 0.5;
+        if (std::abs(preway - way) > 1.0e-08) walk *= 0.5;
         t_val += walk*way;
         preway = way;
 
@@ -383,7 +384,7 @@ double StatFunc::F_val(double df_1, double df_2, double prob) {
     double way = 0.0, preway = 0.0;
     double prob_buf = F_prob(df_1, df_2, F_val);
 
-    if (CommFunc::Abs(prob_buf - prob) < 1.0e-08) return F_val;
+    if (std::abs(prob_buf - prob) < 1.0e-08) return F_val;
 
     if (prob_buf > prob) {
         preway = way = 1.0;
@@ -399,7 +400,7 @@ double StatFunc::F_val(double df_1, double df_2, double prob) {
         if (prob_buf > prob) way = 1.0;
         else way = -1.0;
 
-        if (CommFunc::Abs(preway - way) > 1.0e-08) walk *= 0.5;
+        if (std::abs(preway - way) > 1.0e-08) walk *= 0.5;
         F_val += walk*way;
         preway = way;
 
@@ -592,7 +593,7 @@ vector<double> StatFunc::ControlFDR_BH(const vector<double> p_value) {
     for( i = 0; i < n; i++ ) {
         c = (double) n / (double) (n-i) * pval_buf[i].first;
         if(c < min_val) min_val = c;
-        fdr[pval_buf[i].second] = CommFunc::Min(1.0, min_val);
+        fdr[pval_buf[i].second] = std::min(1.0, min_val);
     }
 
     return (fdr);

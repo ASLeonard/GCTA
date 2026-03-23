@@ -11,6 +11,7 @@
  */
 
 #include "gcta.h"
+#include <numeric>
 
 void gcta::set_ldscore_adj_flag(bool ldscore_adj){
     _ldscore_adj = ldscore_adj;
@@ -159,7 +160,7 @@ void gcta::EstLD(vector<int> &smpl, double wind_size, vector< vector<string> > &
                 r[i].push_back(r_buf[j]);
                 snp[i].push_back(_snp_name[_include[buf[j]]]);
             }
-            r2[i] = CommFunc::mean(rsq_buf);
+            r2[i] = std::accumulate(rsq_buf.begin(), rsq_buf.end(), 0.0) / rsq_buf.size();
             md_r2[i] = CommFunc::median(rsq_buf);
             i_buf = max_element(rsq_buf.begin(), rsq_buf.end()) - rsq_buf.begin();
             max_r2[i] = rsq_buf[i_buf];
