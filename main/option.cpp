@@ -191,7 +191,7 @@ void option(int option_num, char* option_str[])
     for (i = 0; i < option_num; i++) argv[i] = option_str[i];
     argv[option_num] = const_cast<char*>("gcta");
     argv[option_num + 1] = const_cast<char*>("gcta");
-
+    /*/
     // Detect subcommand (non-flag first argument)
     if (argc > 1 && argv[1][0] != '-') {
         subcommand = argv[1];
@@ -216,7 +216,7 @@ void option(int option_num, char* option_str[])
     }
 
     LOGGER << "Accepted options:" << endl;
-
+    
     // Early exit optimization for mlma: skip irrelevant flags
     constexpr std::array<std::string_view, 18> mlma_flags = {{
         "--bfile", "--pheno", "--mpheno", "--qcovar", "--covar", "--grm",
@@ -225,10 +225,12 @@ void option(int option_num, char* option_str[])
         "--reml-maxit", "--reml-priors", "--reml-priors-var",
         "--reml-no-constrain"
     }};
+    */
+    
 
     for (i = arg_offset; i < argc; i++) {
         std::string_view flag = argv[i];
-
+        /*
         // Early exit: skip unknown flags for mlma subcommand
         if (!subcommand.empty() && subcommand == "mlma") {
             if (std::ranges::find(mlma_flags, flag) == mlma_flags.end()) {
@@ -238,7 +240,7 @@ void option(int option_num, char* option_str[])
                 }
                 continue;
             }
-        }
+        }*/
 
         if (flag == "--thread-num") {
             thread_num = std::atoi(argv[++i]);
