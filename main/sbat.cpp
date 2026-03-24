@@ -220,7 +220,7 @@ void gcta::sbat_gene(string sAssoc_file, string gAnno_file, int wind, double sba
             vector<int> snp_indx;
             for (j = iter1->second; j <= iter2->second; j++) snp_indx.push_back(j);            
             snp_count=snp_num_in_gene[i];
-            VectorXd eigenval;
+            Eigen::VectorXd eigenval;
             vector<int> sub_indx;
             sbat_calcu_lambda(snp_indx, eigenval, snp_count, sbat_ld_cutoff, sub_indx);
             //recalculate chisq value from low correlation snp subset
@@ -381,7 +381,7 @@ void gcta::sbat(string sAssoc_file, string snpset_file, double sbat_ld_cutoff, b
         if(snp_num_in_set[i] == 1) set_pval[i] = StatFunc::pchisq(chisq_o[i], 1.0);
         else {
             snp_count=snp_num_in_set[i];
-            VectorXd eigenval;
+            Eigen::VectorXd eigenval;
             vector<int> sub_indx;
             sbat_calcu_lambda(snp_indx, eigenval, snp_count, sbat_ld_cutoff, sub_indx);
 
@@ -492,7 +492,7 @@ void gcta::sbat_seg(string sAssoc_file, int seg_size, double sbat_ld_cutoff, boo
         if(snp_num_in_set[i] == 1) set_pval[i] = StatFunc::pchisq(chisq_o[i], 1.0);
         else {
             snp_count=snp_num_in_set[i];
-            VectorXd eigenval;
+            Eigen::VectorXd eigenval;
             vector<int> sub_indx;
             sbat_calcu_lambda(snp_indx, eigenval, snp_count, sbat_ld_cutoff, sub_indx);
             //recalculate chisq value from low correlation snp subset
@@ -575,20 +575,20 @@ void gcta::get_sbat_seg_blk(int seg_size, vector< vector<int> > &snp_set_indx, v
     }
 }
 
-void gcta::sbat_calcu_lambda(vector<int> &snp_indx, VectorXd &eigenval, int &snp_count, double sbat_ld_cutoff, vector<int> &sub_indx)
+void gcta::sbat_calcu_lambda(vector<int> &snp_indx, Eigen::VectorXd &eigenval, int &snp_count, double sbat_ld_cutoff, vector<int> &sub_indx)
 {
     int i = 0, j = 0, k = 0, n = _keep.size(), m = snp_indx.size();
 
-    MatrixXf X;
+    Eigen::MatrixXf X;
     make_XMat_subset(X, snp_indx, false);
     vector<int> rm_ID1;
     double R_cutoff = sbat_ld_cutoff;
     int qi = 0; //alternate index
 
-    VectorXd sumsq_x(m);
+    Eigen::VectorXd sumsq_x(m);
     for (j = 0; j < m; j++) sumsq_x[j] = X.col(j).dot(X.col(j));
 
-    MatrixXf C = X.transpose() * X;
+    Eigen::MatrixXf C = X.transpose() * X;
     X.resize(0,0);
     #pragma omp parallel for private(j)
     for (i = 0; i < m; i++) {
@@ -610,7 +610,7 @@ void gcta::sbat_calcu_lambda(vector<int> &snp_indx, VectorXd &eigenval, int &snp
         }
         snp_count = sub_indx.size();
         if (sub_indx.size() < C.size()) { //Build new matrix
-            MatrixXf D(sub_indx.size(),sub_indx.size());
+            Eigen::MatrixXf D(sub_indx.size(),sub_indx.size());
             for (i = 0 ; i < sub_indx.size() ; i++) {
                for (j = 0 ; j < sub_indx.size() ; j++) {
                    D(i,j) = C(sub_indx[i],sub_indx[j]);
@@ -619,11 +619,11 @@ void gcta::sbat_calcu_lambda(vector<int> &snp_indx, VectorXd &eigenval, int &snp
             C = D; 
         }
     
-    SelfAdjointEigenSolver<MatrixXf> saes(C);
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXf> saes(C);
     eigenval = saes.eigenvalues().cast<double>();
 }
 
-void gcta::rm_cor_sbat(MatrixXf &R, double R_cutoff, int m, vector<int> &rm_ID1) {
+void gcta::rm_cor_sbat(Eigen::MatrixXf &R, double R_cutoff, int m, vector<int> &rm_ID1) {
     //Modified version of rm_cor_indi from grm.cpp
     
     int i = 0, j = 0, i_buf = 0;

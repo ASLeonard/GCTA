@@ -11,6 +11,7 @@
  */
 
 #include "gcta.h"
+#include <random>
 
 int gcta::read_QTL_file(string qtl_file, vector<string> &qtl_name, vector<int> &qtl_pos, vector<double> &qtl_eff, vector<int> &have_eff)
 {
@@ -134,7 +135,7 @@ void gcta::GWAS_simu(string bfile, int simu_num, string qtl_file, int case_num, 
     }
 
     // Calculate allele frequency
-    MatrixXf X;
+    Eigen::MatrixXf X;
     make_XMat(X);
     if(eff_mod == 0){
         eigenVector sd_SNP;
@@ -256,7 +257,7 @@ void gcta::GenerCases(string bfile, string qtl_file, int case_num, int control_n
         read_bedfile(bfile+".bed");
 
         // Generate QTL effects
-        int Seed=-CommFunc::rand_seed();
+        int Seed = -static_cast<int>(std::random_device{}() & 0x7FFFFFFFu);
         LOGGER<<"Generating QTL effects ("<<"Random seed = "<<abs(Seed)<<")."<<endl;
         vector<double> qtl_eff(qtl_num);
         for(i=0; i<qtl_num && hsq>0.0; i++) qtl_eff[i]=StatFunc::gasdev(Seed);
@@ -573,7 +574,7 @@ void gcta::simu_genome(
                   double mig 							// migration rate per generation
                   )
 {
-    int seed=CommFunc::rand_seed();
+    int seed = static_cast<int>(std::random_device{}() & 0x7FFFFFFFu);
     vector< vector<bool> > data; // the return chromosome by connecting all independent chromosome into one long chromosome
 
     LOGGER<<"\n*********************************************"<<endl;

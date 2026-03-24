@@ -415,7 +415,7 @@ void gcta::fit_reml(string grm_file, string phen_file, string qcovar_file, strin
     _A[_r_indx.size() - 1] = eigenMatrix::Identity(_n, _n);
     if(!weight_file.empty()){
         // contruct weight
-        VectorXd v_weight(_n);
+        Eigen::VectorXd v_weight(_n);
         for (int i = 0; i < weight_ID.size(); i++) {
             iter = uni_id_map.find(weight_ID[i]);
             if (iter == uni_id_map.end()) continue;
@@ -1412,7 +1412,7 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
 
 void gcta::bend_V(eigenMatrix &Vi)
 {
-    SelfAdjointEigenSolver<eigenMatrix> eigensolver(Vi);
+    Eigen::SelfAdjointEigenSolver<eigenMatrix> eigensolver(Vi);
     eigenVector eval = eigensolver.eigenvalues();
     bending_eigenval(eval);
     eval.array() = 1.0 / eval.array();
@@ -1427,9 +1427,9 @@ void gcta::bend_A() {
     int i = 0;
     for (i = 0; i < _r_indx.size() - 1; i++) {
         #ifdef SINGLE_PRECISION
-        SelfAdjointEigenSolver<eigenMatrix> eigensolver(_A[_r_indx[i]]);
+        Eigen::SelfAdjointEigenSolver<eigenMatrix> eigensolver(_A[_r_indx[i]]);
         #else
-        SelfAdjointEigenSolver<eigenMatrix> eigensolver((_A[_r_indx[i]]).cast<double>());
+        Eigen::SelfAdjointEigenSolver<eigenMatrix> eigensolver((_A[_r_indx[i]]).cast<double>());
         #endif
         eigenVector eval = eigensolver.eigenvalues();
         if (bending_eigenval(eval)) {
@@ -1461,7 +1461,7 @@ bool gcta::bending_eigenval(eigenVector &eval) {
 
 bool gcta::comput_inverse_logdet_LDLT(eigenMatrix &Vi, double &logdet) {
     int i = 0, n = Vi.cols();
-    LDLT<eigenMatrix> ldlt(Vi);
+    Eigen::LDLT<eigenMatrix> ldlt(Vi);
     eigenVector d = ldlt.vectorD();
 
     if (d.minCoeff() < 0) return false;
@@ -1478,7 +1478,7 @@ bool gcta::comput_inverse_logdet_PLU(eigenMatrix &Vi, double &logdet)
 {
     int n = Vi.cols();
 
-    PartialPivLU<eigenMatrix> lu(Vi);
+    Eigen::PartialPivLU<eigenMatrix> lu(Vi);
     if (lu.determinant()<1e-6) return false;
     eigenVector u = lu.matrixLU().diagonal();
     logdet = 0.0;
@@ -1491,7 +1491,7 @@ bool gcta::comput_inverse_logdet_LU(eigenMatrix &Vi, double &logdet)
 {
     int n = Vi.cols();
 
-    FullPivLU<eigenMatrix> lu(Vi);
+    Eigen::FullPivLU<eigenMatrix> lu(Vi);
     if (!lu.isInvertible()) return false;
     eigenVector u = lu.matrixLU().diagonal();
     logdet = 0.0;
@@ -1693,7 +1693,7 @@ void gcta::calcu_tr_PA(eigenMatrix &P, eigenVector &tr_PA) {
             //LOGGER << "   matrix product finished" << endl;
             //tr_PA(i) = (P * (_Asp[_r_indx[i]])).diagonal().sum();   ///extremely slow
             int cur_r_indx_size = _Asp[_r_indx[i]].outerSize();
-            VectorXd v(cur_r_indx_size);
+            Eigen::VectorXd v(cur_r_indx_size);
             v.setZero(cur_r_indx_size);
             #pragma omp parallel for
             for(int k = 0; k < cur_r_indx_size; ++k){

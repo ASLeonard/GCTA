@@ -24,13 +24,10 @@
 #include <vector>
 #include <algorithm>
 
-using namespace Eigen;
-using namespace std;
-
 namespace eigen_func
 {
-    void rank(VectorXf &x, VectorXf &rank);
-    void inverse_norm_rank_transform(VectorXf &x);
+    void rank(Eigen::VectorXf &x, Eigen::VectorXf &rank);
+    void inverse_norm_rank_transform(Eigen::VectorXf &x);
 }
 
 #endif

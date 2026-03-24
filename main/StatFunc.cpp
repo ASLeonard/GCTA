@@ -2,6 +2,7 @@
  * Implementations of the statistical functions
  *
  * 2010 by Jian Yang <jian.yang.qt@gmail.com>
+ * Modernized 2026 with C++20/23/26 features
  *
  * This file is distributed under the GNU General Public
  * License, Version 3.  Please see the file LICENSE for more
@@ -9,9 +10,13 @@
  */
 
 #include "StatFunc.h"
-#include "numeric"
+#include <numeric>
 #include <random>
+#include <ranges>
+#include <numbers>
+#include <algorithm>
 #include "Logger.h"
+#include <cmath>
 
 namespace {
 
@@ -59,54 +64,64 @@ double StatFunc::chi_prob(double df, double chi_sqr_val, bool log_p) {
 
 ///////// Random Number Generation Functions Start ////////
 
-void StatFunc::gasdev_seq(int &idum, vector<double> &vec, int size, double means, double var) {
+void StatFunc::gasdev_seq(int &idum, std::vector<double> &vec, int size, double means, double var) {
     vec.clear();
     vec.resize(size);
 
-    int i = 0;
-    for (i = 0; i < size; i++) vec[i] = means + sqrt(var) * StatFunc::gasdev(idum);
+    const double sd = std::sqrt(var);
+    for (auto& v : vec) {
+        v = means + sd * gasdev(idum);
+    }
 }
 
-void StatFunc::gasdev_seq(int &idum, vector<double> &vec, int size, double var) {
-    if (size < 2) LOGGER.e(0, "invalid size. StatFunc::gasdev_seq");
+void StatFunc::gasdev_seq(int &idum, std::vector<double> &vec, int size, double var) {
+    if (size < 2) {
+        LOGGER.e(0, "invalid size. StatFunc::gasdev_seq");
+    }
     if (CommFunc::FloatEqual(var, 0.0)) {
-        vec.clear();
-        vec.resize(size);
+        vec.assign(size, 0.0);
         return;
     }
 
-    int i = 0;
-    double ave = 0.0, s_square = 0.0;
-    double n = (double) size;
+    const double n = static_cast<double>(size);
+    double s_square = 0.0;
 
     while (s_square < 0.01 * var) {
-        StatFunc::gasdev_seq(idum, vec, size, 0.0, var);
-        for (i = 0; i < size; i++) ave += vec[i];
-        ave /= n;
-        for (i = 0; i < size; i++) vec[i] -= ave;
-        for (i = 0, s_square = 0.0; i < size; i++) s_square += vec[i] * vec[i];
-        s_square = s_square / (n - 1.0);
+        gasdev_seq(idum, vec, size, 0.0, var);
+        
+        // Calculate and subtract mean
+        const double ave = std::accumulate(vec.begin(), vec.end(), 0.0) / n;
+        std::ranges::for_each(vec, [ave](double& v) { v -= ave; });
+        
+        // Calculate variance
+        s_square = std::transform_reduce(
+            vec.begin(), vec.end(), 0.0, std::plus<>{},
+            [](double v) { return v * v; }
+        ) / (n - 1.0);
     }
-    double c = sqrt(var / s_square);
-    for (i = 0; i < size; i++) vec[i] *= c;
+    
+    const double c = std::sqrt(var / s_square);
+    std::ranges::for_each(vec, [c](double& v) { v *= c; });
 }
 
 double StatFunc::gasdev(int &idum) {
     static int iset = 0;
     static double gset;
-    double fac, rsq, v1, v2;
 
     if (idum < 0) iset = 0;
+    
     if (iset == 0) {
+        double v1, v2, rsq;
         do {
-            v1 = 2.0 * ran1(idum) - 1.0;
-            v2 = 2.0 * ran1(idum) - 1.0;
-            rsq = v1 * v1 + v2*v2;
+            v1 = 2.0 * u_dis(gen) - 1.0;
+            v2 = 2.0 * u_dis(gen) - 1.0;
+            rsq = v1 * v1 + v2 * v2;
         } while (rsq >= 1.0 || rsq == 0.0);
-        fac = sqrt(-2.0 * log(rsq) / rsq);
-        gset = v1*fac;
+        
+        const double fac = std::sqrt(-2.0 * std::log(rsq) / rsq);
+        gset = v1 * fac;
         iset = 1;
-        return v2*fac;
+        return v2 * fac;
     } else {
         iset = 0;
         return gset;
@@ -116,16 +131,13 @@ double StatFunc::gasdev(int &idum) {
 double StatFunc::UniformDev(double a, double b, int &idum) {
     if (a >= b) LOGGER.e(0, "b must be larger than a. StatFunc::UniformDev");
     if (idum > 0) idum *= -1;
-    return a + (b - a) * ran1(idum);
+    return a + (b - a) * u_dis(gen);
 }
 
 static std::random_device ran_device;
 static std::mt19937 gen(ran_device());
 static std::uniform_real_distribution<double> u_dis(0, 1);
 
-double StatFunc::ran1(int &idum) {
-    return u_dis(gen);
-}
 /*
     const int IA = 16807, IM = 2147483647, IQ = 127773, IR = 2836, NTAB = 32;
     const int NDIV = (1 + (IM - 1) / NTAB);
@@ -157,49 +169,58 @@ double StatFunc::ran1(int &idum) {
 }
 */
 
-double StatFunc::chidev(int &idum, const double df) {
-    if (df > 2.0) return 2.0 * cheng_gamdev(idum, df * 0.5);
-    else LOGGER.e(0, "invalid degree of freedom. StatFunc::chidev");
-    return 0;
+double StatFunc::chidev(int &idum, double df) {
+    if (df > 2.0) {
+        return 2.0 * cheng_gamdev(idum, df * 0.5);
+    }
+    LOGGER.e(0, "invalid degree of freedom. StatFunc::chidev");
+    return 0.0;
 }
 
-double StatFunc::cheng_gamdev(int &idum, const double alpha) {
-    double u1 = 0.0, u2 = 0.0, nu = 0.0, d_buf = 0.0;
-    double beta = (alpha - 1.0);
-    while (1) {
-        u1 = StatFunc::UniformDev(0.0, 1.0, idum);
-        u2 = StatFunc::UniformDev(0.0, 1.0, idum);
-        ;
-        nu = (alpha - 1.0 / (6.0 * alpha)) * u1;
-        nu /= (beta * u2);
-        d_buf = 2.0 * (u2 - 1.0) / beta + nu + 1.0 / nu;
-        if (d_buf < 2.0) return beta * nu;
-        else {
-            d_buf = 2.0 * log(u2) / beta - log(nu) + nu;
-            if (d_buf < 1.0) return beta * nu;
+double StatFunc::cheng_gamdev(int &idum, double alpha) {
+    const double beta = alpha - 1.0;
+    
+    while (true) {
+        const double u1 = UniformDev(0.0, 1.0, idum);
+        const double u2 = UniformDev(0.0, 1.0, idum);
+        
+        const double nu = (alpha - 1.0 / (6.0 * alpha)) * u1 / (beta * u2);
+        const double d_buf = 2.0 * (u2 - 1.0) / beta + nu + 1.0 / nu;
+        
+        if (d_buf < 2.0) {
+            return beta * nu;
+        }
+        
+        const double d_buf2 = 2.0 * std::log(u2) / beta - std::log(nu) + nu;
+        if (d_buf2 < 1.0) {
+            return beta * nu;
         }
     }
 }
 
-int StatFunc::RandAbs(int a, int b, int &seed) { //a,bΪ������Ҷ˵㣬seedΪ����
-    int rand;
+int StatFunc::RandAbs(int a, int b, int &seed) {
     int stk = b - a + 1;
     int stl = 2;
-    while (stl < stk) stl = stl + stl;
-    int modul = 4 * stl;
+    while (stl < stk) {
+        stl = stl + stl;
+    }
+    
+    const int modul = 4 * stl;
     stk = seed;
     int sti = 1;
+    int rand = 0;
+    
     while (sti <= 1) {
         stk = 5 * stk;
         stk = stk % modul;
         stl = stk / 4 + a;
         if (stl <= b) {
             rand = stl;
-            sti = sti + 1;
+            ++sti;
         }
     }
     seed = stk;
-    return (rand);
+    return rand;
 }
 
 ///////// Random Number Generation Functions End ////////
@@ -219,40 +240,48 @@ double StatFunc::F_val(double df_1, double df_2, double prob) {
         boost::math::complement(boost::math::fisher_f(df_1, df_2), prob));
 }
 
-double StatFunc::ControlFDR(const vector<double> &P_Value, double alpha, bool Restrict) {
-    int i = 0, Size = P_Value.size();
-    if (Size <= 1) LOGGER.e(0, "invalid size. StatFunc::ControlFDR");
+double StatFunc::ControlFDR(std::span<const double> P_Value, double alpha, bool Restrict) {
+    const int Size = static_cast<int>(P_Value.size());
+    if (Size <= 1) {
+        LOGGER.e(0, "invalid size. StatFunc::ControlFDR");
+    }
+    
+    std::vector<double> P_ValueBuf(P_Value.begin(), P_Value.end());
+    std::ranges::stable_sort(P_ValueBuf);
+    
     double FDR_Threshold = 0.0;
-    vector<double> P_ValueBuf(Size);
-    for (i = 0; i < Size; i++) P_ValueBuf[i] = P_Value[i];
-    stable_sort(P_ValueBuf.begin(), P_ValueBuf.end());
-    for (i = 0; i < Size; i++) {
-        double d_Buf = ((double) (i + 1)) * alpha / ((double) Size);
+    for (int i = 0; i < Size; ++i) {
+        const double d_Buf = (static_cast<double>(i + 1) * alpha) / static_cast<double>(Size);
+        
         if (i == Size - 1) {
-            if (P_ValueBuf[i] <= d_Buf || Restrict) FDR_Threshold = d_Buf;
-            else FDR_Threshold = -1.0;
+            FDR_Threshold = (P_ValueBuf[i] <= d_Buf || Restrict) ? d_Buf : -1.0;
             break;
         }
+        
         if (P_ValueBuf[i] <= d_Buf && P_ValueBuf[i + 1] > d_Buf) {
             FDR_Threshold = d_Buf;
             break;
-        } else if (i == Size - 1) FDR_Threshold = -1.0;
+        } else if (i == Size - 1) {
+            FDR_Threshold = -1.0;
+        }
     }
     return FDR_Threshold;
 }
 
-double StatFunc::ControlFDR_Zou(const vector<double> &GenePValue, double FDR) {
-    int i = 0, Size = GenePValue.size();
+double StatFunc::ControlFDR_Zou(std::span<const double> GenePValue, double FDR) {
+    const int Size = static_cast<int>(GenePValue.size());
+    std::vector<double> Temp(GenePValue.begin(), GenePValue.end());
+    std::ranges::sort(Temp);
+    
     double PValue = 0.0;
-    vector<double> Temp(Size);
-    for (i = 0; i < Size; i++) Temp[i] = GenePValue[i];
-    sort(Temp.begin(), Temp.end());
-    for (i = 0; i < Size; i++) {
-        if (Temp[i] <= (i + 1) * FDR / Size && Temp[i + 1]>(i + 1) * FDR / Size) {
-            PValue = (i + 1) * FDR / Size;
+    for (int i = 0; i < Size; ++i) {
+        const double threshold = (i + 1) * FDR / Size;
+        
+        if (Temp[i] <= threshold && Temp[i + 1] > threshold) {
+            PValue = threshold;
             break;
-        } else if (Temp[i] <= (i + 1) * FDR / Size && i == Size - 1) {
-            PValue = (i + 1) * FDR / Size;
+        } else if (Temp[i] <= threshold && i == Size - 1) {
+            PValue = threshold;
             break;
         } else if (i == Size - 1) {
             PValue = FDR;
@@ -261,116 +290,136 @@ double StatFunc::ControlFDR_Zou(const vector<double> &GenePValue, double FDR) {
     return PValue;
 }
 
-double StatFunc::ControlFDR_Storey(vector<double> &P_Value, vector<double> &Q_Value, double CrtQ, double &FDR) {
-    if (P_Value.empty()) return CrtQ;
+double StatFunc::ControlFDR_Storey(std::vector<double> &P_Value, std::vector<double> &Q_Value, double CrtQ, double &FDR) {
+    if (P_Value.empty()) {
+        return CrtQ;
+    }
 
     // Initialize Lambda
-    double dBuf = 0.0;
-    vector<double> Lambda;
-    for (dBuf = 0.0; dBuf < 0.9001; dBuf += 0.05) Lambda.push_back(dBuf);
+    std::vector<double> Lambda;
+    for (double dBuf = 0.0; dBuf < 0.9001; dBuf += 0.05) {
+        Lambda.push_back(dBuf);
+    }
 
     // Calculate Pi0
-    stable_sort(P_Value.begin(), P_Value.end());
-    double Pi0 = CalcuPi0(P_Value, Lambda);
+    std::ranges::stable_sort(P_Value);
+    const double Pi0 = CalcuPi0(P_Value, Lambda);
 
     // Calculate q-value
-    int i = 0, m = P_Value.size();
-    double m0 = Pi0 * (double) m;
+    const int m = static_cast<int>(P_Value.size());
+    const double m0 = Pi0 * static_cast<double>(m);
+    
     Q_Value.clear();
     Q_Value.resize(m);
     Q_Value[m - 1] = Pi0 * P_Value[m - 1];
-    for (i = m - 2; i >= 0; i--) {
-        Q_Value[i] = (m0 * P_Value[i]) / (double) (i + 1);
-        if (Q_Value[i] > Q_Value[i + 1]) Q_Value[i] = Q_Value[i + 1];
+    
+    for (int i = m - 2; i >= 0; --i) {
+        Q_Value[i] = (m0 * P_Value[i]) / static_cast<double>(i + 1);
+        if (Q_Value[i] > Q_Value[i + 1]) {
+            Q_Value[i] = Q_Value[i + 1];
+        }
     }
 
     // Calculate FDR-adjusted critical p-value
     bool Flag = false;
     double CrtVal = 1.0;
-    for (i = 0; i < m - 1; i++) {
+    for (int i = 0; i < m - 1; ++i) {
         if (Q_Value[i] < CrtQ && Q_Value[i + 1] > CrtQ) {
             CrtVal = 0.5 * (P_Value[i] + P_Value[i + 1]);
             Flag = true;
             break;
         }
     }
-    if (!Flag) CrtVal = 0.5 * (P_Value[0] + P_Value[1]);
+    if (!Flag) {
+        CrtVal = 0.5 * (P_Value[0] + P_Value[1]);
+    }
 
     // Estimate FDR
-    int iBuf = 0;
-    for (i = 0; i < m; i++) {
-        if (P_Value[i] < CrtVal) iBuf++;
+    const int iBuf = std::ranges::count_if(P_Value, [CrtVal](double p) { return p < CrtVal; });
+    FDR = (CrtVal * m0) / static_cast<double>(iBuf);
+    if (FDR > 1.0) {
+        FDR = 1.0;
     }
-    FDR = (CrtVal * m0) / (double) iBuf;
-    if (FDR > 1.0) FDR = 1.0;
 
     return CrtVal;
 }
 
-double StatFunc::CalcuPi0(vector<double> &P_Value, vector<double> &Lambda) {
-    int i = 0, j = 0, P_Size = P_Value.size(), LambdaSize = Lambda.size();
-    vector<double> Pi(LambdaSize), NewPi(LambdaSize);
-    for (i = 0; i < LambdaSize; i++) {
-        int Count = 0;
-        for (j = 0; j < P_Size; j++) {
-            if (P_Value[j] > Lambda[i]) Count++;
-        }
+double StatFunc::CalcuPi0(std::vector<double> &P_Value, std::vector<double> &Lambda) {
+    const int P_Size = static_cast<int>(P_Value.size());
+    const int LambdaSize = static_cast<int>(Lambda.size());
+    
+    std::vector<double> Pi(LambdaSize);
+    std::vector<double> NewPi(LambdaSize);
+    
+    for (int i = 0; i < LambdaSize; ++i) {
+        const int Count = std::ranges::count_if(P_Value, [lambda = Lambda[i]](double p) {
+            return p > lambda;
+        });
         Pi[i] = Count / (P_Size * (1.0 - Lambda[i]));
     }
+    
     double PrePi = 0.0;
     spline(Lambda, Pi, 0.0, 0.0, NewPi);
     splint(Lambda, Pi, NewPi, Lambda[LambdaSize - 1], PrePi);
-    return PrePi < 1.0 ? PrePi : 1.0;
+    return std::min(PrePi, 1.0);
 }
 
-void StatFunc::spline(vector<double> &x, vector<double> &y, const double yp1, const double ypn, vector<double> &y2) {
-    int i, k;
-    double p, qn, sig, un;
-
-    int n = y2.size();
-    vector<double> u(n - 1);
-    if (yp1 > 0.99e30)
+void StatFunc::spline(std::vector<double> &x, std::vector<double> &y, double yp1, double ypn, std::vector<double> &y2) {
+    const int n = static_cast<int>(y2.size());
+    std::vector<double> u(n - 1);
+    
+    if (yp1 > 0.99e30) {
         y2[0] = u[0] = 0.0;
-    else {
+    } else {
         y2[0] = -0.5;
-        u[0] = (3.0 / (x[1] - x[0]))*((y[1] - y[0]) / (x[1] - x[0]) - yp1);
+        u[0] = (3.0 / (x[1] - x[0])) * ((y[1] - y[0]) / (x[1] - x[0]) - yp1);
     }
-    for (i = 1; i < n - 1; i++) {
-        sig = (x[i] - x[i - 1]) / (x[i + 1] - x[i - 1]);
-        p = sig * y2[i - 1] + 2.0;
+    
+    for (int i = 1; i < n - 1; ++i) {
+        const double sig = (x[i] - x[i - 1]) / (x[i + 1] - x[i - 1]);
+        const double p = sig * y2[i - 1] + 2.0;
         y2[i] = (sig - 1.0) / p;
         u[i] = (y[i + 1] - y[i]) / (x[i + 1] - x[i]) - (y[i] - y[i - 1]) / (x[i] - x[i - 1]);
         u[i] = (6.0 * u[i] / (x[i + 1] - x[i - 1]) - sig * u[i - 1]) / p;
     }
-    if (ypn > 0.99e30)
+    
+    double qn, un;
+    if (ypn > 0.99e30) {
         qn = un = 0.0;
-    else {
+    } else {
         qn = 0.5;
-        un = (3.0 / (x[n - 1] - x[n - 2]))*(ypn - (y[n - 1] - y[n - 2]) / (x[n - 1] - x[n - 2]));
+        un = (3.0 / (x[n - 1] - x[n - 2])) * (ypn - (y[n - 1] - y[n - 2]) / (x[n - 1] - x[n - 2]));
     }
+    
     y2[n - 1] = (un - qn * u[n - 2]) / (qn * y2[n - 2] + 1.0);
-    for (k = n - 2; k >= 0; k--)
+    for (int k = n - 2; k >= 0; --k) {
         y2[k] = y2[k] * y2[k + 1] + u[k];
+    }
 }
 
-void StatFunc::splint(vector<double> &xa, vector<double> &ya, vector<double> &y2a, const double x, double &y) {
-    int k;
-    double h, b, a;
-
-    int n = xa.size();
+void StatFunc::splint(std::vector<double> &xa, std::vector<double> &ya, std::vector<double> &y2a, double x, double &y) {
+    const int n = static_cast<int>(xa.size());
     int klo = 0;
     int khi = n - 1;
+    
     while (khi - klo > 1) {
-        k = (khi + klo) >> 1;
-        if (xa[k] > x) khi = k;
-        else klo = k;
+        const int k = (khi + klo) >> 1;
+        if (xa[k] > x) {
+            khi = k;
+        } else {
+            klo = k;
+        }
     }
-    h = xa[khi] - xa[klo];
-    if (h == 0.0) LOGGER.e(0, "bad xa input to routine splint");
-    a = (xa[khi] - x) / h;
-    b = (x - xa[klo]) / h;
-    y = a * ya[klo] + b * ya[khi]+((a * a * a - a) * y2a[klo]
-            +(b * b * b - b) * y2a[khi])*(h * h) / 6.0;
+    
+    const double h = xa[khi] - xa[klo];
+    if (h == 0.0) {
+        LOGGER.e(0, "bad xa input to routine splint");
+    }
+    
+    const double a = (xa[khi] - x) / h;
+    const double b = (x - xa[klo]) / h;
+    y = a * ya[klo] + b * ya[khi] + 
+        ((a * a * a - a) * y2a[klo] + (b * b * b - b) * y2a[khi]) * (h * h) / 6.0;
 }
 
 // Default: upper-tail P(Z > x)
@@ -409,8 +458,21 @@ double StatFunc::qnorm(double p, bool upper) {
         if(c < min_val) min_val = c;
         fdr[pval_buf[i].second] = CommFunc::Min(1.0, min_val);
     }
-
-    return (fdr);
+    
+    std::ranges::stable_sort(pval_buf, [](const auto& a, const auto& b) {
+        return a.first > b.first;
+    });
+    
+    std::vector<double> fdr(n);
+    double min_val = 1.0;
+    
+    for (int i = 0; i < n; ++i) {
+        const double c = static_cast<double>(n) / static_cast<double>(n - i) * pval_buf[i].first;
+        min_val = std::min(c, min_val);
+        fdr[pval_buf[i].second] = std::min(1.0, min_val);
+    }
+    
+    return fdr;
 }
 
 // Default: upper-tail P(Z > x)
@@ -447,13 +509,13 @@ double StatFunc::qchisq(double q, double df) {
 //#################
 // functions to calculate pchisqsum 
 
-double StatFunc::pchisqsum(double x, VectorXd lambda) {
+double StatFunc::pchisqsum(double x, Eigen::VectorXd lambda) {
     double pval = psadd(x, lambda);
     if (pval > 1.0) pval = psatt(x, lambda);
     return pval;
 }
 
-double StatFunc::psadd(double x, VectorXd lambda) {
+double StatFunc::psadd(double x, Eigen::VectorXd lambda) {
     double d = lambda.maxCoeff();
     if (d <= 0.0) return 2.0;
     lambda = lambda.array() / d;
@@ -482,7 +544,7 @@ double StatFunc::psadd(double x, VectorXd lambda) {
     else return pnorm(w + log(v / w) / w);
 }
 
-double StatFunc::psatt(double x, VectorXd lambda) {
+double StatFunc::psatt(double x, Eigen::VectorXd lambda) {
     double sum=lambda.sum();
     if(CommFunc::FloatEqual(sum,0.0)) return 2.0;
   
@@ -494,23 +556,23 @@ double StatFunc::psatt(double x, VectorXd lambda) {
     return pchisq(x/a, b);
 }
 
-double StatFunc::K(double zeta, VectorXd &lambda) {
+double StatFunc::K(double zeta, Eigen::VectorXd &lambda) {
     return -0.5*(1.0 - 2.0 * zeta * lambda.array()).log().sum();
 }
 
-double StatFunc::Kp(double zeta, VectorXd &lambda) {
+double StatFunc::Kp(double zeta, Eigen::VectorXd &lambda) {
     return (lambda.array() / (1.0 - 2.0 * zeta * lambda.array())).sum();
 }
 
-double StatFunc::Kpp(double zeta, VectorXd &lambda) {
+double StatFunc::Kpp(double zeta, Eigen::VectorXd &lambda) {
     return 2.0 * (lambda.array().square() / (1.0 - 2.0 * zeta * lambda.array()).array().square()).sum();
 }
 
-double StatFunc::Kp_min_x(double zeta, VectorXd &lambda, double x) {
+double StatFunc::Kp_min_x(double zeta, Eigen::VectorXd &lambda, double x) {
     return Kp(zeta, lambda) - x;
 }
 
-double StatFunc::Brents_Kp_min_x(VectorXd &lambda, double x, double lowerLimit, double upperLimit, double errorTol) {
+double StatFunc::Brents_Kp_min_x(Eigen::VectorXd &lambda, double x, double lowerLimit, double upperLimit, double errorTol) {
     double a = lowerLimit;
     double b = upperLimit;
     double c = 0;
@@ -593,12 +655,13 @@ double StatFunc::Brents_Kp_min_x(VectorXd &lambda, double x, double lowerLimit, 
 }
 
 
-vector<size_t> StatFunc::sort_re_index(const vector<double> &x) {
-  vector<size_t> x_index(x.size());
-  std::iota(x_index.begin(), x_index.end(), 0);
+std::vector<size_t> StatFunc::sort_re_index(std::span<const double> x) {
+    std::vector<size_t> x_index(x.size());
+    std::iota(x_index.begin(), x_index.end(), 0);
 
-  sort(x_index.begin(), x_index.end(), [&x](size_t index1, size_t index2) {
-          return x[index1] > x[index2];});
+    std::ranges::sort(x_index, [&x](size_t index1, size_t index2) {
+        return x[index1] > x[index2];
+    });
 
-  return x_index;
+    return x_index;
 }

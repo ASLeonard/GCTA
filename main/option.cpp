@@ -17,6 +17,8 @@
  */
 
 #include <cstdio>
+#include <filesystem>
+#include <random>
 #include <stdlib.h>
 #include "gcta.h"
 #include "Logger.h"
@@ -81,6 +83,7 @@ void option(int option_num, char* option_str[])
     double grm_adj_fac = -2.0, grm_cutoff = -2.0, rm_high_ld_cutoff = -1.0, bK_threshold = -10.0;
     int dosage_compen = -2, out_pc_num = 20, make_grm_mtd = 0;
     string grm_file = "", paa_file = "", pc_file = "";
+    string genetic_model = ""; // genetic model for dosage calculation
     //pca projection
     string project_file = "";
     int project_N = 0;
@@ -95,7 +98,7 @@ void option(int option_num, char* option_str[])
     // initialize paramters for simulation based on real genotype data
     bool simu_qt_flag = false, simu_cc = false, simu_emb_flag = false, simu_output_causal = false;
     int simu_rep = 1, simu_case_num = 0, simu_control_num = 0, simu_eff_mod = 0;
-    double simu_h2 = 0.1, simu_K = 0.1, simu_gener = 100, simu_seed = -CommFunc::rand_seed();
+    double simu_h2 = 0.1, simu_K = 0.1, simu_gener = 100, simu_seed = -static_cast<int>(std::random_device{}() & 0x7FFFFFFFu);
     string simu_causal = "";
 
     // simulate unlinked SNPs
@@ -134,7 +137,8 @@ void option(int option_num, char* option_str[])
 
     // mixed linear model association 
     bool mlma_flag = false, mlma_loco_flag = false, mlma_no_adj_covar = false;
-    string subtract_grm_file = "";
+    bool save_reml_flag = false;
+    string subtract_grm_file = "", save_reml_file = "", load_reml_file = "";
 
     // Fst
     bool fst_flag = false;
@@ -247,27 +251,27 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--update-imput-rsq") == 0) {
             update_impRsq_file = argv[++i];
             LOGGER << "--update-imput-rsq " << update_impRsq_file << endl;
-            CommFunc::FileExist(update_impRsq_file);
+            if (!std::filesystem::exists(update_impRsq_file)) LOGGER.e(0, "cannot open the file ["+update_impRsq_file+"] to read.");
         } else if (strcmp(argv[i], "--update-freq") == 0) {
             update_freq_file = argv[++i];
             LOGGER << "--update-freq " << update_freq_file << endl;
-            CommFunc::FileExist(update_freq_file);
+            if (!std::filesystem::exists(update_freq_file)) LOGGER.e(0, "cannot open the file ["+update_freq_file+"] to read.");
         } else if (strcmp(argv[i], "--update-ref-allele") == 0) {
             update_refA_file = argv[++i];
             LOGGER << "--update-ref-allele " << update_refA_file << endl;
-            CommFunc::FileExist(update_refA_file);
+            if (!std::filesystem::exists(update_refA_file)) LOGGER.e(0, "cannot open the file ["+update_refA_file+"] to read.");
         } else if (strcmp(argv[i], "--keep") == 0) {
             kp_indi_file = argv[++i];
             LOGGER << "--keep " << kp_indi_file << endl;
-            CommFunc::FileExist(kp_indi_file);
+            if (!std::filesystem::exists(kp_indi_file)) LOGGER.e(0, "cannot open the file ["+kp_indi_file+"] to read.");
         } else if (strcmp(argv[i], "--remove") == 0) {
             rm_indi_file = argv[++i];
             LOGGER << "--remove " << rm_indi_file << endl;
-            CommFunc::FileExist(rm_indi_file);
+            if (!std::filesystem::exists(rm_indi_file)) LOGGER.e(0, "cannot open the file ["+rm_indi_file+"] to read.");
         } else if (strcmp(argv[i], "--update-sex") == 0) {
             update_sex_file = argv[++i];
             LOGGER << "--update-sex " << update_sex_file << endl;
-            CommFunc::FileExist(update_sex_file);
+            if (!std::filesystem::exists(update_sex_file)) LOGGER.e(0, "cannot open the file ["+update_sex_file+"] to read.");
         } else if (strcmp(argv[i], "--chr") == 0) {
             extract_chr_start = extract_chr_end = atoi(argv[++i]);
             LOGGER << "--chr " << extract_chr_start << endl;
@@ -282,11 +286,11 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--extract") == 0) {
             extract_snp_file = argv[++i];
             LOGGER << "--extract " << extract_snp_file << endl;
-            CommFunc::FileExist(extract_snp_file);
+            if (!std::filesystem::exists(extract_snp_file)) LOGGER.e(0, "cannot open the file ["+extract_snp_file+"] to read.");
         } else if (strcmp(argv[i], "--exclude") == 0) {
             exclude_snp_file = argv[++i];
             LOGGER << "--exclude " << exclude_snp_file << endl;
-            CommFunc::FileExist(exclude_snp_file);
+            if (!std::filesystem::exists(exclude_snp_file)) LOGGER.e(0, "cannot open the file ["+exclude_snp_file+"] to read.");
         } else if (strcmp(argv[i], "--extract-snp") == 0) {
             extract_snp_name = argv[++i];
             LOGGER << "--extract-snp " << extract_snp_name << endl;
@@ -360,7 +364,7 @@ void option(int option_num, char* option_str[])
         else if (strcmp(argv[i], "--paa") == 0) {
             paa_file = argv[++i];
             LOGGER << "--paa " << paa_file << endl;
-            CommFunc::FileExist(paa_file);
+            if (!std::filesystem::exists(paa_file)) LOGGER.e(0, "cannot open the file ["+paa_file+"] to read.");
         } else if (strcmp(argv[i], "--ibc") == 0) {
             ibc = true;
             LOGGER << "--ibc" << endl;
@@ -427,6 +431,13 @@ void option(int option_num, char* option_str[])
             dominance_flag = true;
             thread_flag = true;
             LOGGER <<"--dominance"<< endl;
+        } else if (strcmp(argv[i], "--model") == 0) {
+            genetic_model = argv[++i];
+            GeneticModel temp_model;
+            if (!stringToGeneticModel(genetic_model, temp_model)) {
+                LOGGER.e(0, "\n  --model should be either 'additive' or 'nonadditive'.\n");
+            }
+            LOGGER << "--model " << genetic_model << endl;
         } else if (strcmp(argv[i], "--make-grm-xchr") == 0 || strcmp(argv[i], "--make-grm-xchr-bin") == 0) {
             make_grm_flag = true;
             make_grm_xchar_flag = true;
@@ -498,7 +509,7 @@ void option(int option_num, char* option_str[])
             LD = true;
             LD_file = argv[++i];
             LOGGER << "--ld " << LD_file << endl;
-            CommFunc::FileExist(LD_file);
+            if (!std::filesystem::exists(LD_file)) LOGGER.e(0, "cannot open the file ["+LD_file+"] to read.");
         } else if (strcmp(argv[i], "--ld-step") == 0) {
             LD_search = true;
             LD_step = atoi(argv[++i]);
@@ -537,7 +548,7 @@ void option(int option_num, char* option_str[])
             thread_flag = true;
             ld_score_multi_file = argv[++i];
             LOGGER << "--ld-score-multi " << ld_score_multi_file << endl;
-            CommFunc::FileExist(ld_score_multi_file);
+            if (!std::filesystem::exists(ld_score_multi_file)) LOGGER.e(0, "cannot open the file ["+ld_score_multi_file+"] to read.");
         } else if (strcmp(argv[i], "--ld-rsq-cutoff") == 0) {
             LD_rsq_cutoff = atof(argv[++i]);
             LOGGER << "--ld-rsq-cutoff " << LD_rsq_cutoff << endl;
@@ -591,7 +602,7 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--simu-causal-loci") == 0) {
             simu_causal = argv[++i];
             LOGGER << "--simu-causal-loci " << simu_causal << endl;
-            CommFunc::FileExist(simu_causal);
+            if (!std::filesystem::exists(simu_causal)) LOGGER.e(0, "cannot open the file ["+simu_causal+"] to read.");
         } else if (strcmp(argv[i], "--simu-embayesb") == 0) { // internal
             simu_emb_flag = true;
             LOGGER << "--simu-embayesb" << endl;
@@ -754,7 +765,7 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--pheno") == 0) {
             phen_file = argv[++i];
             LOGGER << "--pheno " << phen_file << endl;
-            CommFunc::FileExist(phen_file);
+            if (!std::filesystem::exists(phen_file)) LOGGER.e(0, "cannot open the file ["+phen_file+"] to read.");
         } else if (strcmp(argv[i], "--mpheno") == 0) {
             mphen = atoi(argv[++i]);
             LOGGER << "--mpheno " << mphen << endl;
@@ -762,28 +773,28 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--qcovar") == 0) {
             qcovar_file = argv[++i];
             LOGGER << "--qcovar " << qcovar_file << endl;
-            CommFunc::FileExist(qcovar_file);
+            if (!std::filesystem::exists(qcovar_file)) LOGGER.e(0, "cannot open the file ["+qcovar_file+"] to read.");
         } else if (strcmp(argv[i], "--covar") == 0) {
             covar_file = argv[++i];
             LOGGER << "--covar " << covar_file << endl;
-            CommFunc::FileExist(covar_file);
+            if (!std::filesystem::exists(covar_file)) LOGGER.e(0, "cannot open the file ["+covar_file+"] to read.");
         } else if (strcmp(argv[i], "--reml-res-diag") == 0){
             weight_file = argv[++i];
             LOGGER << "--reml-res-diag " << weight_file << endl;
-            CommFunc::FileExist(weight_file);
+            if (!std::filesystem::exists(weight_file)) LOGGER.e(0, "cannot open the file ["+weight_file+"] to read.");
         } else if (strcmp(argv[i], "--gxqe") == 0) {
             qgxe_file = argv[++i];
             LOGGER << "--gxqe " << qgxe_file << endl;
-            CommFunc::FileExist(qgxe_file);
+            if (!std::filesystem::exists(qgxe_file)) LOGGER.e(0, "cannot open the file ["+qgxe_file+"] to read.");
         } else if (strcmp(argv[i], "--gxe") == 0) {
             gxe_file = argv[++i];
             LOGGER << "--gxe " << gxe_file << endl;
-            CommFunc::FileExist(gxe_file);
+            if (!std::filesystem::exists(gxe_file)) LOGGER.e(0, "cannot open the file ["+gxe_file+"] to read.");
         } else if (strcmp(argv[i], "--blup-snp") == 0) {
             blup_snp_flag = true;
             blup_indi_file = argv[++i];
             LOGGER << "--blup-snp " << blup_indi_file << endl;
-            CommFunc::FileExist(blup_indi_file);
+            if (!std::filesystem::exists(blup_indi_file)) LOGGER.e(0, "cannot open the file ["+blup_indi_file+"] to read.");
         } else if (strcmp(argv[i], "--reml-wfam") == 0) {
             reml_flag = true;
             within_family = true;
@@ -856,7 +867,7 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--cojo-file") == 0) {
             massoc_file = argv[++i];
             LOGGER << "--cojo-file " << massoc_file << endl;
-            CommFunc::FileExist(massoc_file);
+            if (!std::filesystem::exists(massoc_file)) LOGGER.e(0, "cannot open the file ["+massoc_file+"] to read.");
         } else if (strcmp(argv[i], "--cojo-slct") == 0) {
             massoc_slct_flag = true;
             massoc_mld_slct_alg = 0;
@@ -941,13 +952,20 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--mlma-no-preadj-covar") == 0) {
             mlma_no_adj_covar = true;	
             LOGGER << "--mlma-no-preadj-covar" << endl;	
+        } else if (strcmp(argv[i], "--save-reml") == 0) {
+            save_reml_flag = true;
+            LOGGER << "--save-reml" << endl;
+        } else if (strcmp(argv[i], "--load-reml") == 0) {
+            load_reml_file = argv[++i];
+            LOGGER << "--load-reml " << load_reml_file << endl;
+            CommFunc::FileExist(load_reml_file);
         } else if (strcmp(argv[i], "--fst") == 0) {
             fst_flag = true;
             LOGGER << "--fst " << endl;
         } else if (strcmp(argv[i], "--sub-popu") == 0) {
             subpopu_file = argv[++i];
             LOGGER << "--sub-popu " << subpopu_file << endl;
-            CommFunc::FileExist(subpopu_file);
+            if (!std::filesystem::exists(subpopu_file)) LOGGER.e(0, "cannot open the file ["+subpopu_file+"] to read.");
         }
         else if (strcmp(argv[i], "--fastBAT-ld-cutoff") == 0) {
             sbat_ld_cutoff = sqrt(atof(argv[++i]));
@@ -959,15 +977,15 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--fastBAT") == 0) {
             sbat_sAssoc_file = argv[++i];
             LOGGER << "--fastBAT " << sbat_sAssoc_file << endl;
-            CommFunc::FileExist(sbat_sAssoc_file);
+            if (!std::filesystem::exists(sbat_sAssoc_file)) LOGGER.e(0, "cannot open the file ["+sbat_sAssoc_file+"] to read.");
         } else if (strcmp(argv[i], "--fastBAT-gene-list") == 0) {
             sbat_gAnno_file = argv[++i];
             LOGGER << "--fastBAT-gene-list " << sbat_gAnno_file << endl;
-            CommFunc::FileExist(sbat_gAnno_file);
+            if (!std::filesystem::exists(sbat_gAnno_file)) LOGGER.e(0, "cannot open the file ["+sbat_gAnno_file+"] to read.");
         } else if (strcmp(argv[i], "--fastBAT-set-list") == 0) {
             sbat_snpset_file = argv[++i];
             LOGGER << "--fastBAT-set-list " << sbat_snpset_file << endl;
-            CommFunc::FileExist(sbat_snpset_file);
+            if (!std::filesystem::exists(sbat_snpset_file)) LOGGER.e(0, "cannot open the file ["+sbat_snpset_file+"] to read.");
         } else if (strcmp(argv[i], "--fastBAT-wind") == 0) {
             sbat_wind = atoi(argv[++i]);
             LOGGER << "--fastBAT-wind " << sbat_wind << endl;
@@ -998,15 +1016,15 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--mBAT-combo") == 0) {
             mbat_sAssoc_file = argv[++i];
             LOGGER << "--mBAT-combo " << mbat_sAssoc_file << endl;
-            CommFunc::FileExist(mbat_sAssoc_file);
+            if (!std::filesystem::exists(mbat_sAssoc_file)) LOGGER.e(0, "cannot open the file ["+mbat_sAssoc_file+"] to read.");
         } else if (strcmp(argv[i], "--mBAT-gene-list") == 0) {
             mbat_gAnno_file = argv[++i];
             LOGGER << "--mBAT-gene-list " << mbat_gAnno_file << endl;
-            CommFunc::FileExist(mbat_gAnno_file);
+            if (!std::filesystem::exists(mbat_gAnno_file)) LOGGER.e(0, "cannot open the file ["+mbat_gAnno_file+"] to read.");
         } else if (strcmp(argv[i], "--mBAT-set-list") == 0) {
             mbat_snpset_file = argv[++i];
             LOGGER << "--mBAT-set-list " << mbat_snpset_file << endl;
-            CommFunc::FileExist(mbat_snpset_file);
+            if (!std::filesystem::exists(mbat_snpset_file)) LOGGER.e(0, "cannot open the file ["+mbat_snpset_file+"] to read.");
         } else if (strcmp(argv[i], "--mBAT-wind") == 0) {
             mbat_wind = atoi(argv[++i]);
             LOGGER << "--mBAT-wind " << mbat_wind << endl;
@@ -1017,18 +1035,18 @@ void option(int option_num, char* option_str[])
             efile = argv[++i];
             efile_flag = true;
             LOGGER << "--efile " << efile << endl;
-            CommFunc::FileExist(efile);
+            if (!std::filesystem::exists(efile)) LOGGER.e(0, "cannot open the file ["+efile+"] to read.");
         } 
         else if (strcmp(argv[i], "--e-cor") == 0) {
             eR_file = argv[++i];
             eR_file_flag = true;
             LOGGER << "--e-cor " << eR_file << endl;
-            CommFunc::FileExist(eR_file);
+            if (!std::filesystem::exists(eR_file)) LOGGER.e(0, "cannot open the file ["+eR_file+"] to read.");
         } 
         else if (strcmp(argv[i], "--ecojo") == 0) {
             ecojo_ma_file = argv[++i];
             LOGGER << "--ecojo " << ecojo_ma_file << endl;
-            CommFunc::FileExist(ecojo_ma_file);
+            if (!std::filesystem::exists(ecojo_ma_file)) LOGGER.e(0, "cannot open the file ["+ecojo_ma_file+"] to read.");
         } 
         else if (strcmp(argv[i], "--ecojo-slct") == 0) {
             ecojo_slct_flag = true;
@@ -1083,8 +1101,8 @@ void option(int option_num, char* option_str[])
             expo_file_list = gsmr_file_list[0];
             outcome_file_list = gsmr_file_list[1];
             LOGGER << "--gsmr-file " << expo_file_list << " " << outcome_file_list << endl;
-            CommFunc::FileExist(expo_file_list);
-            CommFunc::FileExist(outcome_file_list);
+            if (!std::filesystem::exists(expo_file_list)) LOGGER.e(0, "cannot open the file ["+expo_file_list+"] to read.");
+            if (!std::filesystem::exists(outcome_file_list)) LOGGER.e(0, "cannot open the file ["+outcome_file_list+"] to read.");
         } else if(strcmp(argv[i], "--gsmr2-beta") == 0) {
             gsmr_beta_version = 1;
             LOGGER << "--gsmr2-beta" << endl;
@@ -1108,11 +1126,11 @@ void option(int option_num, char* option_str[])
             mtcojo_flag = true;
             mtcojolist_file = argv[++i];
             LOGGER << "--mtcojo-file " << mtcojolist_file << endl;
-            CommFunc::FileExist(mtcojolist_file);
+            if (!std::filesystem::exists(mtcojolist_file)) LOGGER.e(0, "cannot open the file ["+mtcojolist_file+"] to read.");
         } else if (strcmp(argv[i], "--mtcojo-bxy") == 0) {
             mtcojo_bxy_file = argv[++i];
             LOGGER << "--mtcojo-bxy " << mtcojo_bxy_file << endl;
-            CommFunc::FileExist(mtcojo_bxy_file);
+            if (!std::filesystem::exists(mtcojo_bxy_file)) LOGGER.e(0, "cannot open the file ["+mtcojo_bxy_file+"] to read.");
         } else if (strcmp(argv[i], "--ref-ld-chr") == 0) {
             ref_ld_flag = true;
             ref_ld_dirt = argv[++i];
@@ -1201,7 +1219,7 @@ void option(int option_num, char* option_str[])
             gwas_data_flag = true;
             pcadjust_list_file  = argv[++i];
             LOGGER << "--gwas-adj-pc " << pcadjust_list_file << endl;
-            CommFunc::FileExist(pcadjust_list_file);
+            if (!std::filesystem::exists(pcadjust_list_file)) LOGGER.e(0, "cannot open the file ["+pcadjust_list_file+"] to read.");
         } else if (strcmp(argv[i], "--gwas-adj-pc-wind") == 0) {
             pc_adj_wind_size = atoi(argv[++i]);
             LOGGER << "--gwas-adj-pc-wind " << pc_adj_wind_size << endl;
@@ -1213,6 +1231,8 @@ void option(int option_num, char* option_str[])
             LOGGER.e(0, errmsg.str());
         }
     }
+    if (save_reml_flag) save_reml_file = out + ".reml.bin.gz";
+
     // conflicted options
     LOGGER << endl;
     if (bfile2_flag && !bfile_flag) LOGGER.e(0, "the option --bfile2 should always go with the option --bfile.");
@@ -1266,7 +1286,12 @@ void option(int option_num, char* option_str[])
         if (est_fix_eff_var) LOGGER << "Warning: the option --reml-est-fix-varcov option is disabled in this analysis." << endl;
         if (pred_rand_eff) LOGGER << "Warning: the option --reml-pred-rand option is disabled in this analysis." << endl;
         if(cv_blup) LOGGER << "Warning: the option --cvblup option is disabled in this analysis." << endl;
-        if (reml_lrt_flag) LOGGER << "Warning: the option --reml-lrt option is disabled in this analysis." << endl; 
+        if (reml_lrt_flag) LOGGER << "Warning: the option --reml-lrt option is disabled in this analysis." << endl;
+        if (!save_reml_file.empty() && !load_reml_file.empty()) LOGGER.e(0, "--save-reml and --load-reml cannot be used together.");
+        if ((!save_reml_file.empty() || !load_reml_file.empty()) && mlma_loco_flag) LOGGER.e(0, "--save-reml and --load-reml are not supported with --mlma-loco.");
+        if (!load_reml_file.empty() && !mlma_flag) LOGGER.e(0, "--load-reml can only be used with --mlma.");
+        if (!save_reml_file.empty() && !mlma_flag) LOGGER.e(0, "--save-reml can only be used with --mlma.");
+        if (!save_reml_file.empty() && !grm_flag && !m_grm_flag) LOGGER.e(0, "--save-reml requires an explicit GRM via --grm or --mgrm.");
     }
     if(bivar_reml_flag && prevalence_flag) LOGGER.e(0, "--prevalence option is not compatible with --reml-bivar option. Please check the --reml-bivar-prevalence option!");
     if(gsmr_flag || mtcojo_flag){
@@ -1308,6 +1333,8 @@ void option(int option_num, char* option_str[])
     // Implement
     LOGGER << endl;
     gcta *pter_gcta = new gcta(autosome_num, rm_high_ld_cutoff, out); //, *pter_gcta2=new gcta(autosome_num, rm_high_ld_cutoff, out);
+
+    if (!genetic_model.empty()) pter_gcta->set_genetic_model(genetic_model);
     if(ldscore_adj_flag) pter_gcta->set_ldscore_adj_flag(ldscore_adj_flag);
     if(reml_force_inv_fac_flag) pter_gcta->set_reml_force_inv();
     if(reml_force_converge_flag) pter_gcta->set_reml_force_converge();
@@ -1344,6 +1371,9 @@ void option(int option_num, char* option_str[])
             }
             // Read the list, if there are multiple bfiles
             if(bfile_flag==2) multi_bfiles = pter_gcta->read_bfile_list(bfile_list);
+            // For --save-reml --mlma only the .fam is needed to build the sample intersection;
+            // the .bim and .bed data are not loaded.
+            const bool fam_only = save_reml_flag && mlma_flag;
             // Start to read the genotypes
             if(bfile_flag==1) pter_gcta->read_famfile(bfile + ".fam");
             else pter_gcta->read_multi_famfiles(multi_bfiles);
@@ -1351,33 +1381,49 @@ void option(int option_num, char* option_str[])
             if (!rm_indi_file.empty()) pter_gcta->remove_indi(rm_indi_file);
             if (!update_sex_file.empty()) pter_gcta->update_sex(update_sex_file);
             if (!blup_indi_file.empty()) pter_gcta->read_indi_blup(blup_indi_file);
-            if(bfile_flag==1) pter_gcta->read_bimfile(bfile + ".bim");
-            else pter_gcta->read_multi_bimfiles(multi_bfiles);
-            if (!extract_snp_file.empty()) pter_gcta->extract_snp(extract_snp_file);
-            if (extract_chr_start > 0) pter_gcta->extract_chr(extract_chr_start, extract_chr_end);
-            if(extract_region_chr>0) pter_gcta->extract_region_bp(extract_region_chr, extract_region_bp, extract_region_wind);
-            if (!extract_snp_name.empty()){
-                if(extract_region_wind>0) pter_gcta->extract_region_snp(extract_snp_name, extract_region_wind);
-                else pter_gcta->extract_single_snp(extract_snp_name);
-            }
-            if (!exclude_snp_file.empty()) pter_gcta->exclude_snp(exclude_snp_file);
-            if(exclude_region_chr>0) pter_gcta->exclude_region_bp(exclude_region_chr, exclude_region_bp, exclude_region_wind);
-            if (!exclude_snp_name.empty()) {
-                if(exclude_region_wind>0) pter_gcta->exclude_region_snp(exclude_snp_name, exclude_region_wind);
-                else pter_gcta->exclude_single_snp(exclude_snp_name);
-            }
-            if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
-            if (LD) pter_gcta->read_LD_target_SNPs(LD_file);
-            if(gsmr_flag) pter_gcta->read_gsmrfile(expo_file_list, outcome_file_list, gwas_thresh, nsnp_gsmr, gsmr_so_alg);
-            if(mtcojo_flag) nsnp_read = pter_gcta->read_mtcojofile(mtcojolist_file, gwas_thresh, nsnp_gsmr);
-            if(mtcojo_flag && nsnp_read>0) {
-                if(bfile_flag==1) pter_gcta->read_bedfile(bfile + ".bed");
-                else pter_gcta->read_multi_bedfiles(multi_bfiles);
-            }
-            if(!mtcojo_flag){
-                if(bfile_flag==1) pter_gcta->read_bedfile(bfile + ".bed");
-                else pter_gcta->read_multi_bedfiles(multi_bfiles);
-            }
+            if (!fam_only) {
+                if(bfile_flag==1) pter_gcta->read_bimfile(bfile + ".bim");
+                else pter_gcta->read_multi_bimfiles(multi_bfiles);
+                if (!extract_snp_file.empty()) pter_gcta->extract_snp(extract_snp_file);
+                if (extract_chr_start > 0) pter_gcta->extract_chr(extract_chr_start, extract_chr_end);
+                if(extract_region_chr>0) pter_gcta->extract_region_bp(extract_region_chr, extract_region_bp, extract_region_wind);
+                if (!extract_snp_name.empty()){
+                    if(extract_region_wind>0) pter_gcta->extract_region_snp(extract_snp_name, extract_region_wind);
+                    else pter_gcta->extract_single_snp(extract_snp_name);
+                }
+                if (!exclude_snp_file.empty()) pter_gcta->exclude_snp(exclude_snp_file);
+                if(exclude_region_chr>0) pter_gcta->exclude_region_bp(exclude_region_chr, exclude_region_bp, exclude_region_wind);
+                if (!exclude_snp_name.empty()) {
+                    if(exclude_region_wind>0) pter_gcta->exclude_region_snp(exclude_snp_name, exclude_region_wind);
+                    else pter_gcta->exclude_single_snp(exclude_snp_name);
+                }
+                if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
+                if (LD) pter_gcta->read_LD_target_SNPs(LD_file);
+                if(gsmr_flag) pter_gcta->read_gsmrfile(expo_file_list, outcome_file_list, gwas_thresh, nsnp_gsmr, gsmr_so_alg);
+                if(mtcojo_flag) nsnp_read = pter_gcta->read_mtcojofile(mtcojolist_file, gwas_thresh, nsnp_gsmr);
+                if(mtcojo_flag && nsnp_read>0) {
+                    if(bfile_flag==1) {
+                        if (genetic_model != "") {
+                            pter_gcta->read_bed_dosage(bfile + ".bed");
+                        } else {
+                            pter_gcta->read_bedfile(bfile + ".bed");
+                        }
+                    } else {
+                        pter_gcta->read_multi_bedfiles(multi_bfiles);
+                    }
+                }
+                if(!mtcojo_flag){
+                    if(bfile_flag==1) {
+                        if (genetic_model != "") {
+                            pter_gcta->read_bed_dosage(bfile + ".bed");
+                        } else {
+                            pter_gcta->read_bedfile(bfile + ".bed");
+                        }
+                    } else {
+                        pter_gcta->read_multi_bedfiles(multi_bfiles);
+                    }
+                }
+            } // end !fam_only
 
             if (!update_impRsq_file.empty()) pter_gcta->update_impRsq(update_impRsq_file);
             if (!update_freq_file.empty()) pter_gcta->update_freq(update_freq_file);
@@ -1398,7 +1444,7 @@ void option(int option_num, char* option_str[])
             else if (ld_mean_rsq_seg_flag) pter_gcta->ld_seg(LD_file, LD_seg, LD_wind, LD_rsq_cutoff, dominance_flag);
             else if (ld_max_rsq_flag) pter_gcta ->calcu_max_ld_rsq(LD_wind, LD_rsq_cutoff, dominance_flag);
             else if (blup_snp_flag) pter_gcta->blup_snp_geno();
-            else if (mlma_flag) pter_gcta->mlma(grm_file, m_grm_flag, subtract_grm_file, phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, within_family, make_grm_inbred_flag, mlma_no_adj_covar, weight_file);
+            else if (mlma_flag) pter_gcta->mlma(grm_file, m_grm_flag, subtract_grm_file, phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, within_family, make_grm_inbred_flag, mlma_no_adj_covar, weight_file, save_reml_file, load_reml_file);
             else if (mlma_loco_flag) pter_gcta->mlma_loco(phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, make_grm_inbred_flag, mlma_no_adj_covar);
             else if (massoc_slct_flag | massoc_joint_flag) {pter_gcta->set_massoc_pC_thresh(massoc_out_pC_thresh); pter_gcta->run_massoc_slct(massoc_file, massoc_wind, massoc_p, massoc_collinear, massoc_top_SNPs, massoc_joint_flag, massoc_gc_flag, massoc_gc_val, massoc_actual_geno_flag, massoc_mld_slct_alg);}
             else if (!massoc_cond_snplist.empty()) {pter_gcta->set_massoc_pC_thresh(massoc_out_pC_thresh); pter_gcta->run_massoc_cond(massoc_file, massoc_cond_snplist, massoc_wind, massoc_collinear, massoc_gc_flag, massoc_gc_val, massoc_actual_geno_flag);}
@@ -1456,7 +1502,7 @@ void option(int option_num, char* option_str[])
         else if (simu_qt_flag || simu_cc) pter_gcta->GWAS_simu(bfile, simu_rep, simu_causal, simu_case_num, simu_control_num, simu_h2, simu_K, simu_seed, simu_output_causal, simu_emb_flag, simu_eff_mod);
         else if (make_bed_flag) pter_gcta->save_plink();
         else if (fst_flag) pter_gcta->Fst(subpopu_file);
-        else if (mlma_flag) pter_gcta->mlma(grm_file, m_grm_flag, subtract_grm_file, phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, within_family, make_grm_inbred_flag, mlma_no_adj_covar, weight_file);
+        else if (mlma_flag) pter_gcta->mlma(grm_file, m_grm_flag, subtract_grm_file, phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, within_family, make_grm_inbred_flag, mlma_no_adj_covar, weight_file, save_reml_file, load_reml_file);
         else if (mlma_loco_flag) pter_gcta->mlma_loco(phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, make_grm_inbred_flag, mlma_no_adj_covar);
     } else if (HE_reg_flag) pter_gcta->HE_reg(grm_file, m_grm_flag, phen_file, kp_indi_file, rm_indi_file, mphen);
     else if (HE_reg_bivar_flag) pter_gcta->HE_reg_bivar(grm_file, m_grm_flag, phen_file, kp_indi_file, rm_indi_file, mphen, mphen2);
