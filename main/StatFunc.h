@@ -20,6 +20,7 @@
 #include <span>
 #include <numbers>
 #include <iostream>
+#include <random>
 #include "CommFunc.h"
 #include <boost/math/distributions.hpp>
 #include <boost/math/special_functions/gamma.hpp>
