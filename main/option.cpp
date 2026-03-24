@@ -17,6 +17,8 @@
  */
 
 #include <cstdio>
+#include <filesystem>
+#include <random>
 #include <stdlib.h>
 #include "gcta.h"
 #include "Logger.h"
@@ -96,7 +98,7 @@ void option(int option_num, char* option_str[])
     // initialize paramters for simulation based on real genotype data
     bool simu_qt_flag = false, simu_cc = false, simu_emb_flag = false, simu_output_causal = false;
     int simu_rep = 1, simu_case_num = 0, simu_control_num = 0, simu_eff_mod = 0;
-    double simu_h2 = 0.1, simu_K = 0.1, simu_gener = 100, simu_seed = -CommFunc::rand_seed();
+    double simu_h2 = 0.1, simu_K = 0.1, simu_gener = 100, simu_seed = -static_cast<int>(std::random_device{}() & 0x7FFFFFFFu);
     string simu_causal = "";
 
     // simulate unlinked SNPs
@@ -249,27 +251,27 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--update-imput-rsq") == 0) {
             update_impRsq_file = argv[++i];
             LOGGER << "--update-imput-rsq " << update_impRsq_file << endl;
-            CommFunc::FileExist(update_impRsq_file);
+            if (!std::filesystem::exists(update_impRsq_file)) LOGGER.e(0, "cannot open the file ["+update_impRsq_file+"] to read.");
         } else if (strcmp(argv[i], "--update-freq") == 0) {
             update_freq_file = argv[++i];
             LOGGER << "--update-freq " << update_freq_file << endl;
-            CommFunc::FileExist(update_freq_file);
+            if (!std::filesystem::exists(update_freq_file)) LOGGER.e(0, "cannot open the file ["+update_freq_file+"] to read.");
         } else if (strcmp(argv[i], "--update-ref-allele") == 0) {
             update_refA_file = argv[++i];
             LOGGER << "--update-ref-allele " << update_refA_file << endl;
-            CommFunc::FileExist(update_refA_file);
+            if (!std::filesystem::exists(update_refA_file)) LOGGER.e(0, "cannot open the file ["+update_refA_file+"] to read.");
         } else if (strcmp(argv[i], "--keep") == 0) {
             kp_indi_file = argv[++i];
             LOGGER << "--keep " << kp_indi_file << endl;
-            CommFunc::FileExist(kp_indi_file);
+            if (!std::filesystem::exists(kp_indi_file)) LOGGER.e(0, "cannot open the file ["+kp_indi_file+"] to read.");
         } else if (strcmp(argv[i], "--remove") == 0) {
             rm_indi_file = argv[++i];
             LOGGER << "--remove " << rm_indi_file << endl;
-            CommFunc::FileExist(rm_indi_file);
+            if (!std::filesystem::exists(rm_indi_file)) LOGGER.e(0, "cannot open the file ["+rm_indi_file+"] to read.");
         } else if (strcmp(argv[i], "--update-sex") == 0) {
             update_sex_file = argv[++i];
             LOGGER << "--update-sex " << update_sex_file << endl;
-            CommFunc::FileExist(update_sex_file);
+            if (!std::filesystem::exists(update_sex_file)) LOGGER.e(0, "cannot open the file ["+update_sex_file+"] to read.");
         } else if (strcmp(argv[i], "--chr") == 0) {
             extract_chr_start = extract_chr_end = atoi(argv[++i]);
             LOGGER << "--chr " << extract_chr_start << endl;
@@ -284,11 +286,11 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--extract") == 0) {
             extract_snp_file = argv[++i];
             LOGGER << "--extract " << extract_snp_file << endl;
-            CommFunc::FileExist(extract_snp_file);
+            if (!std::filesystem::exists(extract_snp_file)) LOGGER.e(0, "cannot open the file ["+extract_snp_file+"] to read.");
         } else if (strcmp(argv[i], "--exclude") == 0) {
             exclude_snp_file = argv[++i];
             LOGGER << "--exclude " << exclude_snp_file << endl;
-            CommFunc::FileExist(exclude_snp_file);
+            if (!std::filesystem::exists(exclude_snp_file)) LOGGER.e(0, "cannot open the file ["+exclude_snp_file+"] to read.");
         } else if (strcmp(argv[i], "--extract-snp") == 0) {
             extract_snp_name = argv[++i];
             LOGGER << "--extract-snp " << extract_snp_name << endl;
@@ -362,7 +364,7 @@ void option(int option_num, char* option_str[])
         else if (strcmp(argv[i], "--paa") == 0) {
             paa_file = argv[++i];
             LOGGER << "--paa " << paa_file << endl;
-            CommFunc::FileExist(paa_file);
+            if (!std::filesystem::exists(paa_file)) LOGGER.e(0, "cannot open the file ["+paa_file+"] to read.");
         } else if (strcmp(argv[i], "--ibc") == 0) {
             ibc = true;
             LOGGER << "--ibc" << endl;
@@ -507,7 +509,7 @@ void option(int option_num, char* option_str[])
             LD = true;
             LD_file = argv[++i];
             LOGGER << "--ld " << LD_file << endl;
-            CommFunc::FileExist(LD_file);
+            if (!std::filesystem::exists(LD_file)) LOGGER.e(0, "cannot open the file ["+LD_file+"] to read.");
         } else if (strcmp(argv[i], "--ld-step") == 0) {
             LD_search = true;
             LD_step = atoi(argv[++i]);
@@ -546,7 +548,7 @@ void option(int option_num, char* option_str[])
             thread_flag = true;
             ld_score_multi_file = argv[++i];
             LOGGER << "--ld-score-multi " << ld_score_multi_file << endl;
-            CommFunc::FileExist(ld_score_multi_file);
+            if (!std::filesystem::exists(ld_score_multi_file)) LOGGER.e(0, "cannot open the file ["+ld_score_multi_file+"] to read.");
         } else if (strcmp(argv[i], "--ld-rsq-cutoff") == 0) {
             LD_rsq_cutoff = atof(argv[++i]);
             LOGGER << "--ld-rsq-cutoff " << LD_rsq_cutoff << endl;
@@ -600,7 +602,7 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--simu-causal-loci") == 0) {
             simu_causal = argv[++i];
             LOGGER << "--simu-causal-loci " << simu_causal << endl;
-            CommFunc::FileExist(simu_causal);
+            if (!std::filesystem::exists(simu_causal)) LOGGER.e(0, "cannot open the file ["+simu_causal+"] to read.");
         } else if (strcmp(argv[i], "--simu-embayesb") == 0) { // internal
             simu_emb_flag = true;
             LOGGER << "--simu-embayesb" << endl;
@@ -763,7 +765,7 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--pheno") == 0) {
             phen_file = argv[++i];
             LOGGER << "--pheno " << phen_file << endl;
-            CommFunc::FileExist(phen_file);
+            if (!std::filesystem::exists(phen_file)) LOGGER.e(0, "cannot open the file ["+phen_file+"] to read.");
         } else if (strcmp(argv[i], "--mpheno") == 0) {
             mphen = atoi(argv[++i]);
             LOGGER << "--mpheno " << mphen << endl;
@@ -771,28 +773,28 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--qcovar") == 0) {
             qcovar_file = argv[++i];
             LOGGER << "--qcovar " << qcovar_file << endl;
-            CommFunc::FileExist(qcovar_file);
+            if (!std::filesystem::exists(qcovar_file)) LOGGER.e(0, "cannot open the file ["+qcovar_file+"] to read.");
         } else if (strcmp(argv[i], "--covar") == 0) {
             covar_file = argv[++i];
             LOGGER << "--covar " << covar_file << endl;
-            CommFunc::FileExist(covar_file);
+            if (!std::filesystem::exists(covar_file)) LOGGER.e(0, "cannot open the file ["+covar_file+"] to read.");
         } else if (strcmp(argv[i], "--reml-res-diag") == 0){
             weight_file = argv[++i];
             LOGGER << "--reml-res-diag " << weight_file << endl;
-            CommFunc::FileExist(weight_file);
+            if (!std::filesystem::exists(weight_file)) LOGGER.e(0, "cannot open the file ["+weight_file+"] to read.");
         } else if (strcmp(argv[i], "--gxqe") == 0) {
             qgxe_file = argv[++i];
             LOGGER << "--gxqe " << qgxe_file << endl;
-            CommFunc::FileExist(qgxe_file);
+            if (!std::filesystem::exists(qgxe_file)) LOGGER.e(0, "cannot open the file ["+qgxe_file+"] to read.");
         } else if (strcmp(argv[i], "--gxe") == 0) {
             gxe_file = argv[++i];
             LOGGER << "--gxe " << gxe_file << endl;
-            CommFunc::FileExist(gxe_file);
+            if (!std::filesystem::exists(gxe_file)) LOGGER.e(0, "cannot open the file ["+gxe_file+"] to read.");
         } else if (strcmp(argv[i], "--blup-snp") == 0) {
             blup_snp_flag = true;
             blup_indi_file = argv[++i];
             LOGGER << "--blup-snp " << blup_indi_file << endl;
-            CommFunc::FileExist(blup_indi_file);
+            if (!std::filesystem::exists(blup_indi_file)) LOGGER.e(0, "cannot open the file ["+blup_indi_file+"] to read.");
         } else if (strcmp(argv[i], "--reml-wfam") == 0) {
             reml_flag = true;
             within_family = true;
@@ -865,7 +867,7 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--cojo-file") == 0) {
             massoc_file = argv[++i];
             LOGGER << "--cojo-file " << massoc_file << endl;
-            CommFunc::FileExist(massoc_file);
+            if (!std::filesystem::exists(massoc_file)) LOGGER.e(0, "cannot open the file ["+massoc_file+"] to read.");
         } else if (strcmp(argv[i], "--cojo-slct") == 0) {
             massoc_slct_flag = true;
             massoc_mld_slct_alg = 0;
@@ -963,7 +965,7 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--sub-popu") == 0) {
             subpopu_file = argv[++i];
             LOGGER << "--sub-popu " << subpopu_file << endl;
-            CommFunc::FileExist(subpopu_file);
+            if (!std::filesystem::exists(subpopu_file)) LOGGER.e(0, "cannot open the file ["+subpopu_file+"] to read.");
         }
         else if (strcmp(argv[i], "--fastBAT-ld-cutoff") == 0) {
             sbat_ld_cutoff = sqrt(atof(argv[++i]));
@@ -975,15 +977,15 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--fastBAT") == 0) {
             sbat_sAssoc_file = argv[++i];
             LOGGER << "--fastBAT " << sbat_sAssoc_file << endl;
-            CommFunc::FileExist(sbat_sAssoc_file);
+            if (!std::filesystem::exists(sbat_sAssoc_file)) LOGGER.e(0, "cannot open the file ["+sbat_sAssoc_file+"] to read.");
         } else if (strcmp(argv[i], "--fastBAT-gene-list") == 0) {
             sbat_gAnno_file = argv[++i];
             LOGGER << "--fastBAT-gene-list " << sbat_gAnno_file << endl;
-            CommFunc::FileExist(sbat_gAnno_file);
+            if (!std::filesystem::exists(sbat_gAnno_file)) LOGGER.e(0, "cannot open the file ["+sbat_gAnno_file+"] to read.");
         } else if (strcmp(argv[i], "--fastBAT-set-list") == 0) {
             sbat_snpset_file = argv[++i];
             LOGGER << "--fastBAT-set-list " << sbat_snpset_file << endl;
-            CommFunc::FileExist(sbat_snpset_file);
+            if (!std::filesystem::exists(sbat_snpset_file)) LOGGER.e(0, "cannot open the file ["+sbat_snpset_file+"] to read.");
         } else if (strcmp(argv[i], "--fastBAT-wind") == 0) {
             sbat_wind = atoi(argv[++i]);
             LOGGER << "--fastBAT-wind " << sbat_wind << endl;
@@ -1014,15 +1016,15 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--mBAT-combo") == 0) {
             mbat_sAssoc_file = argv[++i];
             LOGGER << "--mBAT-combo " << mbat_sAssoc_file << endl;
-            CommFunc::FileExist(mbat_sAssoc_file);
+            if (!std::filesystem::exists(mbat_sAssoc_file)) LOGGER.e(0, "cannot open the file ["+mbat_sAssoc_file+"] to read.");
         } else if (strcmp(argv[i], "--mBAT-gene-list") == 0) {
             mbat_gAnno_file = argv[++i];
             LOGGER << "--mBAT-gene-list " << mbat_gAnno_file << endl;
-            CommFunc::FileExist(mbat_gAnno_file);
+            if (!std::filesystem::exists(mbat_gAnno_file)) LOGGER.e(0, "cannot open the file ["+mbat_gAnno_file+"] to read.");
         } else if (strcmp(argv[i], "--mBAT-set-list") == 0) {
             mbat_snpset_file = argv[++i];
             LOGGER << "--mBAT-set-list " << mbat_snpset_file << endl;
-            CommFunc::FileExist(mbat_snpset_file);
+            if (!std::filesystem::exists(mbat_snpset_file)) LOGGER.e(0, "cannot open the file ["+mbat_snpset_file+"] to read.");
         } else if (strcmp(argv[i], "--mBAT-wind") == 0) {
             mbat_wind = atoi(argv[++i]);
             LOGGER << "--mBAT-wind " << mbat_wind << endl;
@@ -1033,18 +1035,18 @@ void option(int option_num, char* option_str[])
             efile = argv[++i];
             efile_flag = true;
             LOGGER << "--efile " << efile << endl;
-            CommFunc::FileExist(efile);
+            if (!std::filesystem::exists(efile)) LOGGER.e(0, "cannot open the file ["+efile+"] to read.");
         } 
         else if (strcmp(argv[i], "--e-cor") == 0) {
             eR_file = argv[++i];
             eR_file_flag = true;
             LOGGER << "--e-cor " << eR_file << endl;
-            CommFunc::FileExist(eR_file);
+            if (!std::filesystem::exists(eR_file)) LOGGER.e(0, "cannot open the file ["+eR_file+"] to read.");
         } 
         else if (strcmp(argv[i], "--ecojo") == 0) {
             ecojo_ma_file = argv[++i];
             LOGGER << "--ecojo " << ecojo_ma_file << endl;
-            CommFunc::FileExist(ecojo_ma_file);
+            if (!std::filesystem::exists(ecojo_ma_file)) LOGGER.e(0, "cannot open the file ["+ecojo_ma_file+"] to read.");
         } 
         else if (strcmp(argv[i], "--ecojo-slct") == 0) {
             ecojo_slct_flag = true;
@@ -1099,8 +1101,8 @@ void option(int option_num, char* option_str[])
             expo_file_list = gsmr_file_list[0];
             outcome_file_list = gsmr_file_list[1];
             LOGGER << "--gsmr-file " << expo_file_list << " " << outcome_file_list << endl;
-            CommFunc::FileExist(expo_file_list);
-            CommFunc::FileExist(outcome_file_list);
+            if (!std::filesystem::exists(expo_file_list)) LOGGER.e(0, "cannot open the file ["+expo_file_list+"] to read.");
+            if (!std::filesystem::exists(outcome_file_list)) LOGGER.e(0, "cannot open the file ["+outcome_file_list+"] to read.");
         } else if(strcmp(argv[i], "--gsmr2-beta") == 0) {
             gsmr_beta_version = 1;
             LOGGER << "--gsmr2-beta" << endl;
@@ -1124,11 +1126,11 @@ void option(int option_num, char* option_str[])
             mtcojo_flag = true;
             mtcojolist_file = argv[++i];
             LOGGER << "--mtcojo-file " << mtcojolist_file << endl;
-            CommFunc::FileExist(mtcojolist_file);
+            if (!std::filesystem::exists(mtcojolist_file)) LOGGER.e(0, "cannot open the file ["+mtcojolist_file+"] to read.");
         } else if (strcmp(argv[i], "--mtcojo-bxy") == 0) {
             mtcojo_bxy_file = argv[++i];
             LOGGER << "--mtcojo-bxy " << mtcojo_bxy_file << endl;
-            CommFunc::FileExist(mtcojo_bxy_file);
+            if (!std::filesystem::exists(mtcojo_bxy_file)) LOGGER.e(0, "cannot open the file ["+mtcojo_bxy_file+"] to read.");
         } else if (strcmp(argv[i], "--ref-ld-chr") == 0) {
             ref_ld_flag = true;
             ref_ld_dirt = argv[++i];
@@ -1217,7 +1219,7 @@ void option(int option_num, char* option_str[])
             gwas_data_flag = true;
             pcadjust_list_file  = argv[++i];
             LOGGER << "--gwas-adj-pc " << pcadjust_list_file << endl;
-            CommFunc::FileExist(pcadjust_list_file);
+            if (!std::filesystem::exists(pcadjust_list_file)) LOGGER.e(0, "cannot open the file ["+pcadjust_list_file+"] to read.");
         } else if (strcmp(argv[i], "--gwas-adj-pc-wind") == 0) {
             pc_adj_wind_size = atoi(argv[++i]);
             LOGGER << "--gwas-adj-pc-wind " << pc_adj_wind_size << endl;
