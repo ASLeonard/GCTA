@@ -552,6 +552,9 @@ private:
     std::vector<int> _keep; // initialized in the read_famfile()
     eigenMatrix _varcmp_Py; // BLUP solution to the total genetic effects of individuals
 
+    // bfile path for lazy loading
+    string _bfile;
+
     // bed file
     std::vector< std::vector<bool> > _snp_1;
     std::vector< std::vector<bool> > _snp_2;
