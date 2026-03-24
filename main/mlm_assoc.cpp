@@ -298,7 +298,7 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     LOGGER<<"\nSaving the results of the mixed linear model association analyses of "<<m<<" SNPs to ["+filename+"] ..."<<std::endl;
     std::ofstream ofile(filename);
     if(!ofile) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
-    ofile<<"Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\tp"<<std::endl;
+    ofile<<"Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\t"<<(_log_pval ? "log_p" : "p")<<std::endl;
 	for(size_t i = 0; i < m; ++i){
         const auto j = _include[i];
         ofile<<_chr[j]<<"\t"<<_snp_name[j]<<"\t"<<_bp[j]<<"\t"<<_ref_A[j]<<"\t"<<_other_A[j]<<"\t";
@@ -350,7 +350,7 @@ void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<
         if(se[i]>1.0e-30){
             se[i]=sqrt(se[i]);
             chisq=beta[i]/se[i];
-            pval[i]=StatFunc::pchisq(chisq*chisq, 1);
+            pval[i]=StatFunc::pchisq(chisq*chisq, 1, _log_pval);
         }
     }
 }
@@ -408,7 +408,7 @@ void gcta::mlma_calcu_stat_covar(std::span<const float> y, [[maybe_unused]] std:
         if(se[i]>1.0e-30){
             se[i]=sqrt(se[i]);
             chisq=beta[i]/se[i];
-            pval[i]=StatFunc::pchisq(chisq*chisq, 1);
+            pval[i]=StatFunc::pchisq(chisq*chisq, 1, _log_pval);
         }
     }
 }
@@ -569,7 +569,7 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
     LOGGER<<"\nSaving the results of the mixed linear model association analyses of "<<_include.size()<<" SNPs to ["+filename+"] ..."<<std::endl;
     std::ofstream ofile(filename.c_str());
     if(!ofile) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
-    ofile<<"Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\tp"<<std::endl;
+    ofile<<"Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\t"<<(_log_pval ? "log_p" : "p")<<std::endl;
     for(c1=0; c1<chrs.size(); c1++){
         for(i=0; i<icld_chrs[c1].size(); i++){
             j=icld_chrs[c1][i];

@@ -116,6 +116,7 @@ void option(int option_num, char* option_str[])
 
     // REML analysis
     bool prevalence_flag = false, reml_force_inv_fac_flag = false, reml_force_converge_flag = false, reml_no_converge_flag = false, reml_fixed_var_flag = false;
+    bool logp_flag = false;
     int mphen = 1, mphen2 = 2, reml_mtd = 0, MaxIter = 100;
     bool reml_allow_constrain_run = false;
     double prevalence = -2.0, prevalence2 = -2.0;
@@ -813,6 +814,9 @@ void option(int option_num, char* option_str[])
         } else if(flag == "--reml-inv-mtd"){
             reml_inv_method = std::stoi(argv[++i]);
             LOGGER << "--reml-inv-mtd " << reml_inv_method <<  std::endl;
+        } else if (flag == "--logp") {
+            logp_flag = true;
+            LOGGER << "--logp" << std::endl;
         } else if (flag == "--pheno") {
             phen_file = argv[++i];
             LOGGER << "--pheno " << phen_file <<  std::endl;
@@ -1366,6 +1370,7 @@ void option(int option_num, char* option_str[])
     if (!genetic_model.empty()) pter_gcta->set_genetic_model(genetic_model);
     if(ldscore_adj_flag) pter_gcta->set_ldscore_adj_flag(ldscore_adj_flag);
     if(reml_force_inv_fac_flag) pter_gcta->set_reml_force_inv();
+    if(logp_flag) pter_gcta->set_log_pval(true);
     if(reml_force_converge_flag) pter_gcta->set_reml_force_converge();
     if(reml_no_converge_flag) pter_gcta->set_reml_no_converge();
     if(reml_fixed_var_flag) pter_gcta->set_reml_fixed_var();

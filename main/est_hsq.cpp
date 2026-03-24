@@ -26,6 +26,11 @@ void gcta::set_reml_force_inv()
     _reml_force_inv = true;
 }
 
+void gcta::set_log_pval(bool log_pval)
+{
+    _log_pval = log_pval;
+}
+
 void gcta::set_reml_allow_constrain_run(){
     _reml_allow_constrain_run = true;
 }
@@ -898,7 +903,11 @@ void gcta::reml(bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, std:
         o_reml << "LRT\t" << std::setprecision(3) << LRT << std::endl;
         o_reml << "df\t" << std::setprecision(1) << _r_indx.size() - _r_indx_drop.size() << std::endl;
         //o_reml << "Pval\t" << std::setprecision(4) << setiosflags(std::ios::scientific) << 0.5 * StatFunc::chi_prob(_r_indx.size() - _r_indx_drop.size(), LRT) << setiosflags(std::ios::fixed) << std::endl;
-        o_reml << "Pval\t" << std::scientific << std::setprecision(4) << 0.5 * StatFunc::chi_prob(_r_indx.size() - _r_indx_drop.size(), LRT) << std::fixed << std::endl;
+        if (_log_pval) {
+            o_reml << "log_Pval\t" << std::setprecision(6) << (std::log(0.5) + StatFunc::chi_prob(_r_indx.size() - _r_indx_drop.size(), LRT, true)) << std::endl;
+        } else {
+            o_reml << "Pval\t" << std::scientific << std::setprecision(4) << 0.5 * StatFunc::chi_prob(_r_indx.size() - _r_indx_drop.size(), LRT) << std::fixed << std::endl;
+        }
     }
     if (_bivar_reml && !_fixed_rg_val.empty()) {
         o_reml << "logL0\t" << std::setprecision(3) << lgL_fixed_rg << " (when rG fixed at ";
@@ -907,7 +916,11 @@ void gcta::reml(bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, std:
         o_reml << "LRT\t" << std::setprecision(3) << LRT << std::endl;
         o_reml << "df\t" << std::setprecision(1) << _fixed_rg_val.size() << std::endl;
         //o_reml << "Pval\t" << std::setprecision(4) << setiosflags(std::ios::scientific) << 0.5 * StatFunc::chi_prob(_fixed_rg_val.size(), LRT) << setiosflags(std::ios::fixed) << " (one-tailed test)" << std::endl;
-        o_reml << "Pval\t" << std::scientific << std::setprecision(4) << 0.5 * StatFunc::chi_prob(_fixed_rg_val.size(), LRT) << std::fixed << " (one-tailed test)" << std::endl;
+        if (_log_pval) {
+            o_reml << "log_Pval\t" << std::setprecision(6) << (std::log(0.5) + StatFunc::chi_prob(_fixed_rg_val.size(), LRT, true)) << " (one-tailed test)" << std::endl;
+        } else {
+            o_reml << "Pval\t" << std::scientific << std::setprecision(4) << 0.5 * StatFunc::chi_prob(_fixed_rg_val.size(), LRT) << std::fixed << " (one-tailed test)" << std::endl;
+        }
     }
     o_reml << "n\t" << _n << std::endl;
     if (est_fix_eff) {

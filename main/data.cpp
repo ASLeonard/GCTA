@@ -59,6 +59,7 @@ gcta::gcta(int autosome_num, double rm_ld_cutoff, std::string out)
     _reml_no_converge = false;
     _reml_fixed_var = false;
     _ldscore_adj = false;
+    _log_pval = false;
 }
 
 gcta::gcta() {
@@ -92,6 +93,7 @@ gcta::gcta() {
     _reml_no_converge = false;
     _reml_fixed_var = false;
     _ldscore_adj = false;
+    _log_pval = false;
 }
 
 gcta::~gcta() {

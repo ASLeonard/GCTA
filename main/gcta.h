@@ -153,6 +153,7 @@ public:
     void set_reml_allow_constrain_run();
     void set_reml_diag_mul(double value);
     void set_reml_diagV_adj(int method);
+    void set_log_pval(bool log_pval);
     void set_reml_inv_method(int method);
 
     // bivariate REML analysis
@@ -611,6 +612,7 @@ private:
     bool _reml_no_converge;
     bool _reml_fixed_var;
     bool _reml_allow_constrain_run = false;
+    bool _log_pval;
 
     // within-family reml analysis
     bool _within_family;
