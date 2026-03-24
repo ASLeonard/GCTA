@@ -324,7 +324,7 @@ void gcta::read_grm_gz(std::string grm_file, std::vector<std::string> &grm_id, b
         if (!(ss >> grm_N_buf)) LOGGER.e(0, errmsg + line);
         if (!(ss >> grm_buf)) LOGGER.e(0, errmsg + line);
         if (indx1 < indx2 || indx1 > n || indx2 > n) LOGGER.e(0, errmsg + line);
-        if (grm_N_buf == 0) LOGGER << "Warning: " << line << std::endl;
+        if (grm_N_buf == 0) LOGGER.w(0, line);
         _grm_N(indx1 - 1, indx2 - 1) = _grm_N(indx2 - 1, indx1 - 1) = grm_N_buf;
         _grm(indx1 - 1, indx2 - 1) = _grm(indx2 - 1, indx1 - 1) = grm_buf;
         nline++;

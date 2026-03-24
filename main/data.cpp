@@ -206,11 +206,11 @@ void gcta::init_include()
     for (i = 0; i < _snp_num; i++) {
         _include[i] = i;
         if(_snp_name_map.find(_snp_name[i]) != _snp_name_map.end()){
-            LOGGER << "Warning: Duplicated SNP ID \"" + _snp_name[i] + "\" ";
+            std::string orig = _snp_name[i];
             std::stringstream ss;
             ss << _snp_name[i] << "_" << i + 1;
             _snp_name[i] = ss.str();
-            LOGGER<<"has been changed to \"" + _snp_name[i] + "\"\n.";
+            LOGGER.w(0, "Duplicated SNP ID \"" + orig + "\" has been changed to \"" + _snp_name[i] + "\".");
         }
         _snp_name_map.insert(std::pair<std::string, int>(_snp_name[i], i));
     }
@@ -422,7 +422,7 @@ void gcta::read_bed_dosage(std::string bedfile)
                         if (ref_allele_count == -1) {
                             // Missing genotype
                             if (!missing_warned) {
-                                LOGGER << "Warning: missing values detected in the genotype data." << std::endl;
+                                LOGGER.w(0, "missing values detected in the genotype data.");
                                 missing_warned = true;
                             }
                         } else {
@@ -1150,7 +1150,7 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
             f_buf = atof(str_buf.c_str());
             if (str_buf == "X" || str_buf == "NA") {
                 if (!missing) {
-                    LOGGER << "Warning: missing values detected in the dosage data." << std::endl;
+                    LOGGER.w(0, "missing values detected in the dosage data.");
                     missing = true;
                 }
                 f_buf = DOSAGE_NA;
@@ -1257,7 +1257,7 @@ void gcta::read_imp_dose_mach(std::string dosefile, std::string kp_indi_file, st
             f_buf = atof(str_buf.c_str());
             if (str_buf == "X" || str_buf == "NA") {
                 if (!missing) {
-                    LOGGER << "Warning: missing values detected in the dosage data." << std::endl;
+                    LOGGER.w(0, "missing values detected in the dosage data.");
                     missing = true;
                 }
                 f_buf = DOSAGE_NA;
@@ -1723,7 +1723,7 @@ void gcta::filter_snp_max_maf(double max_maf)
 
 void gcta::filter_impRsq(double rsq_cutoff)
 {
-    if (_impRsq.empty()) LOGGER << "Warning: the option --imput-rsq is inactive because GCTA can't find the imputation quality scores for the SNPs. Use the option --update-imput-rsq to input the imputation quality scores." << std::endl;
+    if (_impRsq.empty()) LOGGER.w(0, "the option --imput-rsq is inactive because GCTA can't find the imputation quality scores for the SNPs. Use the option --update-imput-rsq to input the imputation quality scores.");
     LOGGER << "Filtering SNPs with imputation Rsq > " << rsq_cutoff << " ..." << std::endl;
     std::map<std::string, int> id_map_buf(_snp_name_map);
     std::map<std::string, int>::iterator iter, end = id_map_buf.end();
@@ -1835,7 +1835,7 @@ void gcta::update_ref_A(std::string ref_A_file) {
     }
     i_ref_A.close();
     LOGGER << "Reference alleles of " << icount << " SNPs are updated from [" + ref_A_file + "]." << std::endl;
-    if (icount != _snp_num) LOGGER << "Warning: reference alleles of " << _snp_num - icount << " SNPs have not been updated." << std::endl;
+    if (icount != _snp_num) LOGGER.w(0, "reference alleles of " + std::to_string(_snp_num - icount) + " SNPs have not been updated.");
 }
 
 void gcta::calcu_mu(bool ssq_flag) {
@@ -1944,7 +1944,7 @@ void gcta::update_impRsq(std::string zinfofile) {
     iRsq.close();
 
     LOGGER << "Imputation Rsq of " << icount << " SNPs are updated from [" + zinfofile + "]." << std::endl;
-    if (icount != _snp_num) LOGGER << "Warning: imputation Rsq of " << _snp_num - icount << " SNPs have not been updated." << std::endl;
+    if (icount != _snp_num) LOGGER.w(0, "imputation Rsq of " + std::to_string(_snp_num - icount) + " SNPs have not been updated.");
 }
 
 void gcta::update_freq(std::string freq) {
@@ -1980,7 +1980,7 @@ void gcta::update_freq(std::string freq) {
     ifreq.close();
 
     LOGGER << "Allele frequencies of " << icount << " SNPs are updated from [" + freq + "]." << std::endl;
-    if (icount != _snp_num) LOGGER << "Warning: allele frequencies of " << _snp_num - icount << " SNPs have not been updated." << std::endl;
+    if (icount != _snp_num) LOGGER.w(0, "allele frequencies of " + std::to_string(_snp_num - icount) + " SNPs have not been updated.");
 }
 
 void gcta::save_freq(bool ssq_flag) {

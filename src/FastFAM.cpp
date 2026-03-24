@@ -319,7 +319,7 @@ int SPA::nSample = 0;
 
 void FastFAM::loadBinModel(){
         LOGGER << "Loading saved GLM model file prefixed with [" << options["model_file"] << "]..." << std::endl;
-        LOGGER << "Note: phenotype, covariates, sparse GRM and association test methods are included in the model file, thus these flags will be ignored." << std::endl;
+        LOGGER.i(0, "phenotype, covariates, sparse GRM and association test methods are included in the model file, thus these flags will be ignored.", "Note:");
         string model_file = options["model_file"] + ".mdl";
 
         string id_file = model_file + ".id";
@@ -435,7 +435,7 @@ void FastFAM::loadBinModel(){
 void FastFAM::loadModel(){
         bBinary = false;
         LOGGER << "Loading saved model file prefixed with [" << options["model_file"] << "]..." << std::endl;
-        LOGGER << "Note: phenotype, covariates, sparse GRM and association test methods are included in the model file, thus these flags will be ignored." << std::endl;
+        LOGGER.i(0, "phenotype, covariates, sparse GRM and association test methods are included in the model file, thus these flags will be ignored.", "Note:");
         string model_file = options["model_file"] + ".mdl";
 
         string id_file = model_file + ".id";
@@ -3501,7 +3501,7 @@ void FastFAM::processMain(){
             }
             if(options.find("model_only") != options.end()){
                 LOGGER.i(0, "Use \"--load-model " + options["out"] + "\" to load the model file for further analysis.");
-                LOGGER << "Note: the sample IDs (FID IID) in the model file must also present in the genotype file for further association step." << std::endl;
+                LOGGER.i(0, "the sample IDs (FID IID) in the model file must also present in the genotype file for further association step.", "Note:");
                 return;
             }
             bool bBinary = false;
