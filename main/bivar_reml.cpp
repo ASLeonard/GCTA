@@ -71,11 +71,7 @@ void gcta::fit_bivar_reml(std::string grm_file, std::string phen_file, std::stri
 
     std::vector<std::string> uni_id;
     std::map<std::string, int> uni_id_map;
-    std::map<std::string, int>::iterator iter;
-    for (i = 0; i < _keep.size(); i++) {
-        uni_id.push_back(_fid[_keep[i]] + ":" + _pid[_keep[i]]);
-        uni_id_map.insert(std::pair<std::string, int>(_fid[_keep[i]] + ":" + _pid[_keep[i]], i));
-    }
+    make_uni_id(uni_id, uni_id_map);
     _n = _keep.size();
     if (_n < 1) LOGGER.e(0, "no individuals are in common among the input files.");
     LOGGER.i(0, std::to_string(_n) + " individuals are in common in these files.");
@@ -86,7 +82,7 @@ void gcta::fit_bivar_reml(std::string grm_file, std::string phen_file, std::stri
     mphen--;
     mphen2--;
     for (i = 0; i < phen_ID.size(); i++) {
-        iter = uni_id_map.find(phen_ID[i]);
+        auto iter = uni_id_map.find(phen_ID[i]);
         if (iter == uni_id_map.end()) continue;
         if (phen_buf[i][mphen] != "NA" && phen_buf[i][mphen] != "-9") n1++;
         if (phen_buf[i][mphen2] != "NA" && phen_buf[i][mphen2] != "-9") n2++;

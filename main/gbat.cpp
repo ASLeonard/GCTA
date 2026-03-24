@@ -19,11 +19,10 @@ void gcta::gbat_read_snpAssoc(std::string snpAssoc_file, std::vector<std::string
     LOGGER << "\nReading SNP association results from [" + snpAssoc_file + "]." << std::endl;
     std::string str_buf;
     std::vector<std::string> vs_buf;
-    std::map<std::string, int>::iterator iter;
     LOGGER << "Reading association p-values from [" << snpAssoc_file << "]." << std::endl;
     while (std::getline(in_snpAssoc, str_buf)) {
         if (StrFunc::split_string(str_buf, vs_buf) != 2) LOGGER.e(0, "in line \"" + str_buf + "\".");
-        iter = _snp_name_map.find(vs_buf[0]);
+        auto iter = _snp_name_map.find(vs_buf[0]);
         if (iter == _snp_name_map.end()) continue;
         snp_name.push_back(vs_buf[0]);
         snp_pval.push_back(atof(vs_buf[1].c_str()));
@@ -191,12 +190,11 @@ void gcta::gbat(std::string sAssoc_file, std::string gAnno_file, int wind, int s
     LOGGER << "\nRunning gene-based association test (GBAT)..." << std::endl;
     std::vector<double> gene_pval(gene_num), chisq_o(gene_num);
     std::vector<int> snp_num_in_gene(gene_num);
-    std::map<std::string, int>::iterator iter1, iter2;
     std::map<std::string, int> snp_name_map;
     for (i = 0; i < snp_name.size(); i++) snp_name_map.insert(std::pair<std::string,int>(snp_name[i], i));
     for (i = 0; i < gene_num; i++) {
-        iter1 = snp_name_map.find(gene2snp_1[i]);
-        iter2 = snp_name_map.find(gene2snp_2[i]);
+        auto iter1 = snp_name_map.find(gene2snp_1[i]);
+        auto iter2 = snp_name_map.find(gene2snp_2[i]);
         bool skip = false;
         if (iter1 == snp_name_map.end() || iter2 == snp_name_map.end() || iter1->second >= iter2->second) skip = true;
         snp_num_in_gene[i] = iter2->second - iter1->second + 1;

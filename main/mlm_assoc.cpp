@@ -91,12 +91,8 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     }
     
     std::vector<std::string> uni_id;
-	std::map<std::string, int> uni_id_map;
-    std::map<std::string, int>::iterator iter;
-	for(i=0; i<_keep.size(); i++){
-	    uni_id.push_back(_fid[_keep[i]]+":"+_pid[_keep[i]]);
-	    uni_id_map.insert(std::pair<std::string,int>(_fid[_keep[i]]+":"+_pid[_keep[i]], i));
-	}
+    std::map<std::string, int> uni_id_map;
+    make_uni_id(uni_id, uni_id_map);
     _n=_keep.size();
     if(_n<1) LOGGER.e(0, "no individual is in common in the input files.");
     LOGGER<<_n<<" individuals are in common in these files."<<std::endl;
@@ -480,12 +476,9 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
     for(i=0; i<_keep.size(); i++) grm_id.push_back(_fid[_keep[i]]+":"+_pid[_keep[i]]);
     
     std::vector<std::string> uni_id;
-	std::map<std::string, int> uni_id_map;
+    std::map<std::string, int> uni_id_map;
     std::map<std::string, int>::iterator iter;
-	for(i=0; i<_keep.size(); i++){
-	    uni_id.push_back(_fid[_keep[i]]+":"+_pid[_keep[i]]);
-	    uni_id_map.insert(std::pair<std::string,int>(_fid[_keep[i]]+":"+_pid[_keep[i]], i));
-	}
+    make_uni_id(uni_id, uni_id_map);
     
     // construct model terms
     _y.setZero(_n);

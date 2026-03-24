@@ -20,12 +20,11 @@ void gcta::sbat_read_snpAssoc(std::string snpAssoc_file, std::vector<std::string
     LOGGER << "\nReading SNP association results from [" + snpAssoc_file + "]." << std::endl;
     std::string str_buf;
     std::vector<std::string> vs_buf;
-    std::map<std::string, int>::iterator iter;
     std::map<std::string, int> assoc_snp_map;
     int line = 0;
     while (std::getline(in_snpAssoc, str_buf)) {
         if (StrFunc::split_string(str_buf, vs_buf, " \t") != 2) LOGGER.e(0, "in line \"" + str_buf + "\".");
-        iter = _snp_name_map.find(vs_buf[0]);
+        auto iter = _snp_name_map.find(vs_buf[0]);
         if (iter == _snp_name_map.end()) continue;
         if(assoc_snp_map.find(vs_buf[0]) != assoc_snp_map.end()) continue;
         else assoc_snp_map.insert(std::pair<std::string, int>(vs_buf[0], line));
@@ -183,7 +182,6 @@ void gcta::sbat_gene(std::string sAssoc_file, std::string gAnno_file, int wind, 
     std::vector<double> gene_pval(gene_num), chisq_o(gene_num), min_snp_pval(gene_num),eigenval_fastbat(gene_num);
     std::vector<std::string> min_snp_name(gene_num);
     std::vector<int> snp_num_in_gene(gene_num);
-    std::map<std::string, int>::iterator iter1, iter2;
     std::map<std::string, int> snp_name_map;
     std::string rgoodsnpfile = _out + ".gene.snpset";
     std::ofstream rogoodsnp;
@@ -191,8 +189,8 @@ void gcta::sbat_gene(std::string sAssoc_file, std::string gAnno_file, int wind, 
     if (sbat_write_snpset) rogoodsnp.open(rgoodsnpfile.c_str());
     for (i = 0; i < snp_name.size(); i++) snp_name_map.insert(std::pair<std::string,int>(snp_name[i], i));
     for (i = 0; i < gene_num; i++) {
-        iter1 = snp_name_map.find(gene2snp_1[i]);
-        iter2 = snp_name_map.find(gene2snp_2[i]);
+        auto iter1 = snp_name_map.find(gene2snp_1[i]);
+        auto iter2 = snp_name_map.find(gene2snp_2[i]);
         bool skip = false;
         if (iter1 == snp_name_map.end() || iter2 == snp_name_map.end() || iter1->second >= iter2->second) skip = true;
         snp_num_in_gene[i] = iter2->second - iter1->second + 1;
@@ -342,7 +340,6 @@ void gcta::sbat(std::string sAssoc_file, std::string snpset_file, double sbat_ld
     std::vector<double> set_pval(set_num), chisq_o(set_num), min_snp_pval(set_num);
     std::vector<std::string> min_snp_name(set_num);
     std::vector<int> snp_num_in_set(set_num);
-    std::map<std::string, int>::iterator iter;
     std::map<std::string, int> snp_name_map;
 
     std::string rgoodsnpfile = _out + ".snpset";
@@ -355,7 +352,7 @@ void gcta::sbat(std::string sAssoc_file, std::string snpset_file, double sbat_ld
         if(snpset[i].size() < 1) skip = true;
         std::vector<int> snp_indx;
         for(j = 0; j < snpset[i].size(); j++){
-            iter = snp_name_map.find(snpset[i][j]);
+            auto iter = snp_name_map.find(snpset[i][j]);
             if(iter!=snp_name_map.end()) snp_indx.push_back(iter->second);
         }
         snp_num_in_set[i] = snp_indx.size();
@@ -651,10 +648,9 @@ void gcta::rm_cor_sbat(Eigen::MatrixXf &R, double R_cutoff, int m, std::vector<i
     }
 
     // swapping
-    std::map<int, int>::iterator iter1, iter2;
     for (i = 0; i < rm_ID1.size(); i++) {
-        iter1 = rm_uni_ID_count.find(rm_ID1[i]);
-        iter2 = rm_uni_ID_count.find(rm_ID2[i]);
+        auto iter1 = rm_uni_ID_count.find(rm_ID1[i]);
+        auto iter2 = rm_uni_ID_count.find(rm_ID2[i]);
         if (iter1->second < iter2->second) {
             i_buf = rm_ID1[i];
             rm_ID1[i] = rm_ID2[i];

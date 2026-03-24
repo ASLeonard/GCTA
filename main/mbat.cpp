@@ -237,7 +237,6 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
     std::vector<double> min_snp_pval(mapped);
     std::vector<int> snp_num_in_gene(mapped);
     std::vector<int> snp_num_in_gene_mBAT(mapped);
-    std::map<std::string, int>::iterator iter1, iter2;
     std::string rgoodsnpfile = _out + ".gene.snpset.mbat";
     std::ofstream rogoodsnp;
     if (mbat_write_snpset) {
@@ -272,8 +271,8 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
         include_in_gene.clear();
         int gene_ori_idx = gene_mapped_idx[j];
         std::vector<int> snp_indx;
-        iter1 = _snp_name_map.find(gene2snp_1[gene_ori_idx]);
-        iter2 = _snp_name_map.find(gene2snp_2[gene_ori_idx]);
+        auto iter1 = _snp_name_map.find(gene2snp_1[gene_ori_idx]);
+        auto iter2 = _snp_name_map.find(gene2snp_2[gene_ori_idx]);
         bool skip = false;
         if (iter1 == _snp_name_map.end() || iter2 == _snp_name_map.end() || iter1->second >= iter2->second) skip = true;
         // 
@@ -305,8 +304,8 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
         include_in_gene.clear();
         int gene_ori_idx = gene_mapped_idx[j];
         std::vector<int> snp_indx;
-        iter1 = _snp_name_map.find(gene2snp_1[gene_ori_idx]);
-        iter2 = _snp_name_map.find(gene2snp_2[gene_ori_idx]);
+        auto iter1 = _snp_name_map.find(gene2snp_1[gene_ori_idx]);
+        auto iter2 = _snp_name_map.find(gene2snp_2[gene_ori_idx]);
         bool skip = false;
         if (iter1 == _snp_name_map.end() || iter2 == _snp_name_map.end() || iter1->second >= iter2->second) skip = true;
         // 
@@ -508,7 +507,6 @@ void gcta::mbat(std::string mbat_sAssoc_file, std::string snpset_file, double mb
     std::vector<int> snp_num_in_set(set_num); // = snp_num_in_set
     std::vector<int> snp_num_in_set_mBAT(set_num); // = snp_num_in_set_mBAT;
     // std::map<std::string, int>::iterator iter1, iter2;
-    std::map<std::string, int>::iterator iter;
     std::map<std::string, int> snp_name_map;
     std::string rgoodsnpfile = _out + ".std::set.snpset.mbat";
     std::ofstream rogoodsnp;
@@ -547,7 +545,7 @@ void gcta::mbat(std::string mbat_sAssoc_file, std::string snpset_file, double mb
         if(snpset[i].size() < 1) skip = true;
         std::vector<int> snp_indx;
         for(j = 0; j < snpset[i].size(); j++){
-            iter = snp_name_map.find(snpset[i][j]);
+            auto iter = snp_name_map.find(snpset[i][j]);
             if(iter!=snp_name_map.end()) snp_indx.push_back(iter->second);
         }
         snp_num_in_set[i] = snp_indx.size();
@@ -568,7 +566,7 @@ void gcta::mbat(std::string mbat_sAssoc_file, std::string snpset_file, double mb
         if(snpset[i].size() < 1) skip = true;
         std::vector<int> snp_indx;
         for(j = 0; j < snpset[i].size(); j++){
-            iter = snp_name_map.find(snpset[i][j]);
+            auto iter = snp_name_map.find(snpset[i][j]);
             if(iter!=snp_name_map.end()) snp_indx.push_back(iter->second);
         }
         snp_num_in_set[i] = snp_indx.size();

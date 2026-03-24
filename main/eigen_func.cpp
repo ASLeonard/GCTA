@@ -22,9 +22,8 @@ void eigen_func::rank(Eigen::VectorXf &x, Eigen::VectorXf &rank)
     std::stable_sort(x_sort.begin(), x_sort.end());
     std::map<double, int> value_indx;
     for(i = 0; i < size; i++) value_indx.insert(std::pair<double,int>(x_sort[i], i+1));
-    std::map<double, int>::iterator iter;
     for(i = 0; i < size; i++){
-        iter = value_indx.find(x[i]);
+        auto iter = value_indx.find(x[i]);
         rank[i] = iter->second;
     }
 }

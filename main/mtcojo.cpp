@@ -898,7 +898,6 @@ std::vector<std::string> gcta::clumping_meta(eigenVector snp_chival, std::vector
         clumped_snp.insert(std::pair<std::string,bool>(_meta_snp_name[indx],false));
     }
 
-    std::map<std::string, bool>::iterator iter_clump;
     int geno_indx=0, geno_indx_j = 0, geno_indx_buf = 0, geno_indx_center = 0, nindi=_keep.size();
     int left_indx = 0, right_indx = 0;
     double r2_left=0.0, r2_right=0.0;
@@ -920,7 +919,7 @@ std::vector<std::string> gcta::clumping_meta(eigenVector snp_chival, std::vector
             if(geno_indx_j<0) break;
             snpbuf_left = _snp_name[_include[geno_indx_j]];
             if(_chr[geno_indx]==_chr[_include[geno_indx_j]] && abs(_bp[geno_indx] - _bp[_include[geno_indx_j]]) < wind_size) {
-                iter_clump = clumped_snp.find(snpbuf_left);
+                auto iter_clump = clumped_snp.find(snpbuf_left);
                 if(iter_clump==clumped_snp.end()) continue;
                 // r2
                 makex_eigenVector(geno_indx_j, x_j, false, true);
@@ -939,7 +938,7 @@ std::vector<std::string> gcta::clumping_meta(eigenVector snp_chival, std::vector
             if(geno_indx_j >= nsnp_plink) break;
             snpbuf_right = _snp_name[_include[geno_indx_j]];
             if(_chr[geno_indx] == _chr[_include[geno_indx_j]] && abs(_bp[geno_indx] - _bp[_include[geno_indx_j]]) < wind_size ) {
-                 iter_clump = clumped_snp.find(snpbuf_right);
+                 auto iter_clump = clumped_snp.find(snpbuf_right);
                 if(iter_clump==clumped_snp.end()) continue;
                 // r2
                 makex_eigenVector(geno_indx_j, x_j, false, true);
@@ -1053,7 +1052,7 @@ int topsnp_bxy(eigenVector bxy, eigenVector bzx, eigenVector bzx_se, std::map<st
     eigenVector bxy_sort(n_indices_snp);
     std::map<std::string, int>::iterator iter;
     for(i=0; i<n_indices_snp; i++) bxy_sort(i) = bxy(kept_ID[i]);
-    std::stable_sort(bxy_sort.data(), bxy_sort.data()+bxy_sort.size());
+    std::stable_sort(bxy_sort.begin(), bxy_sort.end());
     lower_bounder = CommFunc::quantile(bxy_sort, 0.4);
     upper_bounder = CommFunc::quantile(bxy_sort, 0.6);
     for(i=0; i<n_indices_snp; i++) {
@@ -1268,7 +1267,7 @@ std::vector<int> indi_heidi_outlier(eigenVector bxy, eigenVector bzx, eigenVecto
     int i = 0, n_indices_snp = kept_ID.size();
     eigenVector bxy_sort(n_indices_snp);
     for(i=0; i<n_indices_snp; i++) bxy_sort(i) = bxy(kept_ID[i]);
-    std::stable_sort(bxy_sort.data(), bxy_sort.data()+n_indices_snp);
+    std::stable_sort(bxy_sort.begin(), bxy_sort.end());
     std::vector<int> ci_index = init_interval_bxy(bxy_sort, bxy, kept_ID, 0.1, 0.9);
     if(ci_index.size() == 0) return(ci_index);
 
@@ -1296,7 +1295,7 @@ std::vector<int> indi_heidi_outlier_iter(eigenVector bxy, eigenVector bzx, eigen
     int i = 0, n_indices_snp = kept_ID.size();
     eigenVector bxy_sort(n_indices_snp);
     for(i=0; i<n_indices_snp; i++) bxy_sort(i) = bxy(kept_ID[i]);
-    std::stable_sort(bxy_sort.data(), bxy_sort.data()+n_indices_snp);
+    std::stable_sort(bxy_sort.begin(), bxy_sort.end());
     std::vector<int> ci_index = init_interval_bxy(bxy_sort, bxy, kept_ID, 0.1, 0.9);
 
     if(ci_index.size() == 0) return(ci_index);
@@ -1333,7 +1332,7 @@ int topsnp_heidi_outlier(eigenVector bxy, std::vector<int> kept_ID, std::vector<
 
     eigenVector bxy_sort(n_candidate_snp);
     for(int i = 0; i < n_candidate_snp; i++) bxy_sort(i) = bxy(kept_ID[ci_index[i]]);
-    std::stable_sort(bxy_sort.data(), bxy_sort.data()+n_candidate_snp);
+    std::stable_sort(bxy_sort.begin(), bxy_sort.end());
 
     for(int i = 0; i < nbins; i++) {
         lower_bounder[i] = CommFunc::quantile(bxy_sort, hist_prob[i]);
@@ -1444,7 +1443,7 @@ int indi_heidi_outlier_topsnp_iter(eigenVector bxy, eigenMatrix &cov_bxy, eigenV
     eigenVector bxy_sort(n_candidate_snp), bxy_tmp(n_indices_snp);
     for(int i=0; i<n_candidate_snp; i++) bxy_sort(i) = bxy(kept_ID[ci_index[i]]);
     for(int i=0; i<n_indices_snp; i++) bxy_tmp(i) = bxy(kept_ID[i]);
-    std::stable_sort(bxy_sort.data(), bxy_sort.data()+n_candidate_snp);
+    std::stable_sort(bxy_sort.begin(), bxy_sort.end());
     ci_index = init_interval_bxy(bxy_sort, bxy_tmp, ci_index, 0.05, 0.95);
     if(ci_index.size() == 0) { kept_ID.clear(); return 0; }
 
@@ -1482,7 +1481,7 @@ double global_heidi_outlier_topsnp_iter(eigenVector bxy, eigenMatrix &cov_bxy, e
     eigenVector bxy_sort(n_candidate_snp), bxy_tmp(n_indices_snp);
     for(int i=0; i<n_candidate_snp; i++) bxy_sort(i) = bxy(kept_ID[ci_index[i]]);
     for(int i=0; i<n_indices_snp; i++) bxy_tmp(i) = bxy(kept_ID[i]);
-    std::stable_sort(bxy_sort.data(), bxy_sort.data()+n_candidate_snp);
+    std::stable_sort(bxy_sort.begin(), bxy_sort.end());
     ci_index = init_interval_bxy(bxy_sort, bxy_tmp, ci_index, 0.05, 0.95);
 
     if(ci_index.size() == 0) { kept_ID.clear(); return(-9); }
@@ -1671,7 +1670,7 @@ std::vector<double> gcta::gsmr_meta(std::vector<std::string> &snp_instru, eigenV
     // estimate bxy(gsmr)
     bxy_kept.resize(n_indices_snp);   
     for(i = 0; i < n_indices_snp; i++) bxy_kept(i) = bxy(kept_ID[i]);
-    std::stable_sort(bxy_kept.data(), bxy_kept.data()+n_indices_snp);
+    std::stable_sort(bxy_kept.begin(), bxy_kept.end());
 
     eigenVector vec_1t_v;
     std::vector<double> gsmr_rst = est_bxy_gsmr(bxy_kept, bxy, indices_snp, kept_ID, bzx, bzx_se, bzy, bzy_se, ld_r_mat, _meta_snp_name_map, vec_1t_v);

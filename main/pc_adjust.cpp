@@ -7,7 +7,6 @@ void gcta::read_pc_adjust_file(std::string pcadjust_list_file, std::string pc_fi
     int ncovar=0, i=0, j=0;
     std::vector<std::string> pheno_file, snplist;
     std::string strbuf = "", eigenvalue_file = pc_file + ".eigenval";
-    std::map<std::string,int>::iterator iter;
 
     // Read the summary data
     LOGGER.i(0, "\nReading eigenvalues from [" + eigenvalue_file + "]...");
@@ -140,8 +139,7 @@ std::vector<std::string> update_snp_freq(std::vector<std::string> meta_snp_name,
         int refsnp_index = 0;
         double a1_freq = 0.0;
         bool freq_flag = false;
-        std::map<std::string,int>::iterator iter_ref;
-        iter_ref = snp_name_map.find(snpbuf);
+        auto iter_ref = snp_name_map.find(snpbuf);
         if( iter_ref != snp_name_map.end()) {
             refsnp_index = iter_ref -> second;
             a1_freq = ref_freq[refsnp_index]/2;
@@ -197,7 +195,7 @@ double init_pc_meta(std::vector<int> snp_remain, eigenVector snp_freq, eigenVect
 
     // Estimate total sample size
     eigenVector snp_n_sort(snp_n_o);
-    std::stable_sort(snp_n_sort.data(), snp_n_sort.data()+m2);
+    std::stable_sort(snp_n_sort.begin(), snp_n_sort.end());
     double n_o = CommFunc::quantile(snp_n_sort, 0.50);
 
     return n_o;
@@ -231,7 +229,7 @@ void restrict_snp_effect(std::map<std::string,int> meta_snp_name_map, std::vecto
     bzy.resize(m); bzy_se.resize(m); bzy_n.resize(m);
     #pragma omp parallel for
     for(int i = 0; i < m; i++) {
-        std::map<std::string, int>::iterator iter = meta_snp_name_map.find(snp_name[snp_remain[i]]);
+        auto iter = meta_snp_name_map.find(snp_name[snp_remain[i]]);
         snp_freq_tmp(i, 0) = snp_freq(iter->second, 1);
         bzy(i) = snp_b(iter->second, 0); bzy_se(i) = snp_se(iter->second, 0);
         bzy_n(i) = snp_n_o(iter->second, 0);
@@ -430,7 +428,7 @@ void output_snp_effect_for_pc(std::string output_file, std::vector<std::string> 
     ofile << "SNP\tA1\tA2\tfreq\tb\tse\tp\tN\tbC\tbzx" <<std::endl;
     for (i = 0; i < meta_nsnp; i++) {
         std::string snpbuf = meta_snp_name[meta_snp_remain[i]];
-        std::map<std::string,int>::iterator iter = snp_name_map.find(snpbuf);
+        auto iter = snp_name_map.find(snpbuf);
         if(iter==snp_name_map.end()) continue;
         int i_buf = iter->second;
         ofile << snp_name[i_buf] << "\t" <<snp_a1[meta_snp_remain[i]] << "\t" << snp_a2[meta_snp_remain[i]] << "\t" << snp_freq(i_buf)

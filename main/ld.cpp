@@ -25,15 +25,14 @@ void gcta::read_LD_target_SNPs(std::string snplistfile)
 
     int i = 0, prev_target_snp_num = _ld_target_snp.size(), prev_include_size = _include.size();
     std::map<std::string, int> snp_map_buf;
-    std::map<std::string, int>::iterator iter;
     for (i = 0; i < _snp_num; i++) snp_map_buf.insert(std::pair<std::string, int>(_snp_name[i], i));
     for (i = _ld_target_snp.size() - 1; i >= 0; i--) {
-        iter = snp_map_buf.find(_ld_target_snp[i]);
+        auto iter = snp_map_buf.find(_ld_target_snp[i]);
         if (iter != snp_map_buf.end()) _snp_name_map.insert(*iter);
         else _ld_target_snp.erase(_ld_target_snp.begin() + i);
     }
     _include.clear();
-    for (iter = _snp_name_map.begin(); iter != _snp_name_map.end(); iter++) _include.push_back(iter->second);
+    for (const auto& [k, v] : _snp_name_map) _include.push_back(v);
     std::stable_sort(_include.begin(), _include.end());
     if (_ld_target_snp.size() == 0) LOGGER.e(0, "no target SNP is retained to estimate the LD structure.");
     else LOGGER << prev_target_snp_num << " target SNPs are read from [" + snplistfile + "], " << _ld_target_snp.size() << " of which exist in the data." << std::endl;
@@ -538,12 +537,11 @@ void gcta::calcu_mean_rsq_multiSet(std::string snpset_filenames_file, int wind_s
 
     std::map<std::string, int> snp_map;
     for (i = 0; i < m; i++) snp_map.insert(std::pair<std::string, int>(_snp_name[_include[i]], i));
-    std::map<std::string, int>::iterator iter, end = snp_map.end();
     for(i = 0; i < set_num; i++){
         int snp_count = 0;
         for(j = 0; j < snplist[i].size(); j++){
-            iter = snp_map.find(snplist[i][j]);
-            if(iter == end) continue;
+            auto iter = snp_map.find(snplist[i][j]);
+            if(iter == snp_map.end()) continue;
             set_flag[i][iter->second] = true;
             snp_count++;
         }

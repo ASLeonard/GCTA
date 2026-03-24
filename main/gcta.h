@@ -195,6 +195,8 @@ public:
     void LD_pruning_mkl(double rsq_cutoff, int wind_size);
     //void make_grm_wt_mkl(string i_ld_file, int wind_m, double wt_ld_cut, bool grm_xchr_flag, bool inbred, bool output_bin, int grm_mtd=0, int wt_mtd=0, bool mlmassoc=false, bool impData_flag=false, int ttl_snp_num=-1);
 
+    void make_uni_id(std::vector<std::string> &uni_id, std::map<std::string, int> &uni_id_map);
+
     // mlma
     void mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_file, std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool within_family, bool inbred, bool no_adj_covar, std::string weight_file, std::string save_reml_file, std::string load_reml_file);
     void mlma_loco(std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool inbred, bool no_adj_covar);

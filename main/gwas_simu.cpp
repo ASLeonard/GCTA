@@ -25,14 +25,13 @@ int gcta::read_QTL_file(std::string qtl_file, std::vector<std::string> &qtl_name
     std::string qtl_buf, str_buf;
     double qtl_eff_buf = 0.0;
     LOGGER << "Reading a list of SNPs (as causal variants) from [" + qtl_file + "]." << std::endl;
-    std::map<std::string, int>::iterator iter, End = _snp_name_map.end();
     std::vector<std::string> vs_buf;
     std::vector<int> confirm(_snp_num);
     int icount = 0;
     while (i_qtl) {
         i_qtl >> qtl_buf;
         if (i_qtl.eof()) break;
-        iter = _snp_name_map.find(qtl_buf);
+        auto iter = _snp_name_map.find(qtl_buf);
         if (std::getline(i_qtl, str_buf) && StrFunc::split_string(str_buf, vs_buf, " \t\n") > 0) {
             have_eff.push_back(1);
             qtl_eff_buf = atof(vs_buf[0].c_str());
@@ -41,7 +40,7 @@ int gcta::read_QTL_file(std::string qtl_file, std::vector<std::string> &qtl_name
             have_eff.push_back(0);
             qtl_eff_buf = 0.0;
         }
-        if (iter != End) {
+        if (iter != _snp_name_map.end()) {
             qtl_name.push_back(qtl_buf);
             qtl_pos.push_back(iter->second);
             qtl_eff.push_back(qtl_eff_buf);
@@ -243,9 +242,8 @@ void gcta::GenerCases(std::string bfile, std::string qtl_file, int case_num, int
     std::vector<std::string> qtl_name;
         read_snplist(qtl_file, qtl_name);
     std::vector<int> qtl_pos;
-        std::map<std::string, int>::iterator iter;
         for(int i=0; i<qtl_name.size(); i++){
-        iter=_snp_name_map.find(qtl_name[i]);
+        auto iter=_snp_name_map.find(qtl_name[i]);
         if(iter!=_snp_name_map.end()) qtl_pos.push_back(iter->second);
     }
     std::stable_sort(qtl_pos.begin(), qtl_pos.end());
@@ -528,14 +526,13 @@ void gcta::genet_dst(std::string bfile, std::string hapmap_genet_map)
     int pos1 = 0, pos2 = 0;
     double prev_bp = 0.0;
     std::vector<double> dst(snp_num);
-    std::vector<double>::iterator iter1, iter2;
     for (i = 0; i < snp_num; i++) {
         if (i == 0 || _chr[i - 1] != _chr[i]) {
             dst[i] = 0.0;
             continue;
         }
-        iter1 = upper_bound(hap_genet[_chr[i] - 1][0].begin(), hap_genet[_chr[i] - 1][0].end(), _bp[i - 1]);
-        iter2 = upper_bound(hap_genet[_chr[i] - 1][0].begin(), hap_genet[_chr[i] - 1][0].end(), _bp[i]);
+        auto iter1 = upper_bound(hap_genet[_chr[i] - 1][0].begin(), hap_genet[_chr[i] - 1][0].end(), _bp[i - 1]);
+        auto iter2 = upper_bound(hap_genet[_chr[i] - 1][0].begin(), hap_genet[_chr[i] - 1][0].end(), _bp[i]);
         if (iter1 == hap_genet[_chr[i] - 1][0].end() || iter2 == hap_genet[_chr[i] - 1][0].end()) {
             dst[i] = _bp[i] - _bp[i - 1];
             continue;

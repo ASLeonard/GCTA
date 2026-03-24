@@ -13,6 +13,7 @@
 #include "gcta.h"
 #include <fstream>
 #include <iterator>
+#include <ranges>
 #include <unordered_set>
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
@@ -410,10 +411,9 @@ void gcta::rm_cor_indi(double grm_cutoff) {
     }
 
     // swapping
-    std::map<int, int>::iterator iter1, iter2;
     for (i = 0; i < rm_grm_ID1.size(); i++) {
-        iter1 = rm_uni_ID_count.find(rm_grm_ID1[i]);
-        iter2 = rm_uni_ID_count.find(rm_grm_ID2[i]);
+        auto iter1 = rm_uni_ID_count.find(rm_grm_ID1[i]);
+        auto iter2 = rm_uni_ID_count.find(rm_grm_ID2[i]);
         if (iter1->second < iter2->second) {
             i_buf = rm_grm_ID1[i];
             rm_grm_ID1[i] = rm_grm_ID2[i];
@@ -735,21 +735,18 @@ void gcta::snp_pc_loading(std::string pc_file)
     int i = 0, j = 0;
     std::vector<std::string> uni_id;
     std::map<std::string, int> uni_id_map;
-    std::map<std::string, int>::iterator iter;
-    for(i=0; i<_keep.size(); i++){
-        uni_id.push_back(_fid[_keep[i]]+":"+_pid[_keep[i]]);
-        uni_id_map.insert(std::pair<std::string,int>(_fid[_keep[i]]+":"+_pid[_keep[i]], i));
-    }
+    make_uni_id(uni_id, uni_id_map);
     _n = _keep.size();
     int m = _include.size();
     if(_n < 1) LOGGER.e(0, "no individual is in common among the input files.");
     LOGGER << _n << " individuals in common between the input files are included in the analysis."<<std::endl;
     
     eigenMatrix eigenvec(eigenvec_num, _n);
-    for(i = 0; i < eigenvec_ID.size(); i++){
-        iter = uni_id_map.find(eigenvec_ID[i]);
-        if(iter == uni_id_map.end()) continue;
-        for(j = 0; j < eigenvec_num; j++) eigenvec(j, iter->second) = atof(eigenvec_str[i][j].c_str());
+    for (const auto& [id, evec_row] : std::views::zip(eigenvec_ID, eigenvec_str)) {
+        if (auto it = uni_id_map.find(id); it != uni_id_map.end()) {
+            for (j = 0; j < eigenvec_num; j++)
+                eigenvec(j, it->second) = std::stod(evec_row[j]);
+        }
     }
 
     eigenVector inv_eigenval(eigenval_num);

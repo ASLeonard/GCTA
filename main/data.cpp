@@ -144,6 +144,14 @@ void gcta::read_famfile(std::string famfile) {
     init_keep();
 }
 
+void gcta::make_uni_id(std::vector<std::string> &uni_id, std::map<std::string, int> &uni_id_map) {
+    uni_id.resize(_keep.size());
+    for (size_t i = 0; i < _keep.size(); i++) {
+        uni_id[i] = _fid[_keep[i]] + ":" + _pid[_keep[i]];
+        uni_id_map.emplace(uni_id[i], static_cast<int>(i));
+    }
+}
+
 void gcta::init_keep() {
     _keep.clear();
     _keep.resize(_indi_num);
@@ -865,11 +873,8 @@ void gcta::read_multi_bimfiles(std::vector<std::string> multi_bfiles)
 void update_id_chr_map(std::map<std::string, std::string> &chr_map, std::map<std::string, int> id_map) {
     int i = 0;
     std::map<std::string, std::string> chr_map_buf(chr_map);
-    std::map<std::string, int>::iterator iter1;
-    std::map<std::string, std::string>::iterator iter2;
-
-    for(iter1=id_map.begin(); iter1!=id_map.end(); iter1++) chr_map_buf.erase(iter1->first);
-    for(iter2=chr_map_buf.begin(); iter2!=chr_map_buf.end(); iter2++) chr_map.erase(iter2->first);
+    for(const auto& [k, v] : id_map) chr_map_buf.erase(k);
+    for(const auto& [k, v] : chr_map_buf) chr_map.erase(k);
 }
 
 void retrieve_snp(std::map<std::string,std::string> snp_chr_map, std::map<std::string,int> snp_id_map, std::vector<std::vector<std::pair<int,int>>> &rsnp, int nbfiles) {
@@ -1518,11 +1523,10 @@ void gcta::update_id_map_kp(const std::vector<std::string> &id_list, std::map<st
     int i = 0;
     std::map<std::string, int> id_map_buf(id_map);
     for (i = 0; i < id_list.size(); i++) id_map_buf.erase(id_list[i]);
-    std::map<std::string, int>::iterator iter;
-    for (iter = id_map_buf.begin(); iter != id_map_buf.end(); iter++) id_map.erase(iter->first);
+    for (const auto& [k, v] : id_map_buf) id_map.erase(k);
 
     keep.clear();
-    for (iter = id_map.begin(); iter != id_map.end(); iter++) keep.push_back(iter->second);
+    for (const auto& [k, v] : id_map) keep.push_back(v);
     std::stable_sort(keep.begin(), keep.end());
 }
 
@@ -1572,8 +1576,7 @@ void gcta::extract_single_snp(std::string snpname)
 void gcta::extract_region_snp(std::string snpname, int wind_size)
 {
     LOGGER << "Extracting SNPs " << wind_size/1000 << "kb away from the SNP [" << snpname << "] in either direction ..." << std::endl;
-    std::map<std::string, int>::iterator iter;
-    iter = _snp_name_map.find(snpname);
+    auto iter = _snp_name_map.find(snpname);
     int i = 0, j = 0;
     std::vector<std::string> snplist;
     if(iter==_snp_name_map.end()) LOGGER.e(0, "cannot find the SNP [" + snpname + "] in the data.");
@@ -1616,8 +1619,7 @@ void gcta::exclude_snp(std::string snplistfile)
 void gcta::exclude_region_snp(std::string snpname, int wind_size)
 {
     LOGGER << "Excluding SNPs " << wind_size/1000 << "kb away from the SNP [" << snpname << "] in either direction ..." << std::endl;
-    std::map<std::string, int>::iterator iter;
-    iter = _snp_name_map.find(snpname);
+    auto iter = _snp_name_map.find(snpname);
     int i = 0, j = 0;
     std::vector<std::string> snplist;
     if(iter==_snp_name_map.end()) LOGGER.e(0, "cannot find the SNP [" + snpname + "] in the data.");
@@ -1661,13 +1663,12 @@ void gcta::exclude_single_snp(std::string snpname)
 void gcta::extract_chr(int chr_start, int chr_end)
 {
     std::map<std::string, int> id_map_buf(_snp_name_map);
-    std::map<std::string, int>::iterator iter, end = id_map_buf.end();
     _snp_name_map.clear();
     _include.clear();
-    for (iter = id_map_buf.begin(); iter != end; iter++) {
-        if (_chr[iter->second] >= chr_start && _chr[iter->second] <= chr_end) {
-            _snp_name_map.insert(*iter);
-            _include.push_back(iter->second);
+    for (const auto& [k, v] : id_map_buf) {
+        if (_chr[v] >= chr_start && _chr[v] <= chr_end) {
+            _snp_name_map.emplace(k, v);
+            _include.push_back(v);
         }
     }
     std::stable_sort(_include.begin(), _include.end());
@@ -1681,16 +1682,15 @@ void gcta::filter_snp_maf(double maf)
 
     LOGGER << "Filtering SNPs with MAF > " << maf << " ..." << std::endl;
     std::map<std::string, int> id_map_buf(_snp_name_map);
-    std::map<std::string, int>::iterator iter, end = id_map_buf.end();
     int prev_size = _include.size();
     double fbuf = 0.0;
     _include.clear();
     _snp_name_map.clear();
-    for (iter = id_map_buf.begin(); iter != end; iter++) {
-        fbuf = _mu[iter->second]*0.5;
+    for (const auto& [k, v] : id_map_buf) {
+        fbuf = _mu[v]*0.5;
         if (fbuf <= maf || (1.0 - fbuf) <= maf) continue;
-        _snp_name_map.insert(*iter);
-        _include.push_back(iter->second);
+        _snp_name_map.emplace(k, v);
+        _include.push_back(v);
     }
     if (_include.size() == 0) LOGGER.e(0, "no SNP is retained for analysis.");
     else {
@@ -1705,16 +1705,15 @@ void gcta::filter_snp_max_maf(double max_maf)
 
     LOGGER << "Filtering SNPs with MAF < " << max_maf << " ..." << std::endl;
     std::map<std::string, int> id_map_buf(_snp_name_map);
-    std::map<std::string, int>::iterator iter, end = id_map_buf.end();
     int prev_size = _include.size();
     double fbuf = 0.0;
     _include.clear();
     _snp_name_map.clear();
-    for (iter = id_map_buf.begin(); iter != end; iter++) {
-        fbuf = _mu[iter->second]*0.5;
+    for (const auto& [k, v] : id_map_buf) {
+        fbuf = _mu[v]*0.5;
         if (fbuf > max_maf && 1.0 - fbuf > max_maf) continue;
-        _snp_name_map.insert(*iter);
-        _include.push_back(iter->second);
+        _snp_name_map.emplace(k, v);
+        _include.push_back(v);
     }
     if (_include.size() == 0) LOGGER.e(0, "no SNP is retained for analysis.");
     else {
@@ -1728,14 +1727,13 @@ void gcta::filter_impRsq(double rsq_cutoff)
     if (_impRsq.empty()) LOGGER << "Warning: the option --imput-rsq is inactive because GCTA can't find the imputation quality scores for the SNPs. Use the option --update-imput-rsq to input the imputation quality scores." << std::endl;
     LOGGER << "Filtering SNPs with imputation Rsq > " << rsq_cutoff << " ..." << std::endl;
     std::map<std::string, int> id_map_buf(_snp_name_map);
-    std::map<std::string, int>::iterator iter, end = id_map_buf.end();
     int prev_size = _include.size();
     _include.clear();
     _snp_name_map.clear();
-    for (iter = id_map_buf.begin(); iter != end; iter++) {
-        if (_impRsq[iter->second] < rsq_cutoff) continue;
-        _snp_name_map.insert(*iter);
-        _include.push_back(iter->second);
+    for (const auto& [k, v] : id_map_buf) {
+        if (_impRsq[v] < rsq_cutoff) continue;
+        _snp_name_map.emplace(k, v);
+        _include.push_back(v);
     }
     if (_include.size() == 0) LOGGER.e(0, "no SNP is retained for analysis.");
     else {
@@ -1783,7 +1781,6 @@ void gcta::update_sex(std::string sex_file) {
     int sex_buf = 0, icount = 0;
     std::string str_buf, fid, pid;
     LOGGER << "Reading sex information from [" + sex_file + "]." << std::endl;
-    std::map<std::string, int>::iterator iter, End = _id_map.end();
     _sex.clear();
     _sex.resize(_indi_num);
     std::vector<int> confirm(_indi_num);
@@ -1793,8 +1790,8 @@ void gcta::update_sex(std::string sex_file) {
         isex >> pid;
         isex >> str_buf;
         if (str_buf != "1" && str_buf != "2" && str_buf != "M" && str_buf != "F") LOGGER.e(0, "unrecognized sex code: \"" + fid + " " + pid + " " + str_buf + "\" in [" + sex_file + "].");
-        iter = _id_map.find(fid + ":" + pid);
-        if (iter != End) {
+        auto iter = _id_map.find(fid + ":" + pid);
+        if (iter != _id_map.end()) {
             if (str_buf == "M" || str_buf == "1") _sex[iter->second] = 1;
             else if (str_buf == "F" || str_buf == "2") _sex[iter->second] = 2;
             confirm[iter->second] = 1;
@@ -1816,14 +1813,13 @@ void gcta::update_ref_A(std::string ref_A_file) {
     int i = 0;
     std::string str_buf, ref_A_buf;
     LOGGER << "Reading reference alleles of SNPs from [" + ref_A_file + "]." << std::endl;
-    std::map<std::string, int>::iterator iter, End = _snp_name_map.end();
     int icount = 0;
     while (i_ref_A) {
         i_ref_A >> str_buf;
         if (i_ref_A.eof()) break;
-        iter = _snp_name_map.find(str_buf);
+        auto iter = _snp_name_map.find(str_buf);
         i_ref_A >> ref_A_buf;
-        if (iter != End) {
+        if (iter != _snp_name_map.end()) {
             if (ref_A_buf == _allele1[iter->second]) {
                 _ref_A[iter->second] = _allele1[iter->second];
                 _other_A[iter->second] = _allele2[iter->second];
@@ -1928,15 +1924,14 @@ void gcta::update_impRsq(std::string zinfofile) {
     LOGGER << "Reading imputation Rsq of the SNPs from [" + zinfofile + "]." << std::endl;
     _impRsq.clear();
     _impRsq.resize(_snp_num, 0.0);
-    std::map<std::string, int>::iterator iter, End = _snp_name_map.end();
     int icount = 0;
     while (iRsq) {
         iRsq >> snp_name_buf;
         if (iRsq.eof()) break;
-        iter = _snp_name_map.find(snp_name_buf);
+        auto iter = _snp_name_map.find(snp_name_buf);
         iRsq >> str_buf;
         fbuf = atof(str_buf.c_str());
-        if (iter != End) {
+        if (iter != _snp_name_map.end()) {
             if (fbuf > 2.0 || fbuf < 0.0) LOGGER.e(0, "invalid value of imputation Rsq for the SNP " + snp_name_buf + ".");
             _impRsq[iter->second] = fbuf;
             icount++;
@@ -1957,18 +1952,17 @@ void gcta::update_freq(std::string freq) {
     double fbuf = 0.0;
     std::string snp_name_buf, str_buf;
     LOGGER << "Reading allele frequencies of the SNPs from [" + freq + "]." << std::endl;
-    std::map<std::string, int>::iterator iter, End = _snp_name_map.end();
     _mu.clear();
     _mu.resize(_snp_num, 0.0);
     int icount = 0;
     while (ifreq) {
         ifreq >> snp_name_buf;
         if (ifreq.eof()) break;
-        iter = _snp_name_map.find(snp_name_buf);
+        auto iter = _snp_name_map.find(snp_name_buf);
         ifreq >> ref_A_buf;
         ifreq >> str_buf;
         fbuf = atof(str_buf.c_str());
-        if (iter != End) {
+        if (iter != _snp_name_map.end()) {
             if (fbuf > 1.0 || fbuf < 0.0) LOGGER.e(0, "invalid value of allele frequency for the SNP " + snp_name_buf + ".");
             if (ref_A_buf != _allele1[iter->second] && ref_A_buf != _allele2[iter->second]) {
                 LOGGER.e(0, "Invalid allele type \"" + ref_A_buf + "\" for the SNP " + _snp_name[iter->second] + ".");
@@ -2024,11 +2018,10 @@ void gcta::read_indi_blup(std::string blup_indi_file) {
 
     update_id_map_kp(id, _id_map, _keep);
     std::map<std::string, int> uni_id_map;
-    std::map<std::string, int>::iterator iter;
     for (i = 0; i < _keep.size(); i++) uni_id_map.insert(std::pair<std::string, int>(_fid[_keep[i]] + ":" + _pid[_keep[i]], i));
     _varcmp_Py.setZero(_keep.size(), col_num / 2);
     for (i = 0; i < id.size(); i++) {
-        iter = uni_id_map.find(id[i]);
+        auto iter = uni_id_map.find(id[i]);
         if (iter == uni_id_map.end()) continue;
         for (j = 0, k = 0; j < col_num; j += 2, k++) _varcmp_Py(iter->second, k) = atof(g_buf[i][j].c_str());
     }

@@ -28,16 +28,15 @@ void gcta::paa(std::string aa_file)
     std::string cbuf=".";
     std::string str_buf;
 	LOGGER<<"Reading ancestral alleles of the SNPs from ["+aa_file+"]."<<std::endl;
-    std::map<std::string, int>::iterator iter, End=_snp_name_map.end();
     std::vector<std::string> aa(_snp_num);
     for(i=0; i<_snp_num; i++) aa[i]=".";
     int icount=0;
 	while(i_aa){
 		i_aa>>str_buf;
 		if(i_aa.eof()) break;
-		iter=_snp_name_map.find(str_buf);
+		auto iter=_snp_name_map.find(str_buf);
 		i_aa>>cbuf;
-		if(iter!=End && cbuf!="."){
+		if(iter!=_snp_name_map.end() && cbuf!="."){
 		    aa[iter->second]=cbuf;
 		    icount++;
 		}
@@ -281,12 +280,11 @@ void gcta::read_subpopu(std::string filename, std::vector<std::string> &subpopu,
     
     int i=0, j=0;
     std::map<std::string, int> uni_id_map;
-    std::map<std::string, int>::iterator iter;
     for(i=0; i<_keep.size(); i++) uni_id_map.insert(std::pair<std::string,int>(_fid[_keep[i]]+":"+_pid[_keep[i]], i));
     subpopu.clear();
     subpopu.resize(_keep.size());
     for(i=0; i<ID.size(); i++){
-        iter=uni_id_map.find(ID[i]);
+        auto iter=uni_id_map.find(ID[i]);
         if(iter!=uni_id_map.end()) subpopu[iter->second]=subpopu_buf[i][0];
     }
     

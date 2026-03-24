@@ -29,7 +29,6 @@ void gcta::read_metafile(std::string metafile, bool GC, double GC_val) {
     std::vector<std::string> snplist, vs_buf, bad_snp;
     std::vector<std::string> ref_A1_buf, ref_A2_buf, bad_A1, bad_A2, bad_refA;
     std::vector<double> freq_buf, beta_buf, beta_se_buf, pval_buf, N_o_buf, Vp_v_buf, GC_v_buf;
-    std::map<std::string, int>::iterator iter;
     std::getline(Meta, str_buf); // the header line
     if (StrFunc::split_string(str_buf, vs_buf) < 7) LOGGER.e(0, "format error in the input file [" + metafile + "].");
     _jma_Vp = 0.0;
@@ -56,7 +55,7 @@ void gcta::read_metafile(std::string metafile, bool GC, double GC_val) {
         N_buf = atof(str_buf.c_str());
         if (N_buf < 10) LOGGER.e(0, "invalid sample size in line:\n\"" + str_buf0 + "\"");
         if (Meta.eof()) break;
-        iter = _snp_name_map.find(snp_buf);
+        auto iter = _snp_name_map.find(snp_buf);
         h_buf = 2.0 * f_buf * (1.0 - f_buf);
         Vp_buf = h_buf * N_buf * se_buf * se_buf + h_buf * b_buf * b_buf * N_buf / (N_buf - 1.0);
         if (Vp_buf < 0.0) LOGGER.e(0, "in line:\n\"" + str_buf0 + "\"");
@@ -114,7 +113,7 @@ void gcta::read_metafile(std::string metafile, bool GC, double GC_val) {
         int include_i = _include[i];
         bool flip_flag = false;
         std::string cur_snp_name = _snp_name[include_i];
-        iter = id_map.find(cur_snp_name);
+        auto iter = id_map.find(cur_snp_name);
         _ref_A[include_i] = ref_A1_buf[iter->second];
         _other_A[include_i] = ref_A2_buf[iter->second];
         if (!_mu.empty() && ref_A1_buf[iter->second] == _allele2[include_i]) {

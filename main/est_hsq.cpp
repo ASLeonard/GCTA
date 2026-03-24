@@ -310,18 +310,14 @@ void gcta::fit_reml(std::string grm_file, std::string phen_file, std::string qco
 
     std::vector<std::string> uni_id;
     std::map<std::string, int> uni_id_map;
-    std::map<std::string, int>::iterator iter;
-    for (int i = 0; i < _keep.size(); i++) {
-        uni_id.push_back(_fid[_keep[i]] + ":" + _pid[_keep[i]]);
-        uni_id_map.insert(std::pair<std::string, int>(_fid[_keep[i]] + ":" + _pid[_keep[i]], i));
-    }
+    make_uni_id(uni_id, uni_id_map);
     _n = _keep.size();
     if (_n < 1) LOGGER.e(0, "no individual is in common among the input files.");
 
     // construct model terms
     _y.setZero(_n);
     for (int i = 0; i < phen_ID.size(); i++) {
-        iter = uni_id_map.find(phen_ID[i]);
+        auto iter = uni_id_map.find(phen_ID[i]);
         if (iter == uni_id_map.end()) continue;
         _y[iter->second] = atof(phen_buf[i][mphen - 1].c_str());
     }
@@ -422,7 +418,7 @@ void gcta::fit_reml(std::string grm_file, std::string phen_file, std::string qco
         // contruct weight
         Eigen::VectorXd v_weight(_n);
         for (int i = 0; i < weight_ID.size(); i++) {
-            iter = uni_id_map.find(weight_ID[i]);
+            auto iter = uni_id_map.find(weight_ID[i]);
             if (iter == uni_id_map.end()) continue;
             v_weight(iter->second) = weights[i];
         }
@@ -445,7 +441,7 @@ void gcta::fit_reml(std::string grm_file, std::string phen_file, std::string qco
     if (qGE_flag) {
         qE_float.resize(_n, qE_fac_num);
         for (int i = 0; i < qGE_ID.size(); i++) {
-            iter = uni_id_map.find(qGE_ID[i]);
+            auto iter = uni_id_map.find(qGE_ID[i]);
             if (iter == uni_id_map.end()) continue;
             for (int j = 0; j < qE_fac_num; j++) qE_float(iter->second, j) = atof(qGE[i][j].c_str());
         }
@@ -458,7 +454,7 @@ void gcta::fit_reml(std::string grm_file, std::string phen_file, std::string qco
         std::vector< std::vector<std::string> > E_str(E_fac_num);
         for (int i = 0; i < E_fac_num; i++) E_str[i].resize(_n);
         for (int i = 0; i < GE_ID.size(); i++) {
-            iter = uni_id_map.find(GE_ID[i]);
+            auto iter = uni_id_map.find(GE_ID[i]);
             if (iter != uni_id_map.end()) {
                 for (int j = 0; j < E_fac_num; j++) E_str[j][iter->second] = GE[i][j];
             }
@@ -542,7 +538,6 @@ void gcta::drop_comp(std::vector<int> &drop) {
 
 void gcta::construct_X(int n, std::map<std::string, int> &uni_id_map, bool qcovar_flag, int qcovar_num, std::vector<std::string> &qcovar_ID, std::vector< std::vector<std::string> > &qcovar, bool covar_flag, int covar_num, std::vector<std::string> &covar_ID, std::vector< std::vector<std::string> > &covar, std::vector<eigenMatrix> &E_float, eigenMatrix &qE_float) {
     int i = 0, j = 0;
-    std::map<std::string, int>::iterator iter;
     std::stringstream errmsg;
 
     _X_c = 1;
@@ -551,7 +546,7 @@ void gcta::construct_X(int n, std::map<std::string, int> &uni_id_map, bool qcova
     if (qcovar_flag) {
         X_q.resize(n, qcovar_num);
         for (i = 0; i < qcovar_ID.size(); i++) {
-            iter = uni_id_map.find(qcovar_ID[i]);
+            auto iter = uni_id_map.find(qcovar_ID[i]);
             if (iter == uni_id_map.end()) continue;
             for (j = 0; j < qcovar_num; j++) X_q(iter->second, j) = atof(qcovar[i][j].c_str());
         }
@@ -565,7 +560,7 @@ void gcta::construct_X(int n, std::map<std::string, int> &uni_id_map, bool qcova
         std::vector< std::vector<std::string> > covar_tmp(covar_num);
         for (i = 0; i < covar_num; i++) covar_tmp[i].resize(n);
         for (i = 0; i < covar_ID.size(); i++) {
-            iter = uni_id_map.find(covar_ID[i]);
+            auto iter = uni_id_map.find(covar_ID[i]);
             if (iter == uni_id_map.end()) continue;
             for (j = 0; j < covar_num; j++) covar_tmp[j][iter->second] = covar[i][j];
         }
@@ -623,9 +618,8 @@ void gcta::coeff_mat(const std::vector<std::string> &vec, eigenMatrix &coeff_mat
 
     coeff_mat.resize(row_num, column_num);
     coeff_mat.setZero(row_num, column_num);
-    std::map<std::string, int>::iterator iter;
     for (i = 0; i < row_num; i++) {
-        iter = val_map.find(vec[i]);
+        auto iter = val_map.find(vec[i]);
         coeff_mat(i, iter->second) = 1.0;
     }
 }
@@ -1247,8 +1241,7 @@ void gcta::calcu_hsq(int i, double Vp, double Vp2, double VarVp, double VarVp2, 
     double V1 = varcmp[i], VarV1 = Hi(i, i), Cov12 = 0.0;
 
     if (_bivar_reml) {
-        std::vector<int>::iterator iter;
-        iter = find(_bivar_pos[0].begin(), _bivar_pos[0].end(), i);
+        auto iter = find(_bivar_pos[0].begin(), _bivar_pos[0].end(), i);
         if (iter != _bivar_pos[0].end()) {
             for (j = 0; j < _bivar_pos[0].size(); j++) {
                 Cov12 += Hi(*iter, _bivar_pos[0][j]);
@@ -1870,11 +1863,7 @@ void gcta::HE_reg(std::string grm_file, bool m_grm_flag, std::string phen_file, 
     // model equations (yij and Aij) will be build based on the order of this unique ID std::vector uni_id, which is in the same order of grm_id
     std::vector<std::string> uni_id;
     std::map<std::string, int> uni_id_map;
-    std::map<std::string, int>::iterator iter;
-    for (i = 0; i < _keep.size(); i++) {
-        uni_id.push_back(_fid[_keep[i]] + ":" + _pid[_keep[i]]);    // in order of grm_id
-        uni_id_map.insert(std::pair<std::string, int>(_fid[_keep[i]] + ":" + _pid[_keep[i]], i));
-    }
+    make_uni_id(uni_id, uni_id_map);
     _n = _keep.size();
     if (_n < 1) LOGGER.e(0, "no individual is in common among the input files.");
     LOGGER << _n << " individuals are in common in these files." << std::endl;
@@ -1882,7 +1871,7 @@ void gcta::HE_reg(std::string grm_file, bool m_grm_flag, std::string phen_file, 
     // fill phenotypes to _y std::vector based on the order of uni_id
     _y.setZero(_n);
     for (i = 0; i < phen_ID.size(); i++) {
-        iter = uni_id_map.find(phen_ID[i]);
+        auto iter = uni_id_map.find(phen_ID[i]);
         if (iter == uni_id_map.end()) continue;
         _y[iter->second] = atof(phen_buf[i][mphen - 1].c_str());
     }
@@ -2173,13 +2162,7 @@ void gcta::HE_reg_bivar(std::string grm_file, bool m_grm_flag, std::string phen_
     // model equations (yij and Aij) will be build based on the order of the unique ID std::vector, which is in the same order of grm_id
     std::vector<std::string> uni_id;
     std::map<std::string, int> uni_id_map;
-    std::map<std::string, int>::iterator iter;
-    std::string combinedID;
-    for (i = 0; i < _keep.size(); i++) {
-        combinedID = _fid[_keep[i]] + ":" + _pid[_keep[i]];  // in order of grm_id
-        uni_id.push_back(combinedID);
-        uni_id_map.insert(std::pair<std::string, int>(combinedID, i));
-    }
+    make_uni_id(uni_id, uni_id_map);
     _n = _keep.size();
     if (_n < 1) LOGGER.e(0, "no individual is in common among the input files.");
     LOGGER << _n << " individuals are in common in these files." << std::endl;
@@ -2654,17 +2637,13 @@ void gcta::HE_reg(std::string grm_file, std::string phen_file, std::string keep_
 
     std::vector<std::string> uni_id;
     std::map<std::string, int> uni_id_map;
-    std::map<std::string, int>::iterator iter;
-    for (i = 0; i < _keep.size(); i++) {
-        uni_id.push_back(_fid[_keep[i]] + ":" + _pid[_keep[i]]);
-        uni_id_map.insert(std::pair<std::string, int>(_fid[_keep[i]] + ":" + _pid[_keep[i]], i));
-    }
+    make_uni_id(uni_id, uni_id_map);
     _n = _keep.size();
     if (_n < 1) LOGGER.e(0, "no individual is in common among the input files.");
 
     _y.setZero(_n);
     for (i = 0; i < phen_ID.size(); i++) {
-        iter = uni_id_map.find(phen_ID[i]);
+        auto iter = uni_id_map.find(phen_ID[i]);
         if (iter == uni_id_map.end()) continue;
         _y[iter->second] = atof(phen_buf[i][mphen - 1].c_str());
     }
