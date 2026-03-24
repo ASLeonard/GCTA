@@ -13,9 +13,16 @@
 #include <sstream>
 #include <iterator>
 #include <set>
+#include <fstream>
+#include <limits>
+#include <boost/iostreams/filter/gzip.hpp>
+#include <boost/iostreams/filtering_stream.hpp>
 #include "gcta.h"
 #include "Logger.h"
 #include "StrFunc.h"
+
+// Constant for missing dosage values
+const double DOSAGE_NA = std::numeric_limits<double>::infinity();
 
 gcta::gcta(int autosome_num, double rm_ld_cutoff, string out)
 {
@@ -23,6 +30,7 @@ gcta::gcta(int autosome_num, double rm_ld_cutoff, string out)
     _rm_ld_cutoff = rm_ld_cutoff;
     _out = out;
     _dosage_flag = false;
+    _genetic_model = GeneticModel::ADDITIVE;
     _grm_bin_flag = false;
     _reml_mtd = 0;
     _reml_inv_mtd = 0;
@@ -55,6 +63,7 @@ gcta::gcta(int autosome_num, double rm_ld_cutoff, string out)
 
 gcta::gcta() {
     _dosage_flag = false;
+    _genetic_model = GeneticModel::ADDITIVE;
     _grm_bin_flag = false;
     _reml_mtd = 0;
     _reml_inv_mtd = 0;
@@ -87,6 +96,13 @@ gcta::gcta() {
 
 gcta::~gcta() {
 
+}
+
+void gcta::set_genetic_model(string model) {
+    if (!stringToGeneticModel(model, _genetic_model)) {
+        LOGGER.e(0, "genetic model must be either 'additive' or 'nonadditive'.");
+    }
+    LOGGER << "Genetic model set to: " << model << endl;
 }
 
 void gcta::read_famfile(string famfile) {
@@ -227,7 +243,7 @@ void gcta::read_bedfile(string bedfile)
     LOGGER << "Reading PLINK BED file from [" + bedfile + "] in SNP-major format ..." << endl;
     for (i = 0; i < 3; i++) BIT.read(ch, 1); // skip the first three bytes
     int snp_indx = 0, indi_indx = 0;
-    for (j = 0, snp_indx = 0; j < _snp_num; j++) { // Read genotype in SNP-major mode, 00: homozygote AA; 11: homozygote BB; 01: hetezygote; 10: missing
+    for (j = 0, snp_indx = 0; j < _snp_num; j++) { // Read genotype in SNP-major mode, 00: homozA1A1; 11: homozA2A2; 10: heterozygote; 01: missing
         if (!rsnp[j]) {
             for (i = 0; i < _indi_num; i += 4) BIT.read(ch, 1);
             continue;
@@ -254,6 +270,264 @@ void gcta::read_bedfile(string bedfile)
     BIT.close();
     LOGGER << "Genotype data for " << _keep.size() << " individuals and " << _include.size() << " SNPs to be included from [" + bedfile + "]." << endl;
 
+    update_fam(rindi);
+    update_bim(rsnp);
+}
+
+/**
+ * Read PLINK bed file and fill _geno_dose matrix with dosage values
+ * calculated from genotypes and allele frequencies.
+ * 
+ * This function performs two passes over the bed file:
+ * Pass 1: Calculate allele frequencies from the genotype data (for the reference allele)
+ * Pass 2: Convert genotypes to dosages using the calculated frequencies
+ * 
+ * Genotype encoding in PLINK bed format (SNP-major):
+ *   00 -> Homozygous for allele 1 (coded as 2)
+ *   01 -> Missing (coded as DOSAGE_NA)
+ *   10 -> Heterozygous (coded as 1)
+ *   11 -> Homozygous for allele 2 (coded as 0)
+ *
+ * Reference allele frequency:
+ *   - Always calculated for the allele specified in _ref_A
+ *   - Stored in _mu as mean allele count (0-2 range)
+ *   - To get allele frequency in 0-1 range: divide _mu by 2
+ * 
+ * Dosage calculation depends on the genetic model (_genetic_model):
+ * 
+ * Additive model (default):
+ *   - RR (homozygous for reference) = 0
+ *   - RA (heterozygous) = 1
+ *   - AA (homozygous for alternate) = 2
+ * 
+ * Nonadditive model:
+ *   - RR (homozygous for reference) = 0
+ *   - RA (heterozygous) = 2p (where p is allele frequency)
+ *   - AA (homozygous for alternate) = 4p - 2
+ *   - Missing values are set to DOSAGE_NA
+ * 
+ * Prerequisites:
+ *   - read_famfile() must be called first to initialize individuals
+ *   - read_bimfile() must be called first to initialize SNPs and alleles
+ *   - set_genetic_model() can be called to set the model (default: "additive")
+ * 
+ * @param bedfile Path to the PLINK .bed file
+ * 
+ * Example usage:
+ *   gcta mydata;
+ *   mydata.read_famfile("mydata.fam");
+ *   mydata.read_bimfile("mydata.bim");
+ *   mydata.set_genetic_model("nonadditive");  // Optional
+ *   mydata.read_bed_dosage("mydata.bed");
+ *   // Now _geno_dose matrix is filled with dosage values
+ */
+
+// Helper function: Convert PLINK BED genotype bits to reference allele count
+// Returns: -1 for missing, 0-2 for reference allele count
+inline int gcta::bed_to_ref_allele_count(bool bit1, bool bit2, int snp_indx) {
+    // Check for missing genotype (01 in original encoding)
+    if (bit2 && !bit1) {
+        return -1; // Missing
+    }
+    
+    // Valid genotype: bit1 + bit2 gives count of allele1
+    int geno = bit1 + bit2; // geno: 2=homA1, 1=het, 0=homA2
+    
+    // Convert to reference allele count
+    if (_allele1[_include[snp_indx]] == _ref_A[_include[snp_indx]]) {
+        // allele1 is reference
+        return geno;
+    } else if (_allele2[_include[snp_indx]] == _ref_A[_include[snp_indx]]) {
+        // allele2 is reference
+        return 2 - geno;
+    } else {
+        // Neither allele matches reference (shouldn't happen)
+        LOGGER.e(0, "Reference allele [" + _ref_A[_include[snp_indx]] +
+                 "] for SNP [" + _snp_name[_include[snp_indx]] +
+                 "] doesn't match either allele1 [" + _allele1[_include[snp_indx]] +
+                 "] or allele2 [" + _allele2[_include[snp_indx]] + "]");
+        return -1; // unreachable
+    }
+}
+
+void gcta::read_bed_dosage(string bedfile)
+{
+    // This function reads plink bed files and fills _geno_dose matrix
+    // with dosage values calculated from genotypes and allele frequencies
+    // Uses a two-pass approach to avoid loading all genotypes into memory
+    
+    int i = 0, j = 0, k = 0;
+    
+    // Flag for reading individuals and SNPs
+    vector<int> rindi, rsnp;
+    get_rindi(rindi);
+    get_rsnp(rsnp);
+    
+    if (_include.size() == 0) LOGGER.e(0, "no SNP is retained for analysis.");
+    if (_keep.size() == 0) LOGGER.e(0, "no individual is retained for analysis.");
+    
+    // Set dosage flag
+    _dosage_flag = true;
+    
+    // Initialize _geno_dose matrix
+    _geno_dose.clear();
+    _geno_dose.resize(_keep.size());
+    for (i = 0; i < _keep.size(); i++) {
+        _geno_dose[i].resize(_include.size());
+    }
+    
+    LOGGER << "Reading PLINK BED file from [" + bedfile + "] in SNP-major format ..." << endl;
+    
+    // Calculate allele frequencies using _mu
+    _mu.clear();
+    _mu.resize(_snp_num, 0.0);
+    
+    // First pass: calculate allele frequencies
+    {
+        fstream BIT(bedfile.c_str(), ios::in | ios::binary);
+        if (!BIT) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
+        
+        char ch[1];
+        bitset<8> b;
+        bool missing_warned = false;
+        
+        // Skip the first three bytes (magic numbers)
+        for (i = 0; i < 3; i++) BIT.read(ch, 1);
+        
+        int snp_indx = 0;
+        for (j = 0, snp_indx = 0; j < _snp_num; j++) {
+            if (!rsnp[j]) {
+                // Skip SNPs not in _include
+                for (i = 0; i < _indi_num; i += 4) BIT.read(ch, 1);
+                continue;
+            }
+            
+            // Count alleles for frequency calculation
+            int allele_count = 0;
+            int valid_count = 0;
+            
+            for (i = 0; i < _indi_num;) {
+                BIT.read(ch, 1);
+                if (!BIT) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
+                b = ch[0];
+                
+                k = 0;
+                while (k < 7 && i < _indi_num) {
+                    bool bit1 = !b[k++];
+                    bool bit2 = !b[k++];
+                    
+                    if (rindi[i]) {
+                        int ref_allele_count = bed_to_ref_allele_count(bit1, bit2, snp_indx);
+                        
+                        if (ref_allele_count == -1) {
+                            // Missing genotype
+                            if (!missing_warned) {
+                                LOGGER << "Warning: missing values detected in the genotype data." << endl;
+                                missing_warned = true;
+                            }
+                        } else {
+                            allele_count += ref_allele_count;
+                            valid_count++;
+                        }
+                    }
+                    i++;
+                }
+            }
+            
+            // Calculate mean reference allele count (dosage: 0-2)
+            if (valid_count > 0) {
+                _mu[_include[snp_indx]] = (double)allele_count / (double)valid_count;
+            } else {
+                _mu[_include[snp_indx]] = 0.0;
+            }
+            
+            snp_indx++;
+        }
+        
+        BIT.clear();
+        BIT.close();
+    }
+    
+    LOGGER << "Allele frequencies calculated from genotype data." << endl;
+    
+    // Second pass: fill _geno_dose matrix with dosage values
+    {
+        fstream BIT(bedfile.c_str(), ios::in | ios::binary);
+        if (!BIT) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
+        
+        char ch[1];
+        bitset<8> b;
+        
+        // Skip the first three bytes
+        for (i = 0; i < 3; i++) BIT.read(ch, 1);
+        
+        int snp_indx = 0;
+        for (j = 0, snp_indx = 0; j < _snp_num; j++) {
+            if (!rsnp[j]) {
+                // Skip SNPs not in _include
+                for (i = 0; i < _indi_num; i += 4) BIT.read(ch, 1);
+                continue;
+            }
+            
+            // Get allele frequency for reference allele
+            double p = _mu[_include[snp_indx]] / 2.0; // Convert from dosage (0-2) to frequency (0-1)
+            
+            int indi_indx = 0;
+            for (i = 0; i < _indi_num;) {
+                BIT.read(ch, 1);
+                if (!BIT) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
+                b = ch[0];
+                
+                k = 0;
+                while (k < 7 && i < _indi_num) {
+                    bool bit1 = !b[k++];
+                    bool bit2 = !b[k++];
+                    
+                    if (rindi[i]) {
+                        int geno = bed_to_ref_allele_count(bit1, bit2, snp_indx);
+                        
+                        if (geno == -1) {
+                            // Missing genotype
+                            _geno_dose[indi_indx][snp_indx] = DOSAGE_NA;
+                        } else {
+                            // Valid genotype: convert to dosage based on model
+                            float dosage = 0.0f;
+                            
+                            switch (_genetic_model) {
+                                case GeneticModel::ADDITIVE:
+                                    // Additive model: RR=0, RA=1, AA=2
+                                    dosage = (float)geno;
+                                    break;
+                                    
+                                case GeneticModel::NONADDITIVE:
+                                    // Nonadditive model: RR=0, RA=2p, AA=4p-2
+                                    if (geno == 0) {
+                                        dosage = 0.0f; // RR (homozygous non-reference)
+                                    } else if (geno == 1) {
+                                        dosage = (float)(2.0 * p); // RA (heterozygote)
+                                    } else { // geno == 2
+                                        dosage = (float)(4.0 * p - 2.0); // AA (homozygous reference)
+                                    }
+                                    break;
+                            }
+                            
+                            _geno_dose[indi_indx][snp_indx] = dosage;
+                        }
+                        indi_indx++;
+                    }
+                    i++;
+                }
+            }
+            snp_indx++;
+        }
+        
+        BIT.clear();
+        BIT.close();
+    }
+    
+    LOGGER << "Dosage data calculated for " << _keep.size() << " individuals and " 
+           << _include.size() << " SNPs from [" + bedfile + "] using " << geneticModelToString(_genetic_model) << " model." << endl;
+    
     update_fam(rindi);
     update_bim(rsnp);
 }
@@ -707,15 +981,17 @@ void gcta::read_imp_info_mach_gz(string zinfofile)
     _dosage_flag = true;
 
     int i = 0;
-    gzifstream zinf;
-    zinf.open(zinfofile.c_str());
-    if (!zinf.is_open()) LOGGER.e(0, "cannot open the file [" + zinfofile + "] to read.");
+    std::ifstream raw_file(zinfofile, std::ios::binary);
+    if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + zinfofile + "] to read.");
+    boost::iostreams::filtering_istream zinf;
+    zinf.push(boost::iostreams::gzip_decompressor());
+    zinf.push(raw_file);
 
     string buf, str_buf, errmsg = "Reading dosage data failed. Please check the format of the map file.";
     string c_buf;
     double f_buf = 0.0;
     LOGGER << "Reading map file of the imputed dosage data from [" + zinfofile + "]." << endl;
-    getline(zinf, buf); // skip the header
+    std::getline(zinf, buf); // skip the header
     vector<string> vs_buf;
     int col_num = StrFunc::split_string(buf, vs_buf, " \t\n");
     if (col_num < 7) LOGGER.e(0, errmsg);
@@ -724,8 +1000,7 @@ void gcta::read_imp_info_mach_gz(string zinfofile)
     _allele1.clear();
     _allele2.clear();
     _impRsq.clear();
-    while (1) {
-        getline(zinf, buf);
+    while (std::getline(zinf, buf)) {
         stringstream ss(buf);
         string nerr = errmsg + "\nError occurs in line: " + ss.str();
         if (!(ss >> str_buf)) break;
@@ -736,10 +1011,9 @@ void gcta::read_imp_info_mach_gz(string zinfofile)
         _allele2.push_back(c_buf);
         for (i = 0; i < 4; i++) if (!(ss >> f_buf)) LOGGER.e(0, nerr);
         _impRsq.push_back(f_buf);
-        if (zinf.fail() || !zinf.good()) break;
     }
-    zinf.clear();
-    zinf.close();
+    zinf.reset();
+    raw_file.close();
     _snp_num = _snp_name.size();
     _chr.resize(_snp_num);
     _bp.resize(_snp_num);
@@ -806,9 +1080,11 @@ void gcta::read_imp_dose_mach_gz(string zdosefile, string kp_indi_file, string r
     vector<int> rsnp;
     get_rsnp(rsnp);
 
-    gzifstream zinf;
-    zinf.open(zdosefile.c_str());
-    if (!zinf.is_open()) LOGGER.e(0, "cannot open the file [" + zdosefile + "] to read.");
+    std::ifstream raw_file(zdosefile, std::ios::binary);
+    if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + zdosefile + "] to read.");
+    boost::iostreams::filtering_istream zinf;
+    zinf.push(boost::iostreams::gzip_decompressor());
+    zinf.push(raw_file);
 
     vector<string> indi_ls;
     map<string, int> kp_id_map, blup_id_map, rm_id_map;
@@ -830,9 +1106,8 @@ void gcta::read_imp_dose_mach_gz(string zdosefile, string kp_indi_file, string r
     _geno_dose.clear();
 
     vector<int> kp_it;
-    while (1) {
+    while (std::getline(zinf, buf)) {
         bool kp_flag = true;
-        getline(zinf, buf);
         stringstream ss(buf);
         if (!(ss >> str_buf)) break;
         int ibuf = StrFunc::split_string(str_buf, vs_buf, ">");
@@ -851,18 +1126,21 @@ void gcta::read_imp_dose_mach_gz(string zdosefile, string kp_indi_file, string r
             _pid.push_back(vs_buf[1]);
             kept_id.push_back(id_buf);
         } else kp_it.push_back(0);
-        if (zinf.fail() || !zinf.good()) break;
     }
-    zinf.clear();
-    zinf.close();
+    zinf.reset();
+    raw_file.close();
     LOGGER << "(Imputed dosage data for " << kp_it.size() << " individuals detected)." << endl;
     _indi_num = _fid.size();
 
-    zinf.open(zdosefile.c_str());
+    std::ifstream raw_file2(zdosefile, std::ios::binary);
+    if (!raw_file2.is_open()) LOGGER.e(0, "cannot open the file [" + zdosefile + "] to read.");
+    boost::iostreams::filtering_istream zinf2;
+    zinf2.push(boost::iostreams::gzip_decompressor());
+    zinf2.push(raw_file2);
     _geno_dose.resize(_indi_num);
     for (line = 0; line < _indi_num; line++) _geno_dose[line].resize(_include.size());
     for (line = 0, k = 0; line < kp_it.size(); line++) {
-        getline(zinf, buf);
+        std::getline(zinf2, buf);
         if (kp_it[line] == 0) continue;
         stringstream ss(buf);
         if (!(ss >> str_buf)) break;
@@ -875,7 +1153,7 @@ void gcta::read_imp_dose_mach_gz(string zdosefile, string kp_indi_file, string r
                     LOGGER << "Warning: missing values detected in the dosage data." << endl;
                     missing = true;
                 }
-                f_buf = 1e6;
+                f_buf = DOSAGE_NA;
             }
             if (rsnp[i]) {
                 _geno_dose[k][j] = (f_buf);
@@ -884,8 +1162,8 @@ void gcta::read_imp_dose_mach_gz(string zdosefile, string kp_indi_file, string r
         }
         k++;
     }
-    zinf.clear();
-    zinf.close();
+    zinf2.reset();
+    raw_file2.close();
 
     LOGGER << "Imputed dosage data for " << kept_id.size() << " individuals are included from [" << zdosefile << "]." << endl;
     _fa_id.resize(_indi_num);
@@ -982,7 +1260,7 @@ void gcta::read_imp_dose_mach(string dosefile, string kp_indi_file, string rm_in
                     LOGGER << "Warning: missing values detected in the dosage data." << endl;
                     missing = true;
                 }
-                f_buf = 1e6;
+                f_buf = DOSAGE_NA;
             }
             if (rsnp[i]) {
                 _geno_dose[k][j] = (f_buf);
@@ -1018,21 +1296,20 @@ void gcta::read_imp_dose_mach(string dosefile, string kp_indi_file, string rm_in
 void gcta::read_imp_info_beagle(string zinfofile) {
     _dosage_flag = true;
 
-    const int MAX_LINE_LENGTH = 1000;
-    char buf[MAX_LINE_LENGTH];
+    string buf;
     string str_buf, errmsg = "Reading SNP summary information filed? Please check the format of [" + zinfofile + "].";
 
     string c_buf;
     int i_buf;
     double f_buf = 0.0;
-    gzifstream zinf;
-    zinf.open(zinfofile.c_str());
-    if (!zinf.is_open()) LOGGER.e(0, "cannot open the file [" + zinfofile + "] to read.");
+    std::ifstream raw_file(zinfofile, std::ios::binary);
+    if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + zinfofile + "] to read.");
+    boost::iostreams::filtering_istream zinf;
+    zinf.push(boost::iostreams::gzip_decompressor());
+    zinf.push(raw_file);
     LOGGER << "Reading summary information of the imputed SNPs (BEAGLE output) ..." << endl;
-    zinf.getline(buf, MAX_LINE_LENGTH, '\n'); // skip the header
-    while (1) {
-        zinf.getline(buf, MAX_LINE_LENGTH, '\n');
-        if (zinf.fail() || !zinf.good()) break;
+    std::getline(zinf, buf); // skip the header
+    while (std::getline(zinf, buf)) {
         stringstream ss(buf);
         string nerr = errmsg + "\nError line: " + ss.str();
         if (!(ss >> i_buf)) LOGGER.e(0, nerr);
@@ -1056,8 +1333,8 @@ void gcta::read_imp_info_beagle(string zinfofile) {
         if (!(ss >> f_buf)) LOGGER.e(0, nerr);
         if (ss >> f_buf) LOGGER.e(0, nerr);
     }
-    zinf.clear();
-    zinf.close();
+    zinf.reset();
+    raw_file.close();
     _snp_num = _snp_name.size();
     LOGGER << _snp_num << " SNPs to be included from [" + zinfofile + "]." << endl;
     _genet_dst.resize(_snp_num);
@@ -1074,15 +1351,16 @@ void gcta::read_imp_dose_beagle(string zdosefile, string kp_indi_file, string rm
     vector<int> rsnp;
     get_rsnp(rsnp);
 
-    const int MAX_LINE_LENGTH = 10000000;
-    char buf[MAX_LINE_LENGTH];
+    string buf;
     string str_buf;
 
-    gzifstream zinf;
-    zinf.open(zdosefile.c_str());
-    if (!zinf.is_open()) LOGGER.e(0, "cannot open the file [" + zdosefile + "] to read.");
+    std::ifstream raw_file(zdosefile, std::ios::binary);
+    if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + zdosefile + "] to read.");
+    boost::iostreams::filtering_istream zinf;
+    zinf.push(boost::iostreams::gzip_decompressor());
+    zinf.push(raw_file);
     LOGGER << "Reading imputed dosage scores (BEAGLE output) ..." << endl;
-    zinf.getline(buf, MAX_LINE_LENGTH, '\n');
+    std::getline(zinf, buf);
     stringstream ss(buf);
     for (i = 0; i < 3; i++) ss >> str_buf;
     while (ss >> str_buf) {
@@ -1109,9 +1387,7 @@ void gcta::read_imp_dose_beagle(string zdosefile, string kp_indi_file, string rm
     int line = 0;
     int k = 0;
     double d_buf = 0.0;
-    while (1) {
-        zinf.getline(buf, MAX_LINE_LENGTH, '\n');
-        if (zinf.fail() || !zinf.good()) break;
+    while (std::getline(zinf, buf)) {
         if (!rsnp[line++]) continue;
         stringstream ss(buf);
         ss >> str_buf;
@@ -1130,8 +1406,8 @@ void gcta::read_imp_dose_beagle(string zdosefile, string kp_indi_file, string rm
         }
         k++;
     }
-    zinf.clear();
-    zinf.close();
+    zinf.reset();
+    raw_file.close();
 }
 
 void gcta::save_plink() {
@@ -1224,7 +1500,7 @@ void gcta::dose2bed() {
     for (i = 0; i < _include.size(); i++) {  
         for (j = 0; j < _keep.size(); j++) {
            d_buf = _geno_dose[_keep[j]][_include[i]];
-            if (d_buf > 1e5) {
+            if (d_buf >= DOSAGE_NA) {
                 _snp_2[_include[i]][_keep[j]] = false;
                 _snp_1[_include[i]][_keep[j]] = true;
             } else if (d_buf >= 1.5) _snp_1[_include[i]][_keep[j]] = _snp_2[_include[i]][_keep[j]] = true;
@@ -1622,7 +1898,7 @@ void gcta::mu_func(int j, vector<double> &fac) {
     double fcount = 0.0, f_buf = 0.0;
     if (_dosage_flag) {
         for (i = 0; i < _keep.size(); i++) {
-            if (_geno_dose[_keep[i]][_include[j]] < 1e5) {
+            if (_geno_dose[_keep[i]][_include[j]] < DOSAGE_NA) {
                 _mu[_include[j]] += fac[i] * _geno_dose[_keep[i]][_include[j]];
                 fcount += fac[i];
             }
@@ -1757,7 +2033,7 @@ void gcta::read_indi_blup(string blup_indi_file) {
     LOGGER << "BLUP solution to the total genetic effects for " << _keep.size() << " individuals have been read from [" + blup_indi_file + "]." << endl;
 }
 
-bool gcta::make_XMat(MatrixXf &X)
+bool gcta::make_XMat(Eigen::MatrixXf &X)
 {
     if (_mu.empty()) calcu_mu();
 
@@ -1771,17 +2047,17 @@ bool gcta::make_XMat(MatrixXf &X)
     for (i = 0; i < n; i++) {
         if (_dosage_flag) {
             for (j = 0; j < m; j++) {
-                if (_geno_dose[_keep[i]][_include[j]] < 1e5) {
+                if (_geno_dose[_keep[i]][_include[j]] < DOSAGE_NA) {
                     if (_allele1[_include[j]] == _ref_A[_include[j]]) X(i,j) = _geno_dose[_keep[i]][_include[j]];
                     else X(i,j) = 2.0 - _geno_dose[_keep[i]][_include[j]];
                 } 
                 else {
-                    X(i,j) = 1e6;
+                    X(i,j) = DOSAGE_NA;
                     have_mis = true;
                 }
             }
             _geno_dose[i].clear();
-        } 
+        }
         else {
             for (j = 0; j < _include.size(); j++) {
                 if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
@@ -1789,7 +2065,7 @@ bool gcta::make_XMat(MatrixXf &X)
                     else X(i,j) = 2.0 - (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
                 } 
                 else {
-                    X(i,j) = 1e6;
+                    X(i,j) = DOSAGE_NA;
                     have_mis = true;
                 }
             }
@@ -1798,7 +2074,7 @@ bool gcta::make_XMat(MatrixXf &X)
     return have_mis;
 }
 
-bool gcta::make_XMat_d(MatrixXf &X)
+bool gcta::make_XMat_d(Eigen::MatrixXf &X)
 {
     if (_mu.empty()) calcu_mu();
 
@@ -1812,7 +2088,7 @@ bool gcta::make_XMat_d(MatrixXf &X)
     for (i = 0; i < n; i++) {
         if (_dosage_flag) {
             for (j = 0; j < m; j++) {
-                if (_geno_dose[_keep[i]][_include[j]] < 1e5) {
+                if (_geno_dose[_keep[i]][_include[j]] < DOSAGE_NA) {
                     if (_allele1[_include[j]] == _ref_A[_include[j]]) X(i,j) = _geno_dose[_keep[i]][_include[j]];
                     else X(i,j) = 2.0 - _geno_dose[_keep[i]][_include[j]];
                     if (X(i,j) < 0.5) X(i,j) = 0.0;
@@ -1820,12 +2096,12 @@ bool gcta::make_XMat_d(MatrixXf &X)
                     else X(i,j) = (2.0 * _mu[_include[j]] - 2.0);
                 } 
                 else {
-                    X(i,j) = 1e6;
+                    X(i,j) = DOSAGE_NA;
                     have_mis = true;
                 }
             }
             _geno_dose[i].clear();
-        } 
+        }
         else {
             for (j = 0; j < _include.size(); j++) {
                 if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
@@ -1836,7 +2112,7 @@ bool gcta::make_XMat_d(MatrixXf &X)
                     else X(i,j) = (2.0 * _mu[_include[j]] - 2.0);
                 } 
                 else{
-                    X(i,j) = 1e6;
+                    X(i,j) = DOSAGE_NA;
                     have_mis = true;
                 }
             }
@@ -1845,14 +2121,14 @@ bool gcta::make_XMat_d(MatrixXf &X)
     return have_mis;
 }
 
-void gcta::std_XMat(MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std)
+void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std)
 {
     if (_mu.empty()) calcu_mu();
 
     unsigned long i = 0, j = 0, n = _keep.size(), m = _include.size();
     sd_SNP.resize(m);
     if (_dosage_flag) {
-        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - VectorXf::Constant(n, _mu[_include[j]])).squaredNorm() / (n - 1.0);
+        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - Eigen::VectorXf::Constant(n, _mu[_include[j]])).squaredNorm() / (n - 1.0);
     } 
     else {
         for (j = 0; j < m; j++) sd_SNP[j] = _mu[_include[j]]*(1.0 - 0.5 * _mu[_include[j]]);
@@ -1867,7 +2143,7 @@ void gcta::std_XMat(MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool m
     #pragma omp parallel for private(j)
     for (i = 0; i < n; i++) {
         for (j = 0; j < m; j++) {
-            if (X(i,j) < 1e5) {
+            if (X(i,j) < DOSAGE_NA) {
                 X(i,j) -= _mu[_include[j]];
                 if (divid_by_std) X(i,j) *= sd_SNP[j];
             } 
@@ -1885,14 +2161,14 @@ void gcta::std_XMat(MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool m
     for (i = 0; i < n; i++) {
         if (_sex[_keep[i]] == 1) {
             for (j = 0; j < m; j++) {
-                if (X(i,j) < 1e5) X(i,j) *= f_buf;
+                if (X(i,j) < DOSAGE_NA) X(i,j) *= f_buf;
                 else if (miss_with_mu) X(i,j) = 0.0;
             }
         }
     }
 }
 
-void gcta::std_XMat_d(MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu, bool divid_by_std)
+void gcta::std_XMat_d(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu, bool divid_by_std)
 {
     if (_mu.empty()) calcu_mu();
 
@@ -1926,7 +2202,7 @@ void gcta::std_XMat_d(MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu, bool 
     #pragma omp parallel for private(j)
     for (i = 0; i < n; i++) {
         for (j = 0; j < m; j++) {
-            if (X(i,j) < 1e5) {
+            if (X(i,j) < DOSAGE_NA) {
                 X(i,j) -= psq[j];
                 if (divid_by_std) X(i,j) *= sd_SNP[j];
             } 
@@ -1988,9 +2264,11 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
     // Save matrix X
     double x_buf = 0.0;
     string X_zFile = _out + ".xmat.gz";
-    gzofstream zoutf;
-    zoutf.open(X_zFile.c_str());
-    if (!zoutf.is_open()) LOGGER.e(0, "cannot open the file [" + X_zFile + "] to write.");
+    std::ofstream raw_file(X_zFile, std::ios::binary);
+    if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + X_zFile + "] to write.");
+    boost::iostreams::filtering_ostream zoutf;
+    zoutf.push(boost::iostreams::gzip_compressor());
+    zoutf.push(raw_file);
     LOGGER << "Saving the recoded genotype matrix to the file [" + X_zFile + "]." << endl;
     zoutf << "FID IID ";
     for (j = 0; j < _include.size(); j++) zoutf << _snp_name[_include[j]] << " ";
@@ -2002,7 +2280,7 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
         zoutf << _fid[_keep[i]] << ' ' << _pid[_keep[i]] << ' ';
         if (_dosage_flag) {
             for (j = 0; j < _include.size(); j++) {
-                if (_geno_dose[_keep[i]][_include[j]] < 1e5) {
+                if (_geno_dose[_keep[i]][_include[j]] < DOSAGE_NA) {
                     if (_allele1[_include[j]] == _ref_A[_include[j]]) x_buf = _geno_dose[_keep[i]][_include[j]];
                     else x_buf = 2.0 - _geno_dose[_keep[i]][_include[j]];
                     if(std) x_buf = (x_buf - _mu[_include[j]]) * sd_SNP(j);
@@ -2033,11 +2311,12 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
         }
         zoutf << endl;
     }
-    zoutf.close();
+    zoutf.reset();
+    raw_file.close();
     LOGGER << "The recoded genotype matrix has been saved in the file [" + X_zFile + "] (in compressed text format)." << endl;
 }
 
-bool gcta::make_XMat_subset(MatrixXf &X, vector<int> &snp_indx, bool divid_by_std)
+bool gcta::make_XMat_subset(Eigen::MatrixXf &X, vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
     if (_mu.empty()) calcu_mu();
@@ -2050,7 +2329,7 @@ bool gcta::make_XMat_subset(MatrixXf &X, vector<int> &snp_indx, bool divid_by_st
         for (i = 0; i < n; i++) {
             for (j = 0; j < m; j++) {
                 k = _include[snp_indx[j]];
-                if (_geno_dose[_keep[i]][k] < 1e5) {
+                if (_geno_dose[_keep[i]][k] < DOSAGE_NA) {
                     if (_allele1[k] == _ref_A[k]) X(i,j) = _geno_dose[_keep[i]][k];
                     else X(i,j) = 2.0 - _geno_dose[_keep[i]][k];
                     X(i,j) -= _mu[k];
@@ -2091,7 +2370,7 @@ bool gcta::make_XMat_subset(MatrixXf &X, vector<int> &snp_indx, bool divid_by_st
     return true;
 }
 
-bool gcta::make_XMat_d_subset(MatrixXf &X, vector<int> &snp_indx, bool divid_by_std)
+bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
     if (_mu.empty()) calcu_mu();

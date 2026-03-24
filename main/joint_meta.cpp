@@ -634,7 +634,7 @@ bool gcta::init_B(const vector<int> &indx)
     _B.finalize();
     _B_N.finalize();
 
-    SimplicialLDLT<eigenSparseMat> ldlt_B(_B);
+    Eigen::SimplicialLDLT<eigenSparseMat> ldlt_B(_B);
 
     if (ldlt_B.vectorD().minCoeff() < 0 || sqrt(ldlt_B.vectorD().maxCoeff() / ldlt_B.vectorD().minCoeff()) > 30) return false;
 
@@ -642,7 +642,7 @@ bool gcta::init_B(const vector<int> &indx)
     _B_i.setIdentity();
     _B_i = ldlt_B.solve(_B_i).eval();
     if ((1 - eigenVector::Constant(indx.size(), 1).array() / (diagB.array() * _B_i.diagonal().array())).maxCoeff() > _jma_collinear) return false;
-    SimplicialLDLT<eigenSparseMat> ldlt_B_N(_B_N);
+    Eigen::SimplicialLDLT<eigenSparseMat> ldlt_B_N(_B_N);
     _B_N_i.resize(indx.size(), indx.size());
     _B_N_i.setIdentity();
     _B_N_i = ldlt_B_N.solve(_B_N_i).eval();
@@ -725,7 +725,7 @@ bool gcta::insert_B_and_Z(const vector<int> &indx, int insert_indx)
     }
     _B.finalize();
     _B_N.finalize();
-    SimplicialLDLT<eigenSparseMat> ldlt_B(_B);
+    Eigen::SimplicialLDLT<eigenSparseMat> ldlt_B(_B);
     _B_i.resize(ix.size(), ix.size());
     _B_i.setIdentity();
     _B_i = ldlt_B.solve(_B_i).eval();
@@ -735,7 +735,7 @@ bool gcta::insert_B_and_Z(const vector<int> &indx, int insert_indx)
         _B_N = B_N_buf;
         return false;
     }
-    SimplicialLDLT<eigenSparseMat> ldlt_B_N(_B_N);
+    Eigen::SimplicialLDLT<eigenSparseMat> ldlt_B_N(_B_N);
     _B_N_i.resize(ix.size(), ix.size());
     _B_N_i.setIdentity();
     _B_N_i = ldlt_B_N.solve(_B_N_i).eval();
@@ -814,9 +814,9 @@ void gcta::erase_B_and_Z(const vector<int> &indx, int erase_indx) {
     _B_N_i.resize(indx.size() - 1, indx.size() - 1);
     _B_N_i.setIdentity();
     if (indx.size() > 1) {
-        SimplicialLDLT<eigenSparseMat> ldlt_B(_B);
+        Eigen::SimplicialLDLT<eigenSparseMat> ldlt_B(_B);
         _B_i = ldlt_B.solve(_B_i).eval();
-        SimplicialLDLT<eigenSparseMat> ldlt_B_N(_B_N);
+        Eigen::SimplicialLDLT<eigenSparseMat> ldlt_B_N(_B_N);
         _B_N_i = ldlt_B_N.solve(_B_N_i).eval();
     }
 
@@ -964,13 +964,13 @@ bool gcta::massoc_sblup(double lambda, eigenVector &bJ)
     LOGGER << "Estimating the joint effects of all SNPs ..." << endl;
     // change here
     //eigenVector Xty = D.array() * _beta.array();
-    SimplicialLDLT<eigenSparseMat> solver;
+    Eigen::SimplicialLDLT<eigenSparseMat> solver;
     solver.compute(B);
-    if(solver.info()!=Success) {
+    if(solver.info()!=Eigen::Success) {
         LOGGER.e(0, "decomposition failed. The SNP correlation matrix is not positive definite.");
     }
     bJ = solver.solve(Xty);
-    if(solver.info()!=Success) {
+    if(solver.info()!=Eigen::Success) {
         LOGGER.e(0, "solving failed. Unable to solve the BLUP equation.");
     }
 

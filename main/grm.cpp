@@ -11,8 +11,11 @@
  */
 
 #include "gcta.h"
+#include <fstream>
 #include <iterator>
 #include <unordered_set>
+#include <boost/iostreams/filter/gzip.hpp>
+#include <boost/iostreams/filtering_stream.hpp>
 
 void gcta::enable_grm_bin_flag() {
     _grm_bin_flag = true;
@@ -96,7 +99,7 @@ void gcta::make_grm(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool outpu
             }
         }
     }
-    else _grm_N = MatrixXf::Constant(n,n,m);
+    else _grm_N = Eigen::MatrixXf::Constant(n,n,m);
 
     // Calcuate WW'
     #ifdef SINGLE_PRECISION
@@ -222,9 +225,11 @@ void gcta::output_grm(bool output_grm_bin)
     else {
         // Save A matrix in txt format
         grm_file = _out + ".grm.gz";
-        gzofstream zoutf;
-        zoutf.open(grm_file.c_str());
-        if (!zoutf.is_open()) LOGGER.e(0, "cannot open the file [" + grm_file + "] to write.");
+        std::ofstream raw_file(grm_file, std::ios::binary);
+        if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + grm_file + "] to write.");
+        boost::iostreams::filtering_ostream zoutf;
+        zoutf.push(boost::iostreams::gzip_compressor());
+        zoutf.push(raw_file);
         LOGGER << "Saving the genetic relationship matrix to the file [" + grm_file + "] (in compressed text format)." << endl;
         zoutf.setf(ios::scientific);
         zoutf.precision(6);
@@ -238,7 +243,8 @@ void gcta::output_grm(bool output_grm_bin)
                 for (j = 0; j <= i; j++) zoutf << i + 1 << '\t' << j + 1 << "\t0\t" << _grm(i, j) << endl;
             }
         }
-        zoutf.close();
+        zoutf.reset();
+        raw_file.close();
         LOGGER << "The genetic relationship matrix has been saved in the file [" + grm_file + "] (in compressed text format)." << endl;
     }
 
@@ -298,11 +304,11 @@ void gcta::read_grm_gz(string grm_file, vector<string> &grm_id, bool out_id_log,
     if (read_id_only) return;
 
     string grm_gzfile = grm_file + ".grm.gz", str_buf;
-    const int MAX_LINE_LENGTH = 1000;
-    char buf[MAX_LINE_LENGTH];
-    gzifstream zinf;
-    zinf.open(grm_gzfile.c_str());
-    if (!zinf.is_open()) LOGGER.e(0, "cannot open the file [" + grm_gzfile + "] to read.");
+    std::ifstream raw_file(grm_gzfile, std::ios::binary);
+    if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + grm_gzfile + "] to read.");
+    boost::iostreams::filtering_istream zinf;
+    zinf.push(boost::iostreams::gzip_decompressor());
+    zinf.push(raw_file);
 
     long indx1 = 0, indx2 = 0, nline = 0;
     double grm_buf = 0.0, grm_N_buf;
@@ -310,22 +316,22 @@ void gcta::read_grm_gz(string grm_file, vector<string> &grm_id, bool out_id_log,
     LOGGER << "Reading the GRM from [" + grm_gzfile + "]." << endl;
     _grm.resize(n, n);
     _grm_N.resize(n, n);
-    while (1) {
-        zinf.getline(buf, MAX_LINE_LENGTH, '\n');
-        if (zinf.fail() || !zinf.good()) break;
-        stringstream ss(buf);
-        if (!(ss >> indx1)) LOGGER.e(0, errmsg + buf);
-        if (!(ss >> indx2)) LOGGER.e(0, errmsg + buf);
-        if (!(ss >> grm_N_buf)) LOGGER.e(0, errmsg + buf);
-        if (!(ss >> grm_buf)) LOGGER.e(0, errmsg + buf);
-        if (indx1 < indx2 || indx1 > n || indx2 > n) LOGGER.e(0, errmsg + buf);
-        if (grm_N_buf == 0) LOGGER << "Warning: " << buf << endl;
+    string line;
+    while (std::getline(zinf, line)) {
+        stringstream ss(line);
+        if (!(ss >> indx1)) LOGGER.e(0, errmsg + line);
+        if (!(ss >> indx2)) LOGGER.e(0, errmsg + line);
+        if (!(ss >> grm_N_buf)) LOGGER.e(0, errmsg + line);
+        if (!(ss >> grm_buf)) LOGGER.e(0, errmsg + line);
+        if (indx1 < indx2 || indx1 > n || indx2 > n) LOGGER.e(0, errmsg + line);
+        if (grm_N_buf == 0) LOGGER << "Warning: " << line << endl;
         _grm_N(indx1 - 1, indx2 - 1) = _grm_N(indx2 - 1, indx1 - 1) = grm_N_buf;
         _grm(indx1 - 1, indx2 - 1) = _grm(indx2 - 1, indx1 - 1) = grm_buf;
         nline++;
-        if (ss >> str_buf) LOGGER.e(0, errmsg + buf);
+        if (ss >> str_buf) LOGGER.e(0, errmsg + line);
     }
-    zinf.close();
+    zinf.reset();
+    raw_file.close();
     if (!_within_family && nline != (long) n * (n + 1)*0.5){
         stringstream errmsg_tmp;
         errmsg_tmp << "there are " << nline << " lines in the [" << grm_gzfile << "] file. The expected number of lines is " << (long) (n * (n + 1)*0.5) << "." << endl;
@@ -501,7 +507,7 @@ void gcta::manipulate_grm(string grm_file, string keep_indi_file, string remove_
         }
         grm_buf.resize(0,0);
         if(!dont_read_N){
-            MatrixXf grm_N_buf = _grm_N;
+            Eigen::MatrixXf grm_N_buf = _grm_N;
             _grm_N.resize(_keep.size(), _keep.size());
             for (i = 0; i < _keep.size(); i++) {
                 for (j = 0; j <= i; j++) _grm_N(i, j) = grm_N_buf(_keep[i], _keep[j]);
@@ -649,7 +655,7 @@ void gcta::grm_bK(string grm_file, string keep_indi_file, string remove_indi_fil
             for (j = 0; j <= i; j++) _grm(i, j) = grm_buf(_keep[i], _keep[j]);
         }
         grm_buf.resize(0,0);
-        MatrixXf grm_N_buf = _grm_N;
+        Eigen::MatrixXf grm_N_buf = _grm_N;
         _grm_N.resize(_keep.size(), _keep.size());
         for (i = 0; i < _keep.size(); i++) {
             for (j = 0; j <= i; j++) _grm_N(i, j) = grm_N_buf(_keep[i], _keep[j]);
@@ -673,9 +679,9 @@ void gcta::pca(string grm_file, string keep_indi_file, string remove_indi_file, 
     int i = 0, j = 0, n = _keep.size();
     LOGGER << "\nPerforming principal component analysis ..." << endl;
 
-    SelfAdjointEigenSolver<MatrixXd> eigensolver(_grm.cast<double>());
-    MatrixXd evec = (eigensolver.eigenvectors());
-    VectorXd eval = eigensolver.eigenvalues();
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(_grm.cast<double>());
+    Eigen::MatrixXd evec = (eigensolver.eigenvectors());
+    Eigen::VectorXd eval = eigensolver.eigenvalues();
 
     string eval_file = _out + ".eigenval";
     ofstream o_eval(eval_file.c_str());
@@ -881,7 +887,7 @@ void gcta::project_loading(string pc_load, int N){
     snp_loading.shrink_to_fit();
 
     //Map the vector to Matrix, share the same memory, thus to save the memory.
-    eigenMatrix m_snp_loading = Map< Matrix<t_val,Dynamic,Dynamic,RowMajor> > (filter_snp_loading.data(), _include.size(), N);
+    eigenMatrix m_snp_loading = Eigen::Map< Eigen::Matrix<t_val,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor> > (filter_snp_loading.data(), _include.size(), N);
     LOGGER << " " << m_snp_loading.rows() << " SNPs are included for loading" << endl;
 
     if(missnp_list.size() > 0){
@@ -904,7 +910,7 @@ void gcta::project_loading(string pc_load, int N){
     #pragma omp parallel for ordered schedule(dynamic)
     for(int ind_index=0; ind_index < _keep.size(); ind_index++){
         LOGGER <<  to_string(ind_index+1) + "\r" << flush;
-        Matrix<t_val,1,Dynamic> geno(_include.size());
+        Eigen::Matrix<t_val,1,Eigen::Dynamic> geno(_include.size());
         for(int snp_index=0; snp_index < _include.size(); snp_index++){
             if (!_snp_1[_include[snp_index]][_keep[ind_index]] || _snp_2[_include[snp_index]][_keep[ind_index]]) {
                 geno(snp_index) = _snp_1[_include[snp_index]][_keep[ind_index]] + _snp_2[_include[snp_index]][_keep[ind_index]];
