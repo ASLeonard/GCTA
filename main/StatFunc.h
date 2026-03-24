@@ -20,8 +20,11 @@
 #include <span>
 #include <numbers>
 #include <iostream>
+#include <random>
 #include "CommFunc.h"
-#include "dcdflib.h"
+#include <boost/math/distributions.hpp>
+#include <boost/math/special_functions/gamma.hpp>
+#include <cmath>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <unsupported/Eigen/SparseExtra>
@@ -35,24 +38,18 @@ namespace StatFunc
 
     [[nodiscard]] double F_prob(double df_1, double df_2, double F_value);
 
-    [[nodiscard]] double betai(double a, double b, double x);
-
-    [[nodiscard]] double gammln(double xx) noexcept;
-
-    [[nodiscard]] double betacf(double a, double b, double x);
-
-    [[nodiscard]] double chi_prob(double df, double chi_sqr_val);
-
-    [[nodiscard]] double gammp(double a, double x);
-
-    void gser(double &gamser, double a, double x, double &gln);
-
-    void gcf(double &gammcf, double a, double x, double &gln);
+    // log_p=true returns ln(p) instead of p, avoiding underflow for extreme chi-squared values
+    [[nodiscard]] double chi_prob(double df, double chi_sqr_val, bool log_p = false);
     ////////// P-value Calculatiion Functions End ////////////////
 
     ///////// Random Number Generation Functions Start ////////
-    // (0, 1) uniform distribution generator
-    [[nodiscard]] double ran1(int &idum);
+    // (0, 1) uniform distribution generator — idum is accepted for API compatibility but ignored
+    [[nodiscard]] inline double uniform_random_distribution(int & /*idum*/) {
+        static std::random_device rd;
+        static std::mt19937 rng(rd());
+        static std::uniform_real_distribution<double> dist(0.0, 1.0);
+        return dist(rng);
+    }
 
     // (a, b) uniform distribution generator
     [[nodiscard]] double UniformDev(double a, double b, int &idum);
@@ -93,17 +90,16 @@ namespace StatFunc
     void splint(std::vector<double> &xa, std::vector<double> &ya, std::vector<double> &y2a, double x, double &y);
     [[nodiscard]] std::vector<double> ControlFDR_BH(std::span<const double> p_value);
 
-    // normal distribution
-    [[nodiscard]] double erf(double x) noexcept;
-    [[nodiscard]] double pnorm(double x) noexcept;
-    [[nodiscard]] double dnorm(double x) noexcept;
-    [[nodiscard]] double qnorm_sub(double x, double y);
+    // normal distribution (upper-tail CDF, PDF, and quantile)
+    [[nodiscard]] double pnorm(double x);
+    [[nodiscard]] double dnorm(double x);
     [[nodiscard]] double qnorm(double p, bool upper = true);
 
     // chisq distribution
-    [[nodiscard]] double pchisq(double x, double df);
+    // log_p=true returns ln(p) instead of p, avoiding underflow for extreme chi-squared values
+    [[nodiscard]] double pchisq(double x, double df, bool log_p = false);
     [[nodiscard]] double qchisq(double q, double df);
-    
+
     // sum of chisq distribution
     [[nodiscard]] double pchisqsum(double x, Eigen::VectorXd lambda);
     [[nodiscard]] double psadd(double x, Eigen::VectorXd lambda);

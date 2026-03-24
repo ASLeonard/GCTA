@@ -11,21 +11,22 @@
  */
 
 #include "gcta.h"
+#include <numeric>
 
 void gcta::set_ldscore_adj_flag(bool ldscore_adj){
     _ldscore_adj = ldscore_adj;
 }
 
-void gcta::read_LD_target_SNPs(string snplistfile)
+void gcta::read_LD_target_SNPs(std::string snplistfile)
 {
     // Read snplist file
     _ld_target_snp.clear();
     read_snplist(snplistfile, _ld_target_snp);
 
     int i = 0, prev_target_snp_num = _ld_target_snp.size(), prev_include_size = _include.size();
-    map<string, int> snp_map_buf;
-    map<string, int>::iterator iter;
-    for (i = 0; i < _snp_num; i++) snp_map_buf.insert(pair<string, int>(_snp_name[i], i));
+    std::map<std::string, int> snp_map_buf;
+    std::map<std::string, int>::iterator iter;
+    for (i = 0; i < _snp_num; i++) snp_map_buf.insert(std::pair<std::string, int>(_snp_name[i], i));
     for (i = _ld_target_snp.size() - 1; i >= 0; i--) {
         iter = snp_map_buf.find(_ld_target_snp[i]);
         if (iter != snp_map_buf.end()) _snp_name_map.insert(*iter);
@@ -33,9 +34,9 @@ void gcta::read_LD_target_SNPs(string snplistfile)
     }
     _include.clear();
     for (iter = _snp_name_map.begin(); iter != _snp_name_map.end(); iter++) _include.push_back(iter->second);
-    stable_sort(_include.begin(), _include.end());
+    std::stable_sort(_include.begin(), _include.end());
     if (_ld_target_snp.size() == 0) LOGGER.e(0, "no target SNP is retained to estimate the LD structure.");
-    else LOGGER << prev_target_snp_num << " target SNPs are read from [" + snplistfile + "], " << _ld_target_snp.size() << " of which exist in the data." << endl;
+    else LOGGER << prev_target_snp_num << " target SNPs are read from [" + snplistfile + "], " << _ld_target_snp.size() << " of which exist in the data." << std::endl;
 }
 
 void gcta::LD_Blocks(int stp, double wind_size, double alpha, bool IncldQ, bool save_ram)
@@ -44,8 +45,8 @@ void gcta::LD_Blocks(int stp, double wind_size, double alpha, bool IncldQ, bool 
     if (_mu.empty()) calcu_mu();
 
     // Read snplist file
-    vector<int> smpl_buf, smpl;
-    vector<string> uni_snp;
+    std::vector<int> smpl_buf, smpl;
+    std::vector<std::string> uni_snp;
     for (i = 0; i < _include.size(); i++) uni_snp.push_back(_snp_name[_include[i]]);
     StrFunc::match(_ld_target_snp, uni_snp, smpl_buf);
     for (i = 0; i < smpl_buf.size(); i++) {
@@ -54,28 +55,28 @@ void gcta::LD_Blocks(int stp, double wind_size, double alpha, bool IncldQ, bool 
     int SNP_SmplNum = smpl.size(); // smpl is the position of _include
 
     // Calculate LD structure
-    LOGGER << "Estimating LD structure..." << endl;
-    vector<int> K(SNP_SmplNum);
-    vector<double> r2(SNP_SmplNum), md_r2(SNP_SmplNum), max_r2(SNP_SmplNum), dL(SNP_SmplNum), dR(SNP_SmplNum);
-    vector<string> max_r2_snp(SNP_SmplNum);
-    vector< vector<double> > r(SNP_SmplNum);
-    vector<string> L_SNP(SNP_SmplNum), R_SNP(SNP_SmplNum);
-    vector< vector<string> > snp_ls(SNP_SmplNum);
+    LOGGER << "Estimating LD structure..." << std::endl;
+    std::vector<int> K(SNP_SmplNum);
+    std::vector<double> r2(SNP_SmplNum), md_r2(SNP_SmplNum), max_r2(SNP_SmplNum), dL(SNP_SmplNum), dR(SNP_SmplNum);
+    std::vector<std::string> max_r2_snp(SNP_SmplNum);
+    std::vector< std::vector<double> > r(SNP_SmplNum);
+    std::vector<std::string> L_SNP(SNP_SmplNum), R_SNP(SNP_SmplNum);
+    std::vector< std::vector<std::string> > snp_ls(SNP_SmplNum);
     EstLD(smpl, wind_size, snp_ls, r, r2, md_r2, max_r2, max_r2_snp, dL, dR, K, L_SNP, R_SNP, alpha, IncldQ);
 
     // Save result
-    string SavFileName = _out + ".rsq.ld";
-    ofstream SavFile(SavFileName.c_str());
+    std::string SavFileName = _out + ".rsq.ld";
+    std::ofstream SavFile(SavFileName.c_str());
     if (!SavFile) LOGGER.e(0, "cannot open the file [" + SavFileName + "] to save result!");
-    SavFile << "target_SNP\tfreq\tL_region\tR_region\tL_snp\tR_snp\tnSNPs\tmean_rsq\tmedian_rsq\tmax_rsq\tmax_rsq_snp" << endl;
-    for (i = 0; i < SNP_SmplNum; i++) SavFile << _snp_name[_include[smpl[i]]] << "\t" << 0.5 * _mu[_include[smpl[i]]] << "\t" << dL[i] << "\t" << dR[i] << "\t" << L_SNP[i] << "\t" << R_SNP[i] << "\t" << K[i] << "\t" << r2[i] << "\t" << md_r2[i] << "\t" << max_r2[i] << "\t" << max_r2_snp[i] << endl;
+    SavFile << "target_SNP\tfreq\tL_region\tR_region\tL_snp\tR_snp\tnSNPs\tmean_rsq\tmedian_rsq\tmax_rsq\tmax_rsq_snp" << std::endl;
+    for (i = 0; i < SNP_SmplNum; i++) SavFile << _snp_name[_include[smpl[i]]] << "\t" << 0.5 * _mu[_include[smpl[i]]] << "\t" << dL[i] << "\t" << dR[i] << "\t" << L_SNP[i] << "\t" << R_SNP[i] << "\t" << K[i] << "\t" << r2[i] << "\t" << md_r2[i] << "\t" << max_r2[i] << "\t" << max_r2_snp[i] << std::endl;
     SavFile.close();
     SavFileName = _out + ".r.ld";
     SavFile.open(SavFileName.c_str());
     if (!SavFile) LOGGER.e(0, "cannot open the file [" + SavFileName + "] to save result.");
     for (i = 0; i < SNP_SmplNum; i++) {
         for (j = 0; j < r[i].size(); j++) SavFile << r[i][j] << " ";
-        SavFile << endl;
+        SavFile << std::endl;
     }
     SavFile.close();
     SavFileName = _out + ".snp.ld";
@@ -83,23 +84,23 @@ void gcta::LD_Blocks(int stp, double wind_size, double alpha, bool IncldQ, bool 
     if (!SavFile) LOGGER.e(0, "cannot open the file [" + SavFileName + "] to save result.");
     for (i = 0; i < SNP_SmplNum; i++) {
         for (j = 0; j < snp_ls[i].size(); j++) SavFile << snp_ls[i][j] << " ";
-        SavFile << endl;
+        SavFile << std::endl;
     }
     SavFile.close();
-    LOGGER << "Results have been saved in [" + _out + ".rsq.ld]" + ", [" + _out + ".r.ld]" + " and [" + _out + ".snp.ld].\n" << endl;
+    LOGGER << "Results have been saved in [" + _out + ".rsq.ld]" + ", [" + _out + ".r.ld]" + " and [" + _out + ".snp.ld].\n" << std::endl;
 }
 
-void gcta::EstLD(vector<int> &smpl, double wind_size, vector< vector<string> > &snp, vector< vector<double> > &r, vector<double> &r2, vector<double> &md_r2, vector<double> &max_r2, vector<string> &max_r2_snp, vector<double> &dL, vector<double> &dR, vector<int> &K, vector<string> &L_SNP, vector<string> &R_SNP, double alpha, bool IncldQ)
+void gcta::EstLD(std::vector<int> &smpl, double wind_size, std::vector< std::vector<std::string> > &snp, std::vector< std::vector<double> > &r, std::vector<double> &r2, std::vector<double> &md_r2, std::vector<double> &max_r2, std::vector<std::string> &max_r2_snp, std::vector<double> &dL, std::vector<double> &dR, std::vector<int> &K, std::vector<std::string> &L_SNP, std::vector<std::string> &R_SNP, double alpha, bool IncldQ)
 {
     int i = 0, j = 0, L = 0, R = 0, maxL = 0, maxR = 0, i_buf = 0;
-    map<int, int> smpl_snp_map;
-    for (i = 0; i < smpl.size(); i++) smpl_snp_map.insert(pair<int, int>(_include[smpl[i]], i));
+    std::map<int, int> smpl_snp_map;
+    for (i = 0; i < smpl.size(); i++) smpl_snp_map.insert(std::pair<int, int>(_include[smpl[i]], i));
 
-    LOGGER << "Parameters used to search for SNPs in LD with the given SNPs: window size=" << (int) (wind_size * 0.001) << "Kb, significant level=" << alpha << endl;
-    vector<double> rst, y, x;
+    LOGGER << "Parameters used to search for SNPs in LD with the given SNPs: window size=" << (int) (wind_size * 0.001) << "Kb, significant level=" << alpha << std::endl;
+    std::vector<double> rst, y, x;
     for (i = 0; i < smpl.size(); i++) {
-        vector<int> buf;
-        vector<double> r_buf, rsq_buf;
+        std::vector<int> buf;
+        std::vector<double> r_buf, rsq_buf;
         maxL = maxR = L = R = smpl[i];
         makex(L, y);
         if (IncldQ) {
@@ -159,7 +160,7 @@ void gcta::EstLD(vector<int> &smpl, double wind_size, vector< vector<string> > &
                 r[i].push_back(r_buf[j]);
                 snp[i].push_back(_snp_name[_include[buf[j]]]);
             }
-            r2[i] = CommFunc::mean(rsq_buf);
+            r2[i] = std::accumulate(rsq_buf.begin(), rsq_buf.end(), 0.0) / rsq_buf.size();
             md_r2[i] = CommFunc::median(rsq_buf);
             i_buf = max_element(rsq_buf.begin(), rsq_buf.end()) - rsq_buf.begin();
             max_r2[i] = rsq_buf[i_buf];
@@ -169,7 +170,7 @@ void gcta::EstLD(vector<int> &smpl, double wind_size, vector< vector<string> > &
     }
 }
 
-eigenMatrix gcta::reg(vector<double> &y, vector<double> &x, vector<double> &rst, bool table) {
+eigenMatrix gcta::reg(std::vector<double> &y, std::vector<double> &x, std::vector<double> &rst, bool table) {
     int N = x.size();
     if (N != y.size() || N < 1) LOGGER.e(0, "The lengths of x and y do not match.");
 
@@ -232,12 +233,12 @@ eigenMatrix gcta::reg(vector<double> &y, vector<double> &x, vector<double> &rst,
     return (reg_sum);
 }
 
-void gcta::rm_cor_snp(int m, int start, float *rsq, double rsq_cutoff, vector<int> &rm_snp_ID1)
+void gcta::rm_cor_snp(int m, int start, float *rsq, double rsq_cutoff, std::vector<int> &rm_snp_ID1)
 {
     int i = 0, j = 0, i_buf = 0;
 
     rm_snp_ID1.clear();
-    vector<int> rm_snp_ID2;
+    std::vector<int> rm_snp_ID2;
     for (i = 0; i < m; i++) {
         for (j = 0; j < i; j++) {
             if (rsq[i * m + j] > rsq_cutoff) {
@@ -246,18 +247,18 @@ void gcta::rm_cor_snp(int m, int start, float *rsq, double rsq_cutoff, vector<in
             }
         }
     }
-    vector<int> rm_uni_ID(rm_snp_ID1);
+    std::vector<int> rm_uni_ID(rm_snp_ID1);
     rm_uni_ID.insert(rm_uni_ID.end(), rm_snp_ID2.begin(), rm_snp_ID2.end());
-    stable_sort(rm_uni_ID.begin(), rm_uni_ID.end());
+    std::stable_sort(rm_uni_ID.begin(), rm_uni_ID.end());
     rm_uni_ID.erase(unique(rm_uni_ID.begin(), rm_uni_ID.end()), rm_uni_ID.end());
-    map<int, int> rm_uni_ID_count;
+    std::map<int, int> rm_uni_ID_count;
     for (i = 0; i < rm_uni_ID.size(); i++) {
         i_buf = count(rm_snp_ID1.begin(), rm_snp_ID1.end(), rm_uni_ID[i]) + count(rm_snp_ID2.begin(), rm_snp_ID2.end(), rm_uni_ID[i]);
-        rm_uni_ID_count.insert(pair<int, int>(rm_uni_ID[i], i_buf));
+        rm_uni_ID_count.insert(std::pair<int, int>(rm_uni_ID[i], i_buf));
     }
     #pragma omp parallel for
     for (i = 0; i < rm_snp_ID1.size(); i++) {
-        map<int, int>::iterator iter1, iter2;
+        std::map<int, int>::iterator iter1, iter2;
         iter1 = rm_uni_ID_count.find(rm_snp_ID1[i]);
         iter2 = rm_uni_ID_count.find(rm_snp_ID2[i]);
         if (iter1->second < iter2->second) {
@@ -266,7 +267,7 @@ void gcta::rm_cor_snp(int m, int start, float *rsq, double rsq_cutoff, vector<in
             rm_snp_ID2[i] = i_buf;
         }
     }
-    stable_sort(rm_snp_ID1.begin(), rm_snp_ID1.end());
+    std::stable_sort(rm_snp_ID1.begin(), rm_snp_ID1.end());
     rm_snp_ID1.erase(unique(rm_snp_ID1.begin(), rm_snp_ID1.end()), rm_snp_ID1.end());
 }
 
@@ -277,21 +278,21 @@ void gcta::calcu_mean_rsq(int wind_size, double rsq_cutoff, bool dominance_flag)
 
     int i = 0, m = _include.size();
 
-    LOGGER << "\nCalculating LD score for SNPs (block size of " << wind_size / 1000 << "Kb with an overlap of "<<wind_size/2000<<"Kb between blocks); LD rsq threshold = " << rsq_cutoff << ") ... " << endl;
-    if(dominance_flag) LOGGER<<"(SNP genotypes are coded for dominance effects)"<<endl;
-    if(_ldscore_adj) LOGGER << "LD rsq will be adjusted for chance correlation, i.e. rsq_adj = rsq - (1 - rsq) / (n -2)." << endl;
-    vector<int> brk_pnt1, brk_pnt2, brk_pnt3;
+    LOGGER << "\nCalculating LD score for SNPs (block size of " << wind_size / 1000 << "Kb with an overlap of "<<wind_size/2000<<"Kb between blocks); LD rsq threshold = " << rsq_cutoff << ") ... " << std::endl;
+    if(dominance_flag) LOGGER<<"(SNP genotypes are coded for dominance effects)"<<std::endl;
+    if(_ldscore_adj) LOGGER << "LD rsq will be adjusted for chance correlation, i.e. rsq_adj = rsq - (1 - rsq) / (n -2)." << std::endl;
+    std::vector<int> brk_pnt1, brk_pnt2, brk_pnt3;
     get_ld_blk_pnt(brk_pnt1, brk_pnt2, brk_pnt3, wind_size);
 
     eigenVector mean_rsq = eigenVector::Zero(m), snp_num = eigenVector::Zero(m), max_rsq = eigenVector::Zero(m);
     calcu_ld_blk(brk_pnt1, brk_pnt3, mean_rsq, snp_num, max_rsq, false, rsq_cutoff, dominance_flag);
     if (brk_pnt2.size() > 1) calcu_ld_blk(brk_pnt2, brk_pnt3, mean_rsq, snp_num, max_rsq, true, rsq_cutoff, dominance_flag);
 
-    string mrsq_file = "";
+    std::string mrsq_file = "";
     if(dominance_flag) mrsq_file = _out + ".d.score.ld";
     else mrsq_file = _out + ".score.ld";
-    ofstream o_mrsq(mrsq_file.data());
-    o_mrsq<<"SNP chr bp MAF mean_rsq snp_num max_rsq ldscore"<<endl;
+    std::ofstream o_mrsq(mrsq_file.data());
+    o_mrsq<<"SNP chr bp MAF mean_rsq snp_num max_rsq ldscore"<<std::endl;
     double ldscore = 0.0;
     for (i = 0; i < m; i++){
         o_mrsq << _snp_name[_include[i]] << " " << _chr[_include[i]] << " " << _bp[_include[i]] << " ";
@@ -300,8 +301,8 @@ void gcta::calcu_mean_rsq(int wind_size, double rsq_cutoff, bool dominance_flag)
         ldscore = 1.0 + mean_rsq[i] * snp_num[i];
         o_mrsq << MAF << " " << mean_rsq[i] << " " << snp_num[i] << " " << max_rsq[i] << " " << ldscore << "\n";
     }
-    o_mrsq << endl;
-    LOGGER << "LD score for " << m << " SNPs have been saved in the file [" + mrsq_file + "]." << endl;
+    o_mrsq << std::endl;
+    LOGGER << "LD score for " << m << " SNPs have been saved in the file [" + mrsq_file + "]." << std::endl;
 }
 
 void gcta::calcu_ssx_sqrt_i(eigenVector &ssx_sqrt_i)
@@ -315,7 +316,7 @@ void gcta::calcu_ssx_sqrt_i(eigenVector &ssx_sqrt_i)
     }
 }
 
-void gcta::get_ld_blk_pnt(vector<int> &brk_pnt1, vector<int> &brk_pnt2, vector<int> &brk_pnt3, int wind_bp, int wind_snp)
+void gcta::get_ld_blk_pnt(std::vector<int> &brk_pnt1, std::vector<int> &brk_pnt2, std::vector<int> &brk_pnt3, int wind_bp, int wind_snp)
 {
     unsigned long i = 0, j = 0, k = 0, m = _include.size();
 
@@ -352,7 +353,7 @@ void gcta::get_ld_blk_pnt(vector<int> &brk_pnt1, vector<int> &brk_pnt2, vector<i
             j++;
         }
     }
-    stable_sort(brk_pnt1.begin(), brk_pnt1.end());
+    std::stable_sort(brk_pnt1.begin(), brk_pnt1.end());
     brk_pnt1.erase(unique(brk_pnt1.begin(), brk_pnt1.end()), brk_pnt1.end());
 
     brk_pnt2.clear();
@@ -368,7 +369,7 @@ void gcta::get_ld_blk_pnt(vector<int> &brk_pnt1, vector<int> &brk_pnt2, vector<i
     }
 }
 
-void gcta::calcu_ld_blk(vector<int> &brk_pnt, vector<int> &brk_pnt3, eigenVector &mean_rsq, eigenVector &snp_num, eigenVector &max_rsq, bool second, double rsq_cutoff, bool dominance_flag)
+void gcta::calcu_ld_blk(std::vector<int> &brk_pnt, std::vector<int> &brk_pnt3, eigenVector &mean_rsq, eigenVector &snp_num, eigenVector &max_rsq, bool second, double rsq_cutoff, bool dominance_flag)
 {
     int i = 0, j = 0, k = 0, s1 = 0, s2 = 0, n = _keep.size(), m = _include.size(), size = 0, size_limit = 10000;
 
@@ -388,7 +389,7 @@ void gcta::calcu_ld_blk(vector<int> &brk_pnt, vector<int> &brk_pnt3, eigenVector
         eigenVector rsq_size(size), mean_rsq_sub(size), max_rsq_sub = eigenVector::Constant(size, -1.0);
 
         // make genotype matrix
-        vector<int> snp_indx(size);
+        std::vector<int> snp_indx(size);
         for (j = brk_pnt[i], k = 0; j <= brk_pnt[i + 1]; j++, k++) snp_indx[k] = j;
         Eigen::MatrixXf X_sub;
         if(dominance_flag) make_XMat_d_subset(X_sub, snp_indx, true);
@@ -446,7 +447,7 @@ void gcta::calcu_ld_blk(vector<int> &brk_pnt, vector<int> &brk_pnt3, eigenVector
 void gcta::calcu_ld_blk_split(int size, int size_limit, Eigen::MatrixXf &X_sub, eigenVector &ssx_sqrt_i_sub, double rsq_cutoff, eigenVector &rsq_size, eigenVector &mean_rsq_sub, eigenVector &max_rsq_sub, int s1, int s2, bool second)
 {
     int i = 0, j = 0, k = 0, m = 0, n = _keep.size();
-    vector<int> brk_pnt_sub;
+    std::vector<int> brk_pnt_sub;
     brk_pnt_sub.push_back(0);
     for (i = size_limit; i < size - size_limit; i += size_limit) {
         brk_pnt_sub.push_back(i - 1);
@@ -498,16 +499,16 @@ void gcta::calcu_ld_blk_split(int size, int size_limit, Eigen::MatrixXf &X_sub, 
     }
 }
 
-void gcta::calcu_mean_rsq_multiSet(string snpset_filenames_file, int wind_size, double rsq_cutoff, bool dominance_flag)
+void gcta::calcu_mean_rsq_multiSet(std::string snpset_filenames_file, int wind_size, double rsq_cutoff, bool dominance_flag)
 {
     check_autosome();
     int i = 0,  j = 0, m = _include.size();
 
-    ifstream in_snpset_filenames(snpset_filenames_file.c_str());
+    std::ifstream in_snpset_filenames(snpset_filenames_file.c_str());
     if (!in_snpset_filenames) LOGGER.e(0, "cannot open the file [" + snpset_filenames_file + "] to read.");
-    string str_buf;
-    vector<string> snpset_filenaems, vs_buf;
-    while (getline(in_snpset_filenames, str_buf)) {
+    std::string str_buf;
+    std::vector<std::string> snpset_filenaems, vs_buf;
+    while (std::getline(in_snpset_filenames, str_buf)) {
         if (!str_buf.empty()) {
             if (StrFunc::split_string(str_buf, vs_buf) == 1) snpset_filenaems.push_back(vs_buf[0]);
         }
@@ -515,29 +516,29 @@ void gcta::calcu_mean_rsq_multiSet(string snpset_filenames_file, int wind_size, 
     in_snpset_filenames.close();
 
     int set_num = snpset_filenaems.size();
-    LOGGER << "There are " << set_num << " filenames specified in [" + snpset_filenames_file + "]." << endl;
+    LOGGER << "There are " << set_num << " filenames specified in [" + snpset_filenames_file + "]." << std::endl;
     if (set_num < 1) LOGGER.e(0, "no filename found in [" + snpset_filenames_file + "].");
 
-    vector< vector<string> > snplist(set_num);
+    std::vector< std::vector<std::string> > snplist(set_num);
     for(i = 0; i < set_num; i++) {
-        ifstream i_snplist(snpset_filenaems[i].c_str());
+        std::ifstream i_snplist(snpset_filenaems[i].c_str());
         if (!i_snplist) LOGGER.e(0, "cannot open the file [" + snpset_filenaems[i] + "] to read.");
-        LOGGER << "Reading the list of SNPs from [" + snpset_filenaems[i] + "]." << endl;
+        LOGGER << "Reading the list of SNPs from [" + snpset_filenaems[i] + "]." << std::endl;
         while (i_snplist >> str_buf) {
             snplist[i].push_back(str_buf);
-            getline(i_snplist, str_buf);
+            std::getline(i_snplist, str_buf);
         }
         i_snplist.close();
     }
-    vector< vector<bool> > set_flag(set_num);
+    std::vector< std::vector<bool> > set_flag(set_num);
     for(i = 0; i < set_num; i++){
         set_flag[i].resize(m);
         for(j = 0; j < m; j++) set_flag[i][j] = false;
     }
 
-    map<string, int> snp_map;
-    for (i = 0; i < m; i++) snp_map.insert(pair<string, int>(_snp_name[_include[i]], i));
-    map<string, int>::iterator iter, end = snp_map.end();
+    std::map<std::string, int> snp_map;
+    for (i = 0; i < m; i++) snp_map.insert(std::pair<std::string, int>(_snp_name[_include[i]], i));
+    std::map<std::string, int>::iterator iter, end = snp_map.end();
     for(i = 0; i < set_num; i++){
         int snp_count = 0;
         for(j = 0; j < snplist[i].size(); j++){
@@ -546,16 +547,16 @@ void gcta::calcu_mean_rsq_multiSet(string snpset_filenames_file, int wind_size, 
             set_flag[i][iter->second] = true;
             snp_count++;
         }
-        LOGGER << snp_count << " SNPs included from [" << snpset_filenaems[i] << "]. " <<endl;
+        LOGGER << snp_count << " SNPs included from [" << snpset_filenaems[i] << "]. " <<std::endl;
     }
 
-    LOGGER << "\nCalculating multi-component LD score for SNPs (block size of " << wind_size / 1000 << "Kb with an overlap of "<<wind_size/2000<<"Kb between blocks); LD rsq threshold = " << rsq_cutoff << ") ... " << endl;
-    if(dominance_flag) LOGGER<<"(SNP genotypes are coded for dominance effects)"<<endl;
-    if(_ldscore_adj) LOGGER << "LD rsq will be adjusted for chance correlation, i.e. rsq_adj = rsq - (1 - rsq) / (n -2)." << endl;
-    vector<int> brk_pnt1, brk_pnt2, brk_pnt3;
+    LOGGER << "\nCalculating multi-component LD score for SNPs (block size of " << wind_size / 1000 << "Kb with an overlap of "<<wind_size/2000<<"Kb between blocks); LD rsq threshold = " << rsq_cutoff << ") ... " << std::endl;
+    if(dominance_flag) LOGGER<<"(SNP genotypes are coded for dominance effects)"<<std::endl;
+    if(_ldscore_adj) LOGGER << "LD rsq will be adjusted for chance correlation, i.e. rsq_adj = rsq - (1 - rsq) / (n -2)." << std::endl;
+    std::vector<int> brk_pnt1, brk_pnt2, brk_pnt3;
     get_ld_blk_pnt(brk_pnt1, brk_pnt2, brk_pnt3, wind_size);
 
-    vector<eigenVector> mean_rsq(set_num), snp_num(set_num), max_rsq(set_num);
+    std::vector<eigenVector> mean_rsq(set_num), snp_num(set_num), max_rsq(set_num);
     for(i = 0; i < set_num; i++){
         mean_rsq[i] = eigenVector::Zero(m);
         snp_num[i] = eigenVector::Zero(m);
@@ -564,14 +565,14 @@ void gcta::calcu_mean_rsq_multiSet(string snpset_filenames_file, int wind_size, 
     calcu_ld_blk_multiSet(brk_pnt1, brk_pnt3, set_flag, mean_rsq, snp_num, max_rsq, false, rsq_cutoff, dominance_flag);
     if (brk_pnt2.size() > 1) calcu_ld_blk_multiSet(brk_pnt2, brk_pnt3, set_flag, mean_rsq, snp_num, max_rsq, true, rsq_cutoff, dominance_flag);
 
-    string mrsq_file = "";
+    std::string mrsq_file = "";
     double ldscore = 0.0;
     if(dominance_flag) mrsq_file = _out + ".d.multi_score.ld";
     else mrsq_file = _out + ".multi_score.ld";
-    ofstream o_mrsq(mrsq_file.data());
+    std::ofstream o_mrsq(mrsq_file.data());
     o_mrsq<<"SNP chr bp MAF";
     for(j = 0; j < set_num; j++) o_mrsq << " mean_rsq_" << j+1 << " snp_num_" << j+1 << " max_rsq" << j+1 << " ldscore" << j+1;
-    o_mrsq << endl;
+    o_mrsq << std::endl;
     for (i = 0; i < m; i++){
         o_mrsq << _snp_name[_include[i]] << " " << _chr[_include[i]] << " " << _bp[_include[i]] << " ";
         double MAF = 0.5 * _mu[_include[i]];
@@ -581,13 +582,13 @@ void gcta::calcu_mean_rsq_multiSet(string snpset_filenames_file, int wind_size, 
             ldscore = 1.0 + (mean_rsq[j])[i] * (snp_num[j])[i];
             o_mrsq << " " << (mean_rsq[j])[i] << " " << (snp_num[j])[i] << " " << (max_rsq[j])[i];
         }
-        o_mrsq << endl;
+        o_mrsq << std::endl;
     }
-    o_mrsq << endl;
-    LOGGER << "LD score for " << m << " SNPs have been saved in the file [" + mrsq_file + "]." << endl;
+    o_mrsq << std::endl;
+    LOGGER << "LD score for " << m << " SNPs have been saved in the file [" + mrsq_file + "]." << std::endl;
 }
 
-void gcta::calcu_ld_blk_multiSet(vector<int> &brk_pnt, vector<int> &brk_pnt3, vector< vector<bool> > &set_flag, vector<eigenVector> &mean_rsq, vector<eigenVector> &snp_num, vector<eigenVector> &max_rsq, bool second, double rsq_cutoff, bool dominance_flag)
+void gcta::calcu_ld_blk_multiSet(std::vector<int> &brk_pnt, std::vector<int> &brk_pnt3, std::vector< std::vector<bool> > &set_flag, std::vector<eigenVector> &mean_rsq, std::vector<eigenVector> &snp_num, std::vector<eigenVector> &max_rsq, bool second, double rsq_cutoff, bool dominance_flag)
 {
     int i = 0, j = 0, k = 0, l = 0, s1 = 0, s2 = 0, n = _keep.size(), m = _include.size(), size = 0, size_limit = 10000;
     int s = 0, set_num = set_flag.size();
@@ -605,7 +606,7 @@ void gcta::calcu_ld_blk_multiSet(vector<int> &brk_pnt, vector<int> &brk_pnt3, ve
             s2 = size - 1;
         }
 
-        vector<int> snp_indx(size);
+        std::vector<int> snp_indx(size);
         for (j = brk_pnt[i], k = 0; j <= brk_pnt[i + 1]; j++, k++) snp_indx[k] = j;
         Eigen::MatrixXf X_sub;
         if(dominance_flag) make_XMat_d_subset(X_sub, snp_indx, true);
@@ -618,8 +619,8 @@ void gcta::calcu_ld_blk_multiSet(vector<int> &brk_pnt, vector<int> &brk_pnt3, ve
         }
 
         for(s = 0; s < set_num; s++){
-            vector<int> used_in_this_set;
-            vector<bool> set_flag_sub(size);
+            std::vector<int> used_in_this_set;
+            std::vector<bool> set_flag_sub(size);
              for (j = 0, k = brk_pnt[i]; j < size; j++, k++){
                 if(set_flag[s][k] == true){
                     used_in_this_set.push_back(j);
@@ -683,10 +684,10 @@ void gcta::calcu_ld_blk_multiSet(vector<int> &brk_pnt, vector<int> &brk_pnt3, ve
     }
 }
 
-void gcta::calcu_ld_blk_split_multiSet(int size, int size_limit, Eigen::MatrixXf &X_sub, Eigen::MatrixXf &X_sub2, vector<int> &used_in_this_set, eigenVector &ssx_sqrt_i_sub, double rsq_cutoff, eigenVector &rsq_size, eigenVector &mean_rsq_sub, eigenVector &max_rsq_sub, int s1, int s2, bool second)
+void gcta::calcu_ld_blk_split_multiSet(int size, int size_limit, Eigen::MatrixXf &X_sub, Eigen::MatrixXf &X_sub2, std::vector<int> &used_in_this_set, eigenVector &ssx_sqrt_i_sub, double rsq_cutoff, eigenVector &rsq_size, eigenVector &mean_rsq_sub, eigenVector &max_rsq_sub, int s1, int s2, bool second)
 {
     int i = 0, j = 0, k = 0, l = 0, m = 0, n = _keep.size();
-    vector<int> brk_pnt_sub;
+    std::vector<int> brk_pnt_sub;
     brk_pnt_sub.push_back(0);
     for (i = size_limit; i < size - size_limit; i += size_limit) {
         brk_pnt_sub.push_back(i - 1);
@@ -741,20 +742,20 @@ void gcta::calcu_ld_blk_split_multiSet(int size, int size_limit, Eigen::MatrixXf
     }
 }
 
-void gcta::ld_seg(string i_ld_file, int seg_size, int wind_size, double rsq_cutoff, bool dominance_flag)
+void gcta::ld_seg(std::string i_ld_file, int seg_size, int wind_size, double rsq_cutoff, bool dominance_flag)
 {
     int i = 0, j = 0, k = 0, m = 0;
-    vector<float> mrsq, snp_num, max_rsq, ldscore;
-    vector<int> brk_pnt1, brk_pnt2, brk_pnt3;
+    std::vector<float> mrsq, snp_num, max_rsq, ldscore;
+    std::vector<int> brk_pnt1, brk_pnt2, brk_pnt3;
 
     if(!i_ld_file.empty()){
-        ifstream ild(i_ld_file.c_str());
+        std::ifstream ild(i_ld_file.c_str());
         if (!ild) LOGGER.e(0, "cannot open the file [" + i_ld_file + "] to read.");
 
-        string str_buf;
-        LOGGER << "Reading per-SNP LD score from [" + i_ld_file + "] ..." << endl;
-        getline(ild, str_buf); // get the header
-        while(getline(ild, str_buf)){
+        std::string str_buf;
+        LOGGER << "Reading per-SNP LD score from [" + i_ld_file + "] ..." << std::endl;
+        std::getline(ild, str_buf); // get the header
+        while(std::getline(ild, str_buf)){
             if(str_buf.size() > 0) m++;
         }
         ild.close();
@@ -769,7 +770,7 @@ void gcta::ld_seg(string i_ld_file, int seg_size, int wind_size, double rsq_cuto
         max_rsq.resize(m);
         ldscore.resize(m);
         i = 0;
-        getline(ild, str_buf); // get the header
+        std::getline(ild, str_buf); // get the header
         while (ild) {
             ild >> str_buf;
             if (ild.eof() || str_buf.size() < 1) break;
@@ -782,11 +783,11 @@ void gcta::ld_seg(string i_ld_file, int seg_size, int wind_size, double rsq_cuto
             if(!(ild >> snp_num[i])) LOGGER.e(0, "in the file [" + i_ld_file + "].");
             if(!(ild >> max_rsq[i])) LOGGER.e(0, "in the file [" + i_ld_file + "].");
             if(!(ild >> ldscore[i])) LOGGER.e(0, "in the file [" + i_ld_file + "].");
-            getline(ild, str_buf);
+            std::getline(ild, str_buf);
             i++;
         }
         ild.close();
-        LOGGER << "Per-SNP LD score for " << m << " SNPs read from [" + i_ld_file + "]." << endl;
+        LOGGER << "Per-SNP LD score for " << m << " SNPs read from [" + i_ld_file + "]." << std::endl;
 
         _include.resize(m);
         for(i = 0; i < m; i++) _include[i] = i;
@@ -794,8 +795,8 @@ void gcta::ld_seg(string i_ld_file, int seg_size, int wind_size, double rsq_cuto
     else {
         m = _include.size();
         check_autosome();
-        LOGGER << "\nCalculating LD score between SNPs (block size of " << wind_size / 1000 << "Kb with an overlap of "<<wind_size / 2000<<"Kb between blocks); LD rsq threshold = " << rsq_cutoff << ") ... " << endl;
-        if(dominance_flag) LOGGER<<"(SNP genotypes are coded for dominance effects)"<<endl;
+        LOGGER << "\nCalculating LD score between SNPs (block size of " << wind_size / 1000 << "Kb with an overlap of "<<wind_size / 2000<<"Kb between blocks); LD rsq threshold = " << rsq_cutoff << ") ... " << std::endl;
+        if(dominance_flag) LOGGER<<"(SNP genotypes are coded for dominance effects)"<<std::endl;
         get_ld_blk_pnt(brk_pnt1, brk_pnt2, brk_pnt3, wind_size);
         eigenVector mrsq_buf = eigenVector::Zero(m), snp_num_buf = eigenVector::Zero(m), max_rsq_buf = eigenVector::Zero(m);
         calcu_ld_blk(brk_pnt1, brk_pnt3, mrsq_buf, snp_num_buf, max_rsq_buf, false, rsq_cutoff, dominance_flag);
@@ -812,7 +813,7 @@ void gcta::ld_seg(string i_ld_file, int seg_size, int wind_size, double rsq_cuto
         }
     }
 
-    LOGGER << "Calculating regional mean LD score (region width =  " << seg_size / 1000 << "Kb with an overlap of " << seg_size / 2000 << "Kb between regions) ... " << endl;
+    LOGGER << "Calculating regional mean LD score (region width =  " << seg_size / 1000 << "Kb with an overlap of " << seg_size / 2000 << "Kb between regions) ... " << std::endl;
 
     get_lds_brkpnt(brk_pnt1, brk_pnt2, seg_size);
     int size = 0, mean_size = 0, count = 0;
@@ -826,7 +827,7 @@ void gcta::ld_seg(string i_ld_file, int seg_size, int wind_size, double rsq_cuto
     mean_size /= count;
     get_lds_brkpnt(brk_pnt1, brk_pnt2, 0, mean_size);
 
-    vector<double> lds(m);
+    std::vector<double> lds(m);
     for (i = 0; i < brk_pnt1.size() - 1; i++){
         size = brk_pnt1[i + 1] - brk_pnt1[i] + 1;
         if(size < 3) continue;
@@ -844,19 +845,19 @@ void gcta::ld_seg(string i_ld_file, int seg_size, int wind_size, double rsq_cuto
         for(j = brk_pnt2[i]; j <= brk_pnt2[i + 1]; j++) lds[j] = 0.5*(ld_score + lds[j]); 
     }
 
-    string lds_file;
+    std::string lds_file;
     if(dominance_flag) lds_file = _out + ".d.score.ld";
     else lds_file = _out + ".score.ld";
-    LOGGER << "Writing the regional LD score to file ["+ lds_file +"] ..." << endl;
-    ofstream o_lds(lds_file.data());
-    o_lds << "SNP chr bp freq mean_rsq snp_num max_rsq ldscore_SNP ldscore_region"<<endl;
+    LOGGER << "Writing the regional LD score to file ["+ lds_file +"] ..." << std::endl;
+    std::ofstream o_lds(lds_file.data());
+    o_lds << "SNP chr bp freq mean_rsq snp_num max_rsq ldscore_SNP ldscore_region"<<std::endl;
     for (i = 0; i < m; i++){
         o_lds << _snp_name[_include[i]] << " " << _chr[_include[i]] << " " << _bp[_include[i]] << " " << 0.5 * _mu[_include[i]] ;
         o_lds << " " << mrsq[i] << " " << snp_num[i] << " " << max_rsq[i] << " " << ldscore[i] << " " << lds[i] << "\n";
     }
 }
 
-void gcta::get_lds_brkpnt(vector<int> &brk_pnt1, vector<int> &brk_pnt2, int ldwt_seg, int wind_snp_num)
+void gcta::get_lds_brkpnt(std::vector<int> &brk_pnt1, std::vector<int> &brk_pnt2, int ldwt_seg, int wind_snp_num)
 {
     unsigned long i = 0, j = 0, k = 0, m = _include.size();
 
@@ -891,7 +892,7 @@ void gcta::get_lds_brkpnt(vector<int> &brk_pnt1, vector<int> &brk_pnt2, int ldwt
             j++;
         }
     }
-    stable_sort(brk_pnt1.begin(), brk_pnt1.end());
+    std::stable_sort(brk_pnt1.begin(), brk_pnt1.end());
     brk_pnt1.erase(unique(brk_pnt1.begin(), brk_pnt1.end()), brk_pnt1.end());
 
     brk_pnt2.clear();
@@ -909,32 +910,32 @@ void gcta::calcu_max_ld_rsq(int wind_size, double rsq_cutoff, bool dominance_fla
 {
     int i = 0, m = _include.size(), max_size = 0.3 * _keep.size();
 
-    LOGGER << "Calculating maximum LD rsq between SNPs (block size of " << wind_size / 1000 << "Kb with an overlap of "<<wind_size/2000<<"Kb between blocks; LD rsq threshold = " << rsq_cutoff << ") ... " << endl;
-    LOGGER << "(Maximum number of SNPs allowed in a block = " << max_size << " due to computational limitation)" << endl;
-    if(dominance_flag) LOGGER<<"(SNP genotypes are coded for dominance effects)"<<endl;
+    LOGGER << "Calculating maximum LD rsq between SNPs (block size of " << wind_size / 1000 << "Kb with an overlap of "<<wind_size/2000<<"Kb between blocks; LD rsq threshold = " << rsq_cutoff << ") ... " << std::endl;
+    LOGGER << "(Maximum number of SNPs allowed in a block = " << max_size << " due to computational limitation)" << std::endl;
+    if(dominance_flag) LOGGER<<"(SNP genotypes are coded for dominance effects)"<<std::endl;
 
-    vector<int> brk_pnt1, brk_pnt2, brk_pnt3;
+    std::vector<int> brk_pnt1, brk_pnt2, brk_pnt3;
     get_ld_blk_pnt_max_limit(brk_pnt1, brk_pnt2, brk_pnt3, wind_size, max_size);
 
     eigenVector multi_rsq = eigenVector::Constant(m, -1.0), max_rsq = eigenVector::Constant(m, -999), multi_rsq_adj = eigenVector::Constant(m, -999);
-    vector<int> max_pos(m);
+    std::vector<int> max_pos(m);
     calcu_max_ld_rsq_blk(multi_rsq, multi_rsq_adj, max_rsq, max_pos, brk_pnt1, rsq_cutoff, dominance_flag);
     if (brk_pnt2.size() > 1) calcu_max_ld_rsq_blk(multi_rsq, multi_rsq_adj, max_rsq, max_pos, brk_pnt2, rsq_cutoff, dominance_flag);
 
-    string max_rsq_file = "";
+    std::string max_rsq_file = "";
     if(dominance_flag) max_rsq_file = _out + ".d.max_rsq.ld";
     else max_rsq_file = _out + ".max_rsq.ld";
-    ofstream o_max_rsq(max_rsq_file.data());
-    o_max_rsq<<"SNP freq max_rsq max_snp multi_rsq multi_rsq_adj"<<endl;
+    std::ofstream o_max_rsq(max_rsq_file.data());
+    o_max_rsq<<"SNP freq max_rsq max_snp multi_rsq multi_rsq_adj"<<std::endl;
     for (i = 0; i < m; i++){
-        if(max_rsq[i] > 0.0 || multi_rsq[i] > -998) o_max_rsq << _snp_name[_include[i]] << " " << 0.5 * _mu[_include[i]] << " " << max_rsq[i] << " " << _snp_name[_include[max_pos[i]]] << " " << multi_rsq[i] << " " <<multi_rsq_adj[i] << endl;
-        else o_max_rsq << _snp_name[_include[i]] << " " << 0.5 * _mu[_include[i]] << " NA NA NA NA" << endl;
+        if(max_rsq[i] > 0.0 || multi_rsq[i] > -998) o_max_rsq << _snp_name[_include[i]] << " " << 0.5 * _mu[_include[i]] << " " << max_rsq[i] << " " << _snp_name[_include[max_pos[i]]] << " " << multi_rsq[i] << " " <<multi_rsq_adj[i] << std::endl;
+        else o_max_rsq << _snp_name[_include[i]] << " " << 0.5 * _mu[_include[i]] << " NA NA NA NA" << std::endl;
     }
-    o_max_rsq << endl;
-    LOGGER << "Maximum LD rsq for " << m << " SNPs have been saved in the file [" + max_rsq_file + "]." << endl;    
+    o_max_rsq << std::endl;
+    LOGGER << "Maximum LD rsq for " << m << " SNPs have been saved in the file [" + max_rsq_file + "]." << std::endl;    
 }
 
-void gcta::get_ld_blk_pnt_max_limit(vector<int> &brk_pnt1, vector<int> &brk_pnt2, vector<int> &brk_pnt3, int wind_bp, int wind_snp)
+void gcta::get_ld_blk_pnt_max_limit(std::vector<int> &brk_pnt1, std::vector<int> &brk_pnt2, std::vector<int> &brk_pnt3, int wind_bp, int wind_snp)
 {
     unsigned long i = 0, j = 0, k = 0, m = _include.size();
 
@@ -955,7 +956,7 @@ void gcta::get_ld_blk_pnt_max_limit(vector<int> &brk_pnt1, vector<int> &brk_pnt2
             j++;
         }
     }
-    stable_sort(brk_pnt1.begin(), brk_pnt1.end());
+    std::stable_sort(brk_pnt1.begin(), brk_pnt1.end());
     brk_pnt1.erase(unique(brk_pnt1.begin(), brk_pnt1.end()), brk_pnt1.end());
 
     brk_pnt2.clear();
@@ -971,7 +972,7 @@ void gcta::get_ld_blk_pnt_max_limit(vector<int> &brk_pnt1, vector<int> &brk_pnt2
     }
 }
 
-void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_adj, eigenVector &max_rsq, vector<int> &max_pos, vector<int> &brk_pnt, double rsq_cutoff, bool dominance_flag)
+void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_adj, eigenVector &max_rsq, std::vector<int> &max_pos, std::vector<int> &brk_pnt, double rsq_cutoff, bool dominance_flag)
 {
 	int i = 0, j = 0, k = 0, n = _keep.size(), m = _include.size(), size = 0;
 
@@ -982,7 +983,7 @@ void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_a
         if (size < 3) continue;
 
         // make genotype matrix
-        vector<int> snp_indx(size);
+        std::vector<int> snp_indx(size);
         for (j = brk_pnt[i], k = 0; j <= brk_pnt[i + 1]; j++, k++) snp_indx[k] = j;
         Eigen::MatrixXf X_sub;
         if(dominance_flag) make_XMat_d_subset(X_sub, snp_indx, true);
@@ -1008,8 +1009,8 @@ void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_a
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXf> pca(rsq_sub);
 
                 // debug
-       // ofstream tmp("tmp_R.txt");
-        //tmp<< rsq_sub.col(1998) << endl;
+       // std::ofstream tmp("tmp_R.txt");
+        //tmp<< rsq_sub.col(1998) << std::endl;
 
 
         Eigen::VectorXf d_i = pca.eigenvalues();
@@ -1023,13 +1024,13 @@ void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_a
         }
 
         // debug
-        //ofstream tmp2("tmp_eval.txt");
-        //tmp2<<pca.eigenvalues()<< endl;
+        //std::ofstream tmp2("tmp_eval.txt");
+        //tmp2<<pca.eigenvalues()<< std::endl;
 
 
 
         // debug
-        LOGGER << "size = " << size << "; eff_m = " << eff_m << endl;
+        LOGGER << "size = " << size << "; eff_m = " << eff_m << std::endl;
         Eigen::MatrixXf R_i = pca.eigenvectors() * d_i.asDiagonal() * pca.eigenvectors().transpose();
         R_i = R_i.array();
 
@@ -1047,7 +1048,7 @@ void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_a
         }
 
         // debug
-        LOGGER << "size = " << size << "; eff_m = " << eff_m << endl;
+        LOGGER << "size = " << size << "; eff_m = " << eff_m << std::endl;
 
         Eigen::MatrixXf R_i = svd.matrixV() * d_i.asDiagonal() * svd.matrixV().transpose();*/
         Eigen::VectorXf Q_diag(size);
@@ -1063,7 +1064,7 @@ void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_a
         rsq_sub.diagonal() = Eigen::VectorXf::Zero(size);
         rsq_sub = rsq_sub.array() * rsq_sub.array();
         Eigen::VectorXf max_rsq_buf(size);
-        vector<int> max_pos_buf(size);
+        std::vector<int> max_pos_buf(size);
         Eigen::VectorXf::Index max_pos_pnt;
         for(j = 0; j < size; j++){
             rsq_sub.col(j).maxCoeff(&max_pos_pnt);

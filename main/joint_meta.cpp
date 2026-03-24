@@ -15,28 +15,28 @@
 void gcta::set_diff_freq(double freq_diff){
     _diff_freq = freq_diff;
 }
-void gcta::read_metafile(string metafile, bool GC, double GC_val) {
+void gcta::read_metafile(std::string metafile, bool GC, double GC_val) {
     double freq_diff_thresh = _diff_freq;
-    LOGGER << "\nReading GWAS summary-level statistics from [" + metafile + "] ..." << endl;
-    ifstream Meta(metafile.c_str());
+    LOGGER << "\nReading GWAS summary-level statistics from [" + metafile + "] ..." << std::endl;
+    std::ifstream Meta(metafile.c_str());
     if (!Meta) LOGGER.e(0, "cannot open the file [" + metafile + "] to read.");
 
     int i = 0, count = 0;
     double f_buf = 0.0, b_buf = 0.0, se_buf = 0.0, p_buf = 0.0, N_buf = 0.0, Vp_buf = 0.0, GC_buf = 0.0, chi_buf = 0.0, h_buf = 0.0;
-    string A1_buf, A2_buf;
-    string snp_buf, str_buf0, str_buf;
+    std::string A1_buf, A2_buf;
+    std::string snp_buf, str_buf0, str_buf;
 
-    vector<string> snplist, vs_buf, bad_snp;
-    vector<string> ref_A1_buf, ref_A2_buf, bad_A1, bad_A2, bad_refA;
-    vector<double> freq_buf, beta_buf, beta_se_buf, pval_buf, N_o_buf, Vp_v_buf, GC_v_buf;
-    map<string, int>::iterator iter;
-    getline(Meta, str_buf); // the header line
+    std::vector<std::string> snplist, vs_buf, bad_snp;
+    std::vector<std::string> ref_A1_buf, ref_A2_buf, bad_A1, bad_A2, bad_refA;
+    std::vector<double> freq_buf, beta_buf, beta_se_buf, pval_buf, N_o_buf, Vp_v_buf, GC_v_buf;
+    std::map<std::string, int>::iterator iter;
+    std::getline(Meta, str_buf); // the header line
     if (StrFunc::split_string(str_buf, vs_buf) < 7) LOGGER.e(0, "format error in the input file [" + metafile + "].");
     _jma_Vp = 0.0;
     _GC_val = -1;
     while (Meta) {
-        getline(Meta, str_buf0);
-        stringstream iss(str_buf0);
+        std::getline(Meta, str_buf0);
+        std::stringstream iss(str_buf0);
         iss >> snp_buf >> A1_buf >> A2_buf;
         StrFunc::to_upper(A1_buf);
         StrFunc::to_upper(A2_buf);
@@ -86,34 +86,34 @@ void gcta::read_metafile(string metafile, bool GC, double GC_val) {
         N_o_buf.push_back(N_buf);
     }
     Meta.close();
-    LOGGER << "GWAS summary statistics of " << count << " SNPs read from [" + metafile + "]." << endl;
+    LOGGER << "GWAS summary statistics of " << count << " SNPs read from [" + metafile + "]." << std::endl;
     _jma_Vp = CommFunc::median(Vp_v_buf);
-    LOGGER << "Phenotypic variance estimated from summary statistics of all " << count << " SNPs: " << _jma_Vp << " (variance of logit for case-control studies)." << endl;
+    LOGGER << "Phenotypic variance estimated from summary statistics of all " << count << " SNPs: " << _jma_Vp << " (variance of logit for case-control studies)." << std::endl;
     if (GC) {
         if (GC_val > 0) {
             _GC_val = GC_val;
-            LOGGER << "User specified genomic inflation factor: " << _GC_val << endl;
+            LOGGER << "User specified genomic inflation factor: " << _GC_val << std::endl;
         } else {
             _GC_val = CommFunc::median(GC_v_buf) / 0.455;
-            LOGGER << "Genomic inflation factor calculated from " << count << " SNPs: " << _GC_val << endl;
+            LOGGER << "Genomic inflation factor calculated from " << count << " SNPs: " << _GC_val << std::endl;
         }
-        LOGGER << "p-values will be adjusted by the genomic control approach." << endl;
+        LOGGER << "p-values will be adjusted by the genomic control approach." << std::endl;
     }
 
-    LOGGER << "Matching the GWAS meta-analysis results to the genotype data ..." << endl;
+    LOGGER << "Matching the GWAS meta-analysis results to the genotype data ..." << std::endl;
     update_id_map_kp(snplist, _snp_name_map, _include);
     if (_mu.empty()) calcu_mu();
 
-    vector<int> indx;
-    vector<string> snplist_freq;
-    vector<string> bad_snp_freq, bad_A1_freq, bad_A2_freq, bad_refA_freq, bad_otherA_freq;
-    vector<double> bad_freq_value, bad_freq_ma;
-    map<string, int> id_map;
-    for (i = 0; i < snplist.size(); i++) id_map.insert(pair<string, int>(snplist[i], i));
+    std::vector<int> indx;
+    std::vector<std::string> snplist_freq;
+    std::vector<std::string> bad_snp_freq, bad_A1_freq, bad_A2_freq, bad_refA_freq, bad_otherA_freq;
+    std::vector<double> bad_freq_value, bad_freq_ma;
+    std::map<std::string, int> id_map;
+    for (i = 0; i < snplist.size(); i++) id_map.insert(std::pair<std::string, int>(snplist[i], i));
     for (i = 0; i < _include.size(); i++) {
         int include_i = _include[i];
         bool flip_flag = false;
-        string cur_snp_name = _snp_name[include_i];
+        std::string cur_snp_name = _snp_name[include_i];
         iter = id_map.find(cur_snp_name);
         _ref_A[include_i] = ref_A1_buf[iter->second];
         _other_A[include_i] = ref_A2_buf[iter->second];
@@ -141,17 +141,17 @@ void gcta::read_metafile(string metafile, bool GC, double GC_val) {
     update_id_map_kp(snplist_freq, _snp_name_map, _include);
 
     if (!bad_snp.empty()) {
-        string badsnpfile = _out + ".badsnps";
-        ofstream obadsnp(badsnpfile.c_str());
-        obadsnp << "SNP\tA1\tA2\tRefA" << endl;
-        for (i = 0; i < bad_snp.size(); i++) obadsnp << bad_snp[i] << "\t" << bad_A1[i] << "\t" << bad_A2[i] << "\t" << bad_refA[i] << endl;
+        std::string badsnpfile = _out + ".badsnps";
+        std::ofstream obadsnp(badsnpfile.c_str());
+        obadsnp << "SNP\tA1\tA2\tRefA" << std::endl;
+        for (i = 0; i < bad_snp.size(); i++) obadsnp << bad_snp[i] << "\t" << bad_A1[i] << "\t" << bad_A2[i] << "\t" << bad_refA[i] << std::endl;
         obadsnp.close();
-        LOGGER << "Warning: can't match the reference alleles of " << bad_snp.size() << " SNPs to those in the genotype data. These SNPs have been saved in [" + badsnpfile + "]." << endl;
+        LOGGER << "Warning: can't match the reference alleles of " << bad_snp.size() << " SNPs to those in the genotype data. These SNPs have been saved in [" + badsnpfile + "]." << std::endl;
     }
     if(!bad_snp_freq.empty()){
-        string badsnpfile = _out + ".freq.badsnps";
-        ofstream obadsnp(badsnpfile.c_str());
-        obadsnp << "SNP\tsummary_A1\tsummary_A2\tsummary_A1_freq\tgeno_A1\tgeno_A2\tgeno_A1_freq" << endl;
+        std::string badsnpfile = _out + ".freq.badsnps";
+        std::ofstream obadsnp(badsnpfile.c_str());
+        obadsnp << "SNP\tsummary_A1\tsummary_A2\tsummary_A1_freq\tgeno_A1\tgeno_A2\tgeno_A1_freq" << std::endl;
         for (int i = 0; i < bad_snp_freq.size(); i++){
             obadsnp << bad_snp_freq[i] << "\t"
                     << bad_refA_freq[i] << "\t"
@@ -160,14 +160,14 @@ void gcta::read_metafile(string metafile, bool GC, double GC_val) {
                     << bad_A1_freq[i] << "\t"
                     << bad_A2_freq[i] << "\t"
                     << bad_freq_value[i]
-                    << endl;
+                    << std::endl;
         }
         obadsnp.close();
-        LOGGER << bad_snp_freq.size() << " SNP(s) have large difference of allele frequency between the GWAS summary data and the reference sample. These SNPs have been saved in [" << badsnpfile << "]." << endl; 
+        LOGGER << bad_snp_freq.size() << " SNP(s) have large difference of allele frequency between the GWAS summary data and the reference sample. These SNPs have been saved in [" << badsnpfile << "]." << std::endl; 
     }
 
     if (_include.empty()) LOGGER.e(0, "none of the SNPs in the GWAS summary data can be found in the genotype data.");
-    else LOGGER << _include.size() << " SNPs are matched to the genotype data." << endl;
+    else LOGGER << _include.size() << " SNPs are matched to the genotype data." << std::endl;
 
     if (_mu.empty()) calcu_mu();
 
@@ -191,12 +191,12 @@ void gcta::read_metafile(string metafile, bool GC, double GC_val) {
     _jma_Ve = _jma_Vp;
 }
 
-void gcta::init_massoc(string metafile, bool GC, double GC_val)
+void gcta::init_massoc(std::string metafile, bool GC, double GC_val)
 {
     read_metafile(metafile, GC, GC_val);
 
     int i = 0, j = 0, n = _keep.size(), m = _include.size();
-    LOGGER << "Calculating the variance of SNP genotypes ..." << endl;
+    LOGGER << "Calculating the variance of SNP genotypes ..." << std::endl;
     _MSX_B.resize(m);
     _Nd.resize(m);
 
@@ -216,24 +216,24 @@ void gcta::init_massoc(string metafile, bool GC, double GC_val)
     }
 }
 
-void gcta::read_fixed_snp(string snplistfile, string msg, vector<int> &pgiven, vector<int> &remain) {
+void gcta::read_fixed_snp(std::string snplistfile, std::string msg, std::vector<int> &pgiven, std::vector<int> &remain) {
     int i = 0, j = 0;
-    vector<string> givenSNPs;
+    std::vector<std::string> givenSNPs;
     read_snplist(snplistfile, givenSNPs, msg);
     if (givenSNPs.empty()) LOGGER.e(0, "failed to read any SNP from the file [" + snplistfile + "].");
-    map<string, int> givenSNPs_map;
+    std::map<std::string, int> givenSNPs_map;
     pgiven.clear();
     remain.clear();
-    for (i = 0; i < givenSNPs.size(); i++) givenSNPs_map.insert(pair<string, int>(givenSNPs[i], i));
+    for (i = 0; i < givenSNPs.size(); i++) givenSNPs_map.insert(std::pair<std::string, int>(givenSNPs[i], i));
     for (i = 0; i < _include.size(); i++) {
         if (givenSNPs_map.find(_snp_name[_include[i]]) != givenSNPs_map.end()) pgiven.push_back(i);
         else remain.push_back(i);
     }
-    if (pgiven.size() > 0) LOGGER << pgiven.size() << " of them are matched to the genotype and summary data." << endl;
+    if (pgiven.size() > 0) LOGGER << pgiven.size() << " of them are matched to the genotype and summary data." << std::endl;
     else LOGGER.e(0, "none of the given SNPs can be matched to the genotype and summary data.");
 }
 
-void gcta::run_massoc_slct(string metafile, int wind_size, double p_cutoff, double collinear, int64_t top_SNPs, bool joint_only, bool GC, double GC_val, bool actual_geno, int mld_slct_alg)
+void gcta::run_massoc_slct(std::string metafile, int wind_size, double p_cutoff, double collinear, int64_t top_SNPs, bool joint_only, bool GC, double GC_val, bool actual_geno, int mld_slct_alg)
 {
     _jma_actual_geno = actual_geno;
     _jma_wind_size = wind_size;
@@ -245,25 +245,25 @@ void gcta::run_massoc_slct(string metafile, int wind_size, double p_cutoff, doub
     if (top_SNPs < 0) top_SNPs = 1e10;
     else {
         _jma_p_cutoff = 0.5;
-        LOGGER << "The threshold p-value has been set to 0.5 because of the --cojo-top-SNPs option." << endl;
+        LOGGER << "The threshold p-value has been std::set to 0.5 because of the --cojo-top-SNPs option." << std::endl;
     }
     int i = 0, j = 0;
-    vector<int> slct, remain;
+    std::vector<int> slct, remain;
     eigenVector bC, bC_se, pC;
-    LOGGER << endl;
+    LOGGER << std::endl;
     if (!joint_only && mld_slct_alg<2) {
         LOGGER << "Performing "<< ((mld_slct_alg==0)?"stepwise":"forward") << " model selection on " << _include.size() << " SNPs to select association signals ... (p cutoff = " << _jma_p_cutoff << "; ";
-        LOGGER << "collinearity cutoff = " << _jma_collinear << ")"<< endl;
-        if (!_jma_actual_geno) LOGGER << "(Assuming complete linkage equilibrium between SNPs which are more than " << _jma_wind_size / 1e6 << "Mb away from each other)" << endl;
+        LOGGER << "collinearity cutoff = " << _jma_collinear << ")"<< std::endl;
+        if (!_jma_actual_geno) LOGGER << "(Assuming complete linkage equilibrium between SNPs which are more than " << _jma_wind_size / 1e6 << "Mb away from each other)" << std::endl;
         stepwise_slct(slct, remain, bC, bC_se, pC, mld_slct_alg, top_SNPs);
         if (slct.empty()) {
-            LOGGER << "No SNPs have been selected." << endl;
+            LOGGER << "No SNPs have been selected." << std::endl;
             return;
         }
     } else { // mld_slct_alg = 2 for backward selection
         for (i = 0; i < _include.size(); i++) slct.push_back(i);
         if (mld_slct_alg==2) {
-            LOGGER << "Performing backward selection on " << _include.size() << " SNPs at threshold p-value = " << _jma_p_cutoff << " ..." << endl;
+            LOGGER << "Performing backward selection on " << _include.size() << " SNPs at threshold p-value = " << _jma_p_cutoff << " ..." << std::endl;
             slct_stay(slct, bC, bC_se, pC);
         }
     }
@@ -271,44 +271,44 @@ void gcta::run_massoc_slct(string metafile, int wind_size, double p_cutoff, doub
     // joint analysis
     eigenVector bJ, bJ_se, pJ;
     LOGGER << "Performing joint analysis on all the " << slct.size();
-    if (joint_only) LOGGER << " SNPs ..." << endl;
-    else LOGGER << " selected signals ..." << endl;
+    if (joint_only) LOGGER << " SNPs ..." << std::endl;
+    else LOGGER << " selected signals ..." << std::endl;
     if (slct.size() >= _keep.size()) LOGGER.e(0, "too many SNPs. The number of SNPs in a joint analysis should not be larger than the sample size.");
     massoc_joint(slct, bJ, bJ_se, pJ);
     eigenMatrix rval(slct.size(), slct.size());
     LD_rval(slct, rval);
-    if (_jma_actual_geno) LOGGER << "Residual variance = " << _jma_Ve << endl;
+    if (_jma_actual_geno) LOGGER << "Residual variance = " << _jma_Ve << std::endl;
     massoc_slct_output(joint_only, slct, bJ, bJ_se, pJ, rval);
 
     // output conditional results
     if (!joint_only && mld_slct_alg!=2) {
         massoc_cond_output(remain, bC, bC_se, pC);
-        LOGGER << "(" << _jma_snpnum_backward << " SNPs eliminated by backward selection and " << _jma_snpnum_collienar << " SNPs filtered by collinearity test are not included in the output)" << endl;
+        LOGGER << "(" << _jma_snpnum_backward << " SNPs eliminated by backward selection and " << _jma_snpnum_collienar << " SNPs filtered by collinearity test are not included in the output)" << std::endl;
     }
 }
 
-void gcta::run_massoc_cond(string metafile, string snplistfile, int wind_size, double collinear, bool GC, double GC_val, bool acutal_geno) {
+void gcta::run_massoc_cond(std::string metafile, std::string snplistfile, int wind_size, double collinear, bool GC, double GC_val, bool acutal_geno) {
     _jma_actual_geno = acutal_geno;
     _jma_wind_size = wind_size;
     _jma_collinear = collinear;
     init_massoc(metafile, GC, GC_val);
-    vector<int> pgiven, remain;
+    std::vector<int> pgiven, remain;
     read_fixed_snp(snplistfile, "given SNPs", pgiven, remain);
 
     eigenVector bC, bC_se, pC;
     LOGGER << "Performing single-SNP association analysis conditional on the " << pgiven.size() << " given SNPs ... ";
-    LOGGER << "(collinearity cutoff = " << _jma_collinear << ")" << endl;
-    if (!_jma_actual_geno) LOGGER << "(Assuming complete linkage equilibrium between SNPs which are more than " << _jma_wind_size / 1e6 << "Mb away from each other)" << endl;
+    LOGGER << "(collinearity cutoff = " << _jma_collinear << ")" << std::endl;
+    if (!_jma_actual_geno) LOGGER << "(Assuming complete linkage equilibrium between SNPs which are more than " << _jma_wind_size / 1e6 << "Mb away from each other)" << std::endl;
 
-    string filename = _out + ".given.cojo";
-    LOGGER<<"Saving the summary statistics of the given SNPs in the file [" + filename + "] ..." << endl;
-    ofstream ofile(filename.c_str());
+    std::string filename = _out + ".given.cojo";
+    LOGGER<<"Saving the summary statistics of the given SNPs in the file [" + filename + "] ..." << std::endl;
+    std::ofstream ofile(filename.c_str());
     if (!ofile) LOGGER.e(0, "cannot open the file [" + filename + "] to write.");
-    ofile << "Chr\tSNP\tbp\trefA\tfreq\tb\tse\tp" << endl;
+    ofile << "Chr\tSNP\tbp\trefA\tfreq\tb\tse\tp" << std::endl;
     int i = 0, j = 0;
     for (i = 0; i < pgiven.size(); i++) {
         j = pgiven[i];
-        ofile << _chr[_include[j]] << "\t" << _snp_name[_include[j]] << "\t" << _bp[_include[j]] << "\t" << _ref_A[_include[j]] << "\t" << _freq[j] << "\t" << _beta[j] << "\t" << _beta_se[j] << "\t" << _pval[j] << endl;
+        ofile << _chr[_include[j]] << "\t" << _snp_name[_include[j]] << "\t" << _bp[_include[j]] << "\t" << _ref_A[_include[j]] << "\t" << _freq[j] << "\t" << _beta[j] << "\t" << _beta_se[j] << "\t" << _pval[j] << std::endl;
     }
     ofile.close();
     
@@ -316,37 +316,37 @@ void gcta::run_massoc_cond(string metafile, string snplistfile, int wind_size, d
     massoc_cond_output(remain, bC, bC_se, pC);
 }
 
-void gcta::massoc_slct_output(bool joint_only, vector<int> &slct, eigenVector &bJ, eigenVector &bJ_se, eigenVector &pJ, eigenMatrix &rval)
+void gcta::massoc_slct_output(bool joint_only, std::vector<int> &slct, eigenVector &bJ, eigenVector &bJ_se, eigenVector &pJ, eigenMatrix &rval)
 {
-    string filename = _out + ".jma.cojo";
-    if (joint_only) LOGGER << "Saving the joint analysis result of " << slct.size() << " SNPs to [" + filename + "] ..." << endl;
-    else LOGGER << "Saving the " << slct.size() << " independent signals to [" + filename + "] ..." << endl;
-    ofstream ofile(filename.c_str());
+    std::string filename = _out + ".jma.cojo";
+    if (joint_only) LOGGER << "Saving the joint analysis result of " << slct.size() << " SNPs to [" + filename + "] ..." << std::endl;
+    else LOGGER << "Saving the " << slct.size() << " independent signals to [" + filename + "] ..." << std::endl;
+    std::ofstream ofile(filename.c_str());
     if (!ofile) LOGGER.e(0, "cannot open the file [" + filename + "] to write.");
-    ofile << "Chr\tSNP\tbp\trefA\tfreq\tb\tse\tp" << ((_GC_val > 0) ? "_GC" : "") << "\tn\tfreq_geno\tbJ\tbJ_se\tpJ" << ((_GC_val > 0) ? "_GC" : "") << "\tLD_r" << endl;
+    ofile << "Chr\tSNP\tbp\trefA\tfreq\tb\tse\tp" << ((_GC_val > 0) ? "_GC" : "") << "\tn\tfreq_geno\tbJ\tbJ_se\tpJ" << ((_GC_val > 0) ? "_GC" : "") << "\tLD_r" << std::endl;
     int i = 0, j = 0;
     for (i = 0; i < slct.size(); i++) {
         j = slct[i];
         ofile << _chr[_include[j]] << "\t" << _snp_name[_include[j]] << "\t" << _bp[_include[j]] << "\t";
         ofile << _ref_A[_include[j]] << "\t" << _freq[j] << "\t" << _beta[j] << "\t" << _beta_se[j] << "\t";
         ofile << _pval[j] << "\t" << _Nd[j] << "\t" << 0.5 * _mu[_include[j]] << "\t" << bJ[i] << "\t" << bJ_se[i] << "\t" << pJ[i] << "\t";
-        if (i == slct.size() - 1) ofile << 0 << endl;
-        else ofile << rval(i, i + 1) << endl;
+        if (i == slct.size() - 1) ofile << 0 << std::endl;
+        else ofile << rval(i, i + 1) << std::endl;
     }
     ofile.close();
 
     filename = _out + ".ldr.cojo";
-    if (joint_only) LOGGER << "Saving the LD structure of " << slct.size() << " SNPs to [" + filename + "] ..." << endl;
-    else LOGGER << "Saving the LD structure of " << slct.size() << " independent signals to [" + filename + "] ..." << endl;
+    if (joint_only) LOGGER << "Saving the LD structure of " << slct.size() << " SNPs to [" + filename + "] ..." << std::endl;
+    else LOGGER << "Saving the LD structure of " << slct.size() << " independent signals to [" + filename + "] ..." << std::endl;
     ofile.open(filename.c_str());
     if (!ofile) LOGGER.e(0, "cannot open the file [" + filename + "] to write.");
     ofile << "SNP\t";
     for (i = 0; i < slct.size(); i++) ofile << _snp_name[_include[slct[i]]] << "\t";
-    ofile << endl;
+    ofile << std::endl;
     for (i = 0; i < slct.size(); i++) {
         ofile << _snp_name[_include[slct[i]]] << "\t";
         for (j = 0; j < slct.size(); j++) ofile << rval(i, j) << "\t";
-        ofile << endl;
+        ofile << std::endl;
     }
     ofile.close();
 }
@@ -355,15 +355,15 @@ void gcta::set_massoc_pC_thresh(double thresh){
     g_massoc_out_thresh = thresh;
 }
 
-void gcta::massoc_cond_output(vector<int> &remain, eigenVector &bC, eigenVector &bC_se, eigenVector &pC)
+void gcta::massoc_cond_output(std::vector<int> &remain, eigenVector &bC, eigenVector &bC_se, eigenVector &pC)
 {
     double out_thresh = g_massoc_out_thresh;
     int i = 0, j = 0;
-    string filename = _out + ".cma.cojo";
-    LOGGER << "Saving the conditional analysis results of " << remain.size() << " remaining SNPs to [" + filename + "] ..." << endl;
-    ofstream ofile(filename.c_str());
+    std::string filename = _out + ".cma.cojo";
+    LOGGER << "Saving the conditional analysis results of " << remain.size() << " remaining SNPs to [" + filename + "] ..." << std::endl;
+    std::ofstream ofile(filename.c_str());
     if (!ofile) LOGGER.e(0, "cannot open the file [" + filename + "] to write.");
-    ofile << "Chr\tSNP\tbp\trefA\tfreq\tb\tse\tp" << ((_GC_val > 0) ? "_GC" : "") << "\tn\tfreq_geno\tbC\tbC_se\tpC" << ((_GC_val > 0) ? "_GC" : "") << endl;
+    ofile << "Chr\tSNP\tbp\trefA\tfreq\tb\tse\tp" << ((_GC_val > 0) ? "_GC" : "") << "\tn\tfreq_geno\tbC\tbC_se\tpC" << ((_GC_val > 0) ? "_GC" : "") << std::endl;
 
     if(out_thresh < 0){
         for (i = 0; i < remain.size(); i++) {
@@ -371,28 +371,28 @@ void gcta::massoc_cond_output(vector<int> &remain, eigenVector &bC, eigenVector 
             ofile << _chr[_include[j]] << "\t" << _snp_name[_include[j]] << "\t" << _bp[_include[j]] << "\t";
             ofile << _ref_A[_include[j]] << "\t" << _freq[j] << "\t" << _beta[j] << "\t" << _beta_se[j] << "\t";
             ofile << _pval[j] << "\t" << _Nd[j] << "\t" << 0.5 * _mu[_include[j]] << "\t";
-            if (pC[i] > 1.5) ofile << "NA\tNA\tNA" << endl;
-            else ofile << bC[i] << "\t" << bC_se[i] << "\t" << pC[i] << endl;
+            if (pC[i] > 1.5) ofile << "NA\tNA\tNA" << std::endl;
+            else ofile << bC[i] << "\t" << bC_se[i] << "\t" << pC[i] << std::endl;
         }
     }else{
-        LOGGER << "Restricting output threshold to " << out_thresh << "." << endl;
+        LOGGER << "Restricting output threshold to " << out_thresh << "." << std::endl;
         for (i = 0; i < remain.size(); i++) {
             if(pC[i] < out_thresh){
                 j = remain[i];
                 ofile << _chr[_include[j]] << "\t" << _snp_name[_include[j]] << "\t" << _bp[_include[j]] << "\t";
                 ofile << _ref_A[_include[j]] << "\t" << _freq[j] << "\t" << _beta[j] << "\t" << _beta_se[j] << "\t";
                 ofile << _pval[j] << "\t" << _Nd[j] << "\t" << 0.5 * _mu[_include[j]] << "\t";
-                ofile << bC[i] << "\t" << bC_se[i] << "\t" << pC[i] << endl;
+                ofile << bC[i] << "\t" << bC_se[i] << "\t" << pC[i] << std::endl;
             }
         }
     }
     ofile.close();
 }
 
-void gcta::stepwise_slct(vector<int> &slct, vector<int> &remain, eigenVector &bC, eigenVector &bC_se, eigenVector &pC, int mld_slct_alg, uint64_t top_SNPs)
+void gcta::stepwise_slct(std::vector<int> &slct, std::vector<int> &remain, eigenVector &bC, eigenVector &bC_se, eigenVector &pC, int mld_slct_alg, uint64_t top_SNPs)
 {
     int i = 0, i_buf = 0;
-    vector<double> p_buf, chisq;
+    std::vector<double> p_buf, chisq;
     
     for (i = 0; i < _include.size(); i++) {
         remain.push_back(i);
@@ -413,7 +413,7 @@ void gcta::stepwise_slct(vector<int> &slct, vector<int> &remain, eigenVector &bC
     
     int prev_num = 0;
     if (mld_slct_alg==0 && _jma_p_cutoff > 1e-3){
-        LOGGER << "Switched to perform a forward model selection because the significance level is too low..." << endl;
+        LOGGER << "Switched to perform a forward model selection because the significance level is too low..." << std::endl;
         mld_slct_alg=1;
     }
     bool slct_only_contain_remain = true;
@@ -443,7 +443,7 @@ void gcta::stepwise_slct(vector<int> &slct, vector<int> &remain, eigenVector &bC
         if (!slct_only_contain_remain) {
             if (slct.size() % 5 == 0 && slct.size() > prev_num)
                 LOGGER << slct.size() << " associated SNPs have been selected."
-                       << endl;
+                       << std::endl;
             if (slct.size() > prev_num) prev_num = slct.size();
             if (slct.size() >= top_SNPs) break;
         }
@@ -457,26 +457,26 @@ void gcta::stepwise_slct(vector<int> &slct, vector<int> &remain, eigenVector &bC
     }
 
     if (_jma_p_cutoff > 1e-3) {
-        LOGGER << "Performing backward elimination..." << endl;
+        LOGGER << "Performing backward elimination..." << std::endl;
         slct_stay(slct, bC, bC_se, pC);
     }
-    LOGGER << "Finally, " << slct.size() << " associated SNPs are selected." << endl;
+    LOGGER << "Finally, " << slct.size() << " associated SNPs are selected." << std::endl;
 }
 
-bool gcta::slct_entry(vector<int> &slct, vector<int> &remain, eigenVector &bC, eigenVector &bC_se, eigenVector &pC) {
+bool gcta::slct_entry(std::vector<int> &slct, std::vector<int> &remain, eigenVector &bC, eigenVector &bC_se, eigenVector &pC) {
     if (slct.size() < 1) {
         LOGGER.e(0, "Warning, this should not happend");
     } 
     int i = 0, m = 0;
     massoc_cond(slct, remain, bC, bC_se, pC);
-    vector<double> pC_buf;
+    std::vector<double> pC_buf;
     eigenVector2Vector(pC, pC_buf);
     while (true) {
         m = min_element(pC_buf.begin(), pC_buf.end()) - pC_buf.begin();
         if (pC_buf[m] >= _jma_p_cutoff) return (false);
         if (insert_B_and_Z(slct, remain[m])) {
             slct.push_back(remain[m]);
-            stable_sort(slct.begin(), slct.end());
+            std::stable_sort(slct.begin(), slct.end());
             remain.erase(remain.begin() + m);
             return (true);
         }
@@ -485,12 +485,12 @@ bool gcta::slct_entry(vector<int> &slct, vector<int> &remain, eigenVector &bC, e
     }
 }
 
-void gcta::slct_stay(vector<int> &slct, eigenVector &bJ, eigenVector &bJ_se, eigenVector &pJ) {
+void gcta::slct_stay(std::vector<int> &slct, eigenVector &bJ, eigenVector &bJ_se, eigenVector &pJ) {
     if (_B_N.cols() < 1) {
-        if (!init_B(slct)) LOGGER.e(0, "there is a collinearity problem of the given list of SNPs.\nYou can try the option --cojo-slct to remove one of each pair of highly correlated SNPs.");
+        if (!init_B(slct)) LOGGER.e(0, "there is a collinearity problem of the given list of SNPs.\nYou can try the option --cojo-slct to remove one of each std::pair of highly correlated SNPs.");
     }
 
-    vector<double> pJ_buf;
+    std::vector<double> pJ_buf;
     while (!slct.empty()) {
         massoc_joint(slct, bJ, bJ_se, pJ);
         eigenVector2Vector(pJ, pJ_buf);
@@ -503,15 +503,15 @@ void gcta::slct_stay(vector<int> &slct, eigenVector &bJ, eigenVector &bJ_se, eig
     }
 }
 
-void gcta::eigenVector2Vector(eigenVector &x, vector<double> &y) {
+void gcta::eigenVector2Vector(eigenVector &x, std::vector<double> &y) {
     y.resize(x.size());
     for (int i = 0; i < x.size(); i++) y[i] = x[i];
 }
 
-double gcta::massoc_calcu_Ve(const vector<int> &slct, eigenVector &bJ, eigenVector &b) {
+double gcta::massoc_calcu_Ve(const std::vector<int> &slct, eigenVector &bJ, eigenVector &b) {
     double Ve = 0.0;
     int n = bJ.size();
-    vector<double> Nd_buf(n);
+    std::vector<double> Nd_buf(n);
     for (int k = 0; k < n; k++) {
         Nd_buf[k] = _Nd[slct[k]];
         Ve += _D_N[k] * bJ[k] * b[k];
@@ -523,9 +523,9 @@ double gcta::massoc_calcu_Ve(const vector<int> &slct, eigenVector &bJ, eigenVect
     return Ve;
 }
 
-void gcta::massoc_joint(const vector<int> &indx, eigenVector &bJ, eigenVector &bJ_se, eigenVector &pJ) {
+void gcta::massoc_joint(const std::vector<int> &indx, eigenVector &bJ, eigenVector &bJ_se, eigenVector &pJ) {
     if (_B_N.cols() < 1) {
-        if (!init_B(indx)) LOGGER.e(0, "there is a collinearity problem of the given list of SNPs.\nYou can try the option --cojo-slct to remove one of each pair of highly correlated SNPs.");
+        if (!init_B(indx)) LOGGER.e(0, "there is a collinearity problem of the given list of SNPs.\nYou can try the option --cojo-slct to remove one of each std::pair of highly correlated SNPs.");
     }
 
     int i = 0, n = indx.size();
@@ -553,12 +553,12 @@ void gcta::massoc_joint(const vector<int> &indx, eigenVector &bJ, eigenVector &b
     }
 }
 
-void gcta::massoc_cond(const vector<int> &slct, const vector<int> &remain, eigenVector &bC, eigenVector &bC_se, eigenVector &pC) {
+void gcta::massoc_cond(const std::vector<int> &slct, const std::vector<int> &remain, eigenVector &bC, eigenVector &bC_se, eigenVector &pC) {
     if (slct.size() < 1) {
         LOGGER.e(0, "Warning, this should not happend");
     }
     if (_B_N.cols() < 1) {
-        if (!init_B(slct)) LOGGER.e(0, "there is a collinearity problem of the given list of SNPs.\nYou can try the option --cojo-slct to remove one of each pair of highly correlated SNPs.");
+        if (!init_B(slct)) LOGGER.e(0, "there is a collinearity problem of the given list of SNPs.\nYou can try the option --cojo-slct to remove one of each std::pair of highly correlated SNPs.");
     }
     if (_Z_N.cols() < 1) init_Z(slct);
 
@@ -578,7 +578,7 @@ void gcta::massoc_cond(const vector<int> &slct, const vector<int> &remain, eigen
     pC = eigenVector::Constant(remain.size(), 2);
     eigenVector Z_Bi(n), Z_Bi_buf(n);
     double cutoff = 1e-10 * _jma_Vp;
-    //LOGGER << "Cutoff of bC_se " << cutoff << endl;
+    //LOGGER << "Cutoff of bC_se " << cutoff << std::endl;
     for (i = 0; i < remain.size(); i++) {
         j = remain[i];
         B2 = _MSX[j] * _Nd[j];
@@ -601,7 +601,7 @@ void gcta::massoc_cond(const vector<int> &slct, const vector<int> &remain, eigen
     }
 }
 
-bool gcta::init_B(const vector<int> &indx)
+bool gcta::init_B(const std::vector<int> &indx)
 {
     if (indx.size() < 1) {
         LOGGER.e(0, "slct size is zero will cause Eigen Matrix of"
@@ -627,7 +627,7 @@ bool gcta::init_B(const vector<int> &indx)
                 makex_eigenVector(indx[j], x_j, false, true);
                 d_buf = x_i.dot(x_j) / (double)n;
                 _B.insertBack(j, i) = d_buf;
-                _B_N.insertBack(j, i) = d_buf * min(_Nd[indx[i]], _Nd[indx[j]]) * sqrt(_MSX[indx[i]] * _MSX[indx[j]] / (_MSX_B[indx[i]] * _MSX_B[indx[j]]));
+                _B_N.insertBack(j, i) = d_buf * std::min(_Nd[indx[i]], _Nd[indx[j]]) * sqrt(_MSX[indx[i]] * _MSX[indx[j]] / (_MSX_B[indx[i]] * _MSX_B[indx[j]]));
             }
         }
     }
@@ -649,7 +649,7 @@ bool gcta::init_B(const vector<int> &indx)
     return true;
 }
 
-void gcta::init_Z(const vector<int> &indx)
+void gcta::init_Z(const std::vector<int> &indx)
 {
     if (indx.size() < 1) {
         LOGGER.e(0,
@@ -670,7 +670,7 @@ void gcta::init_Z(const vector<int> &indx)
                 makex_eigenVector(indx[i], x_i, false, true);
                 d_buf = x_j.dot(x_i) / (double)n;
                 _Z.insertBack(i, j) = d_buf;
-                _Z_N.insertBack(i, j) = d_buf * min(_Nd[indx[i]], _Nd[j]) * sqrt(_MSX[indx[i]] * _MSX[j] / (_MSX_B[indx[i]] * _MSX_B[j])); // added by Jian Yang 18/12/2013
+                _Z_N.insertBack(i, j) = d_buf * std::min(_Nd[indx[i]], _Nd[j]) * sqrt(_MSX[indx[i]] * _MSX[j] / (_MSX_B[indx[i]] * _MSX_B[j])); // added by Jian Yang 18/12/2013
             }
         }
     }
@@ -678,7 +678,7 @@ void gcta::init_Z(const vector<int> &indx)
     _Z_N.finalize();
 }
 
-bool gcta::insert_B_and_Z(const vector<int> &indx, int insert_indx)
+bool gcta::insert_B_and_Z(const std::vector<int> &indx, int insert_indx)
 {
     if (indx.size() < 1) {
         LOGGER.e(0,
@@ -687,9 +687,9 @@ bool gcta::insert_B_and_Z(const vector<int> &indx, int insert_indx)
     }
     int i = 0, j = 0, n = _keep.size();
     double d_buf = 0.0;
-    vector<int> ix(indx);
+    std::vector<int> ix(indx);
     ix.push_back(insert_indx);
-    stable_sort(ix.begin(), ix.end());
+    std::stable_sort(ix.begin(), ix.end());
     eigenSparseMat B_buf(_B), B_N_buf(_B_N);
     _B.resize(ix.size(), ix.size());
     _B_N.resize(ix.size(), ix.size());
@@ -713,7 +713,7 @@ bool gcta::insert_B_and_Z(const vector<int> &indx, int insert_indx)
                     makex_eigenVector(ix[i], x_i, false, true);
                     d_buf = x_i.dot(x_j) / (double)n;
                     _B.insertBack(i, j) = d_buf;
-                    _B_N.insertBack(i, j) = d_buf * min(_Nd[ix[i]], _Nd[ix[j]]) * sqrt(_MSX[ix[i]] * _MSX[ix[j]] / (_MSX_B[ix[i]] * _MSX_B[ix[j]]));
+                    _B_N.insertBack(i, j) = d_buf * std::min(_Nd[ix[i]], _Nd[ix[j]]) * sqrt(_MSX[ix[i]] * _MSX[ix[j]] / (_MSX_B[ix[i]] * _MSX_B[ix[j]]));
                 }
             } else {
                 if (B_buf.coeff(i - get_insert_row, j - get_insert_col) != 0) {
@@ -759,7 +759,7 @@ bool gcta::insert_B_and_Z(const vector<int> &indx, int insert_indx)
                     makex_eigenVector(ix[i], x_i, false, true);
                     d_buf = x_j.dot(x_i) / (double)n;
                     _Z.insertBack(i, j) = d_buf;
-                    _Z_N.insertBack(i, j) = d_buf * min(_Nd[ix[i]], _Nd[j]) * sqrt(_MSX[ix[i]] * _MSX[j] / (_MSX_B[ix[i]] * _MSX_B[j])); // added by Jian Yang 18/12/2013
+                    _Z_N.insertBack(i, j) = d_buf * std::min(_Nd[ix[i]], _Nd[j]) * sqrt(_MSX[ix[i]] * _MSX[j] / (_MSX_B[ix[i]] * _MSX_B[j])); // added by Jian Yang 18/12/2013
                 }
                 get_insert_row = true;
             } else {
@@ -776,7 +776,7 @@ bool gcta::insert_B_and_Z(const vector<int> &indx, int insert_indx)
     return true;
 }
 
-void gcta::erase_B_and_Z(const vector<int> &indx, int erase_indx) {
+void gcta::erase_B_and_Z(const std::vector<int> &indx, int erase_indx) {
     int i = 0, j = 0;   
     eigenSparseMat B_dense(_B), B_N_dense(_B_N);
     _B.resize(indx.size() - 1, indx.size() - 1);
@@ -852,14 +852,14 @@ void gcta::erase_B_and_Z(const vector<int> &indx, int erase_indx) {
 }
 
 /*
-double gcta::crossprod(vector<float> &x_i, vector<float> &x_j) {
+double gcta::crossprod(std::vector<float> &x_i, std::vector<float> &x_j) {
     double prod = 0.0;
     for (int i = 0; i < x_i.size(); i++) prod += x_i[i] * x_j[i];
     return (prod / x_i.size());
 }
 */
 
-void gcta::LD_rval(const vector<int> &indx, eigenMatrix &rval) {
+void gcta::LD_rval(const std::vector<int> &indx, eigenMatrix &rval) {
     int i = 0, j = 0;
     eigenVector sd(indx.size());
     for (i = 0; i < indx.size(); i++) sd[i] = sqrt(_MSX_B[indx[i]]);
@@ -869,23 +869,23 @@ void gcta::LD_rval(const vector<int> &indx, eigenMatrix &rval) {
     }
 }
 
-void gcta::run_massoc_sblup(string metafile, int wind_size, double lambda)
+void gcta::run_massoc_sblup(std::string metafile, int wind_size, double lambda)
 {
     _jma_wind_size = wind_size;
     init_massoc(metafile, false, -1);
 
     int j = 0;
     eigenVector bJ;
-    LOGGER << "\nPerforming joint analysis on all the " << _include.size() << " SNPs ..." << endl;
-    LOGGER << "(Assuming complete linkage equilibrium between SNPs which are more than " << _jma_wind_size / 1e6 << "Mb away from each other)" << endl;
+    LOGGER << "\nPerforming joint analysis on all the " << _include.size() << " SNPs ..." << std::endl;
+    LOGGER << "(Assuming complete linkage equilibrium between SNPs which are more than " << _jma_wind_size / 1e6 << "Mb away from each other)" << std::endl;
     if (massoc_sblup(lambda, bJ)) {
-        string filename = _out + ".sblup.cojo";
-        LOGGER << "Saving the joint analysis result of " << _include.size() << " SNPs to [" + filename + "] ..." << endl;
-        ofstream ofile(filename.c_str());
+        std::string filename = _out + ".sblup.cojo";
+        LOGGER << "Saving the joint analysis result of " << _include.size() << " SNPs to [" + filename + "] ..." << std::endl;
+        std::ofstream ofile(filename.c_str());
         if (!ofile) LOGGER.e(0, "cannot open the file [" + filename + "] to write.");
         for (j = 0; j < _include.size(); j++) {
             // change here: convert from u to b before writing to file
-            ofile << _snp_name[_include[j]] << "\t" << _ref_A[_include[j]] << "\t" << _beta[j] << "\t" << bJ[j] / sqrt(_MSX[j]) << endl;
+            ofile << _snp_name[_include[j]] << "\t" << _ref_A[_include[j]] << "\t" << _beta[j] << "\t" << bJ[j] / sqrt(_MSX[j]) << std::endl;
         }
         ofile.close();
     } else LOGGER.e(0, "Jacobi iteration cannot converge. You can increase the maximum number of iterations by the option --massoc-sblup-maxit.");
@@ -907,22 +907,22 @@ bool gcta::massoc_sblup(double lambda, eigenVector &bJ)
         }
     }
     if(num_err_snp > 0){
-        LOGGER.e(0, "there are " + to_string(num_err_snp) + " SNPs with MAF=0.");
+        LOGGER.e(0, "there are " + std::to_string(num_err_snp) + " SNPs with MAF=0.");
     }
 
     //eigenVector Xty = invsqrtvar.array() * D.array() * _beta.array();
 
 
     /*
-    vector<int> nz_i(m), nz_j(m);
+    std::vector<int> nz_i(m), nz_j(m);
     for (i = 0; i < _include.size(); i++){
         nz_i[i]=0;
         nz_j[i]=0;
     }
     */
-    LOGGER << "Calculating the LD correlation matrix of all the " << _include.size() << " SNPs..." << endl;
+    LOGGER << "Calculating the LD correlation matrix of all the " << _include.size() << " SNPs..." << std::endl;
     eigenSparseMat B(_include.size(), _include.size());
-    vector<int> n_elements(_include.size());
+    std::vector<int> n_elements(_include.size());
 
     for (i = 0; i < _include.size(); i++) {
         int count = 1; 
@@ -935,13 +935,13 @@ bool gcta::massoc_sblup(double lambda, eigenVector &bJ)
     }
     B.reserve(n_elements);
 
-    //ofstream out_debug(_out + ".debug");
+    //std::ofstream out_debug(_out + ".debug");
     for (i = 0; i < _include.size(); i++) {
         // change here: get standardized genotypes
         eigenVector x_i(_keep.size());
         makex_eigenVector_std(i, x_i, false, sqrt(_MSX_B[i]));
         B.insertBackUncompressed(i, i) =  _N_o[i] + lambda;
-       // out_debug << i << "\t" << i << "\t" << _N_o[i] + lambda << endl;
+       // out_debug << i << "\t" << i << "\t" << _N_o[i] + lambda << std::endl;
         #pragma omp parallel for ordered schedule(static) private(j)
         for (j = i + 1; j < _include.size(); j++) {
             if (_chr[_include[i]] == _chr[_include[j]] && abs(_bp[_include[i]] - _bp[_include[j]]) < _jma_wind_size) {
@@ -949,19 +949,19 @@ bool gcta::massoc_sblup(double lambda, eigenVector &bJ)
                 // change here: get standardized genotypes
                 makex_eigenVector_std(j, x_j, false, sqrt(_MSX_B[j]));
                 double prod = x_i.dot(x_j) / (double)n;
-                double temp = prod * min(_Nd[i], _Nd[j]) * sqrt(_MSX[i] * _MSX[j] / (_MSX_B[i] * _MSX_B[j]));
+                double temp = prod * std::min(_Nd[i], _Nd[j]) * sqrt(_MSX[i] * _MSX[j] / (_MSX_B[i] * _MSX_B[j]));
                 #pragma omp ordered
                 {
                     B.insertBackUncompressed(j, i) =  temp;
                 }
-                //out_debug << j << "\t" << i << "\t" << _snp_name[_include[j]] << "\t" << _snp_name[_include[i]] << "\t" << temp << endl;
+                //out_debug << j << "\t" << i << "\t" << _snp_name[_include[j]] << "\t" << _snp_name[_include[i]] << "\t" << temp << std::endl;
             }
         }
         if((i + 1) % 1000 == 0 || (i + 1) == _include.size()) LOGGER << i + 1 << " of " << _include.size() << " SNPs.\r";
     }
     //out_debug.close();
   
-    LOGGER << "Estimating the joint effects of all SNPs ..." << endl;
+    LOGGER << "Estimating the joint effects of all SNPs ..." << std::endl;
     // change here
     //eigenVector Xty = D.array() * _beta.array();
     Eigen::SimplicialLDLT<eigenSparseMat> solver;
@@ -975,14 +975,14 @@ bool gcta::massoc_sblup(double lambda, eigenVector &bJ)
     }
 
     // debug
-    //LOGGER<<"_MSX: "<<_MSX<<endl;
-    //LOGGER<<"Nd: "<<_Nd<<endl;
-    //LOGGER<<"B: "<<B<<endl;
-    //LOGGER<<"D: "<<D<<endl;
-    //LOGGER<<"_beta: "<<_beta<<endl;
-    //LOGGER<<"bJ: "<<bJ<<endl;
+    //LOGGER<<"_MSX: "<<_MSX<<std::endl;
+    //LOGGER<<"Nd: "<<_Nd<<std::endl;
+    //LOGGER<<"B: "<<B<<std::endl;
+    //LOGGER<<"D: "<<D<<std::endl;
+    //LOGGER<<"_beta: "<<_beta<<std::endl;
+    //LOGGER<<"bJ: "<<bJ<<std::endl;
 
-    //LOGGER<<"B inverse: "<<ldlt.solve(eigenMatrix::Identity(_include.size(), _include.size()))<<endl;
+    //LOGGER<<"B inverse: "<<ldlt.solve(eigenMatrix::Identity(_include.size(), _include.size()))<<std::endl;
 
 
     return (true);

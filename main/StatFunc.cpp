@@ -16,166 +16,50 @@
 #include <numbers>
 #include <algorithm>
 #include "Logger.h"
+#include <cmath>
+
+namespace {
+
+// Returns ln(Q(a, x)) — the log of the upper regularized incomplete gamma —
+// using Boost for moderate x and a log-space asymptotic expansion for extreme x
+// where gamma_q(a, x) would underflow to zero.
+static double log_gamma_q_upper(double a, double x) {
+    double q = boost::math::gamma_q(a, x);
+    if (q > 0.0) return std::log(q);
+    // Asymptotic expansion coefficients: Q(a,x) ~ exp(-x + (a-1)*ln(x) - lgamma(a)) * S
+    // where S = 1 + (a-1)/x + (a-1)(a-2)/x^2 + ... (truncate before diverging)
+    double log_leading = -x + (a - 1.0) * std::log(x) - std::lgamma(a);
+    double s = 1.0, term = 1.0, min_abs = 1.0;
+    for (int k = 1; k <= 50; ++k) {
+        term *= (a - k) / x;
+        if (std::abs(term) >= min_abs) break;
+        min_abs = std::abs(term);
+        s += term;
+    }
+    return log_leading + std::log(std::abs(s));
+}
+
+} // anonymous namespace
 
 ////////// P-value Calculatiion Functions Start ////////////////
 
 double StatFunc::t_prob(double df, double t_value, bool two_tail) {
-    double p = StatFunc::betai(df * 0.5, 0.5, df / (df + (t_value * t_value)));
-
-    if (two_tail) return p;
-
-    return p * 0.5;
+    double p = boost::math::cdf(
+        boost::math::complement(boost::math::students_t(df), std::abs(t_value)));
+    return two_tail ? 2.0 * p : p;
 }
 
 double StatFunc::F_prob(double df_1, double df_2, double F_value) {
-    return StatFunc::betai(df_2 * 0.5, df_1 * 0.5, df_2 / (df_2 + df_1 * F_value));
+    return boost::math::cdf(
+        boost::math::complement(boost::math::fisher_f(df_1, df_2), F_value));
 }
 
-double StatFunc::betai(double a, double b, double x) {
-    double bt;
-
-    if (x < 0.0 || x > 1.0) LOGGER.e(0, "bad x in routine betai!");
-
-    if (x == 0.0 || x == 1.0) bt = 0.0;
-    else bt = exp(gammln(a + b) - gammln(a) - gammln(b) + a * log(x) + b * log(1.0 - x));
-
-    if (x < (a + 1.0) / (a + b + 2.0)) return bt * betacf(a, b, x) / a;
-    else return 1.0 - bt * betacf(b, a, 1.0 - x) / b;
+double StatFunc::chi_prob(double df, double chi_sqr_val, bool log_p) {
+    if (log_p) return log_gamma_q_upper(df * 0.5, chi_sqr_val * 0.5);
+    return boost::math::cdf(
+        boost::math::complement(boost::math::chi_squared(df), chi_sqr_val));
 }
 
-double StatFunc::gammln(double xx) noexcept {
-    static constexpr std::array<double, 6> cof = {
-        76.18009172947146, -86.50532032941677,
-        24.01409824083091, -1.231739572450155, 
-        0.1208650973866179e-2, -0.5395239384953e-5
-    };
-
-    double y = xx;
-    double x = xx;
-    double tmp = x + 5.5;
-    tmp -= (x + 0.5) * std::log(tmp);
-    double ser = 1.000000000190015;
-    
-    for (const auto c : cof) {
-        ser += c / ++y;
-    }
-    
-    return -tmp + std::log(2.5066282746310005 * ser / x);
-}
-
-double StatFunc::betacf(double a, double b, double x) {
-    constexpr int MAXIT = 300;
-    constexpr double Eps = 1.0e-08;
-    constexpr double FPMIN = std::numeric_limits<double>::min() / std::numeric_limits<double>::epsilon();
-
-    const double qab = a + b;
-    const double qap = a + 1.0;
-    const double qam = a - 1.0;
-    
-    double c = 1.0;
-    double d = 1.0 - qab * x / qap;
-    if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
-    d = 1.0 / d;
-    double h = d;
-    
-    for (int m = 1; m <= MAXIT; ++m) {
-        const int m2 = 2 * m;
-        double aa = m * (b - m) * x / ((qam + m2) * (a + m2));
-        d = 1.0 + aa * d;
-        if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
-        c = 1.0 + aa / c;
-        if (CommFunc::Abs(c) < FPMIN) c = FPMIN;
-        d = 1.0 / d;
-        h *= d * c;
-        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
-        d = 1.0 + aa * d;
-        if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
-        c = 1.0 + aa / c;
-        if (CommFunc::Abs(c) < FPMIN) c = FPMIN;
-        d = 1.0 / d;
-        const double del = d * c;
-        h *= del;
-        if (CommFunc::Abs(del - 1.0) <= Eps) break;
-    }
-    return h;
-}
-
-double StatFunc::chi_prob(double df, double chi_sqr_val) {
-    return 1 - StatFunc::gammp(df * 0.5, chi_sqr_val * 0.5);
-}
-
-double StatFunc::gammp(double a, double x) {
-    if (x < 0.0 || a <= 0.0) {
-        LOGGER.e(0, "invalid arguments in routine gammp");
-    }
-
-    double gamser, gammcf, gln;
-    if (x < a + 1.0) {
-        gser(gamser, a, x, gln);
-        return gamser;
-    } else {
-        gcf(gammcf, a, x, gln);
-        return 1.0 - gammcf;
-    }
-}
-
-void StatFunc::gser(double &gamser, double a, double x, double &gln) {
-    constexpr int ITMAX = 500;
-    constexpr double Eps = 1.0e-08;
-
-    gln = gammln(a);
-    if (x <= 0.0) {
-        if (x < 0.0) {
-            LOGGER.e(0, "x is less than 0 in routine gser");
-        }
-        gamser = 0.0;
-        return;
-    }
-    
-    double ap = a;
-    double sum = 1.0 / a;
-    double del = sum;
-    
-    for (int n = 0; n < ITMAX; ++n) {
-        ++ap;
-        del *= x / ap;
-        sum += del;
-        if (CommFunc::Abs(del) < CommFunc::Abs(sum) * Eps) {
-            gamser = sum * std::exp(-x + a * std::log(x) - gln);
-            return;
-        }
-    }
-    LOGGER.e(0, "a is too large, and ITMAX is too small in routine gser");
-}
-
-void StatFunc::gcf(double &gammcf, double a, double x, double &gln) {
-    constexpr int ITMAX = 100;
-    constexpr double EPS = std::numeric_limits<double>::epsilon();
-    constexpr double FPMIN = std::numeric_limits<double>::min() / EPS;
-
-    gln = gammln(a);
-    double b = x + 1.0 - a;
-    double c = 1.0 / FPMIN;
-    double d = 1.0 / b;
-    double h = d;
-    
-    for (int i = 1; i <= ITMAX; ++i) {
-        const double an = -i * (i - a);
-        b += 2.0;
-        d = an * d + b;
-        if (CommFunc::Abs(d) < FPMIN) d = FPMIN;
-        c = b + an / c;
-        if (CommFunc::Abs(c) < FPMIN) c = FPMIN;
-        d = 1.0 / d;
-        const double del = d * c;
-        h *= del;
-        if (CommFunc::Abs(del - 1.0) <= EPS) {
-            gammcf = std::exp(-x + a * std::log(x) - gln) * h;
-            return;
-        }
-    }
-    LOGGER.e(0, "a is too large, and ITMAX is too small in gcf");
-}
 ////////// P-value Calculatiion Functions End ////////////////
 
 ///////// Random Number Generation Functions Start ////////
@@ -220,6 +104,10 @@ void StatFunc::gasdev_seq(int &idum, std::vector<double> &vec, int size, double 
     std::ranges::for_each(vec, [c](double& v) { v *= c; });
 }
 
+static std::random_device ran_device;
+static std::mt19937 gen(ran_device());
+static std::uniform_real_distribution<double> u_dis(0, 1);
+
 double StatFunc::gasdev(int &idum) {
     static int iset = 0;
     static double gset;
@@ -229,8 +117,8 @@ double StatFunc::gasdev(int &idum) {
     if (iset == 0) {
         double v1, v2, rsq;
         do {
-            v1 = 2.0 * ran1(idum) - 1.0;
-            v2 = 2.0 * ran1(idum) - 1.0;
+            v1 = 2.0 * u_dis(gen) - 1.0;
+            v2 = 2.0 * u_dis(gen) - 1.0;
             rsq = v1 * v1 + v2 * v2;
         } while (rsq >= 1.0 || rsq == 0.0);
         
@@ -247,22 +135,15 @@ double StatFunc::gasdev(int &idum) {
 double StatFunc::UniformDev(double a, double b, int &idum) {
     if (a >= b) LOGGER.e(0, "b must be larger than a. StatFunc::UniformDev");
     if (idum > 0) idum *= -1;
-    return a + (b - a) * ran1(idum);
+    return a + (b - a) * u_dis(gen);
 }
 
-static std::random_device ran_device;
-static std::mt19937 gen(ran_device());
-static std::uniform_real_distribution<double> u_dis(0, 1);
-
-double StatFunc::ran1(int &idum) {
-    return u_dis(gen);
-}
 /*
     const int IA = 16807, IM = 2147483647, IQ = 127773, IR = 2836, NTAB = 32;
     const int NDIV = (1 + (IM - 1) / NTAB);
     const double EPS = 3.0e-16, AM = 1.0 / IM, RNMX = (1.0 - EPS);
     static int iy = 0;
-    static vector<int> iv(NTAB);
+    static std::vector<int> iv(NTAB);
     int j, k;
     double temp;
 
@@ -345,111 +226,18 @@ int StatFunc::RandAbs(int a, int b, int &seed) {
 ///////// Random Number Generation Functions End ////////
 
 double StatFunc::chi_val(double df, double prob) {
-    constexpr double eps = 1.0e-08;
-    double walk = 100.0;
-    double chi_val = walk;
-    double way = 0.0;
-    double preway = 0.0;
-    double prob_buf = chi_prob(df, chi_val);
-
-    if (CommFunc::Abs(prob_buf - prob) < eps) {
-        return chi_val;
-    }
-
-    if (prob_buf > prob) {
-        preway = way = 1.0;
-        chi_val += walk;
-    } else {
-        preway = way = -1.0;
-        chi_val -= walk;
-    }
-
-    while (true) {
-        prob_buf = chi_prob(df, chi_val);
-        way = (prob_buf > prob) ? 1.0 : -1.0;
-
-        if (CommFunc::Abs(preway - way) > eps) {
-            walk *= 0.5;
-        }
-        chi_val += walk * way;
-        preway = way;
-
-        if (walk < eps) break;
-    }
-
-    return chi_val;
+    return boost::math::quantile(
+        boost::math::complement(boost::math::chi_squared(df), prob));
 }
 
 double StatFunc::t_val(double df, double prob) {
-    constexpr double eps = 1.0e-08;
-    double walk = 100.0;
-    double t_val = walk;
-    double way = 0.0;
-    double preway = 0.0;
-    double prob_buf = t_prob(df, t_val, false);
-
-    if (CommFunc::Abs(prob_buf - prob) < eps) {
-        return t_val;
-    }
-
-    if (prob_buf > prob) {
-        preway = way = 1.0;
-        t_val += walk;
-    } else {
-        preway = way = -1.0;
-        t_val -= walk;
-    }
-
-    while (true) {
-        prob_buf = t_prob(df, t_val, false);
-        way = (prob_buf > prob) ? 1.0 : -1.0;
-
-        if (CommFunc::Abs(preway - way) > eps) {
-            walk *= 0.5;
-        }
-        t_val += walk * way;
-        preway = way;
-
-        if (walk < eps) break;
-    }
-
-    return t_val;
+    return boost::math::quantile(
+        boost::math::complement(boost::math::students_t(df), prob));
 }
 
 double StatFunc::F_val(double df_1, double df_2, double prob) {
-    constexpr double eps = 1.0e-08;
-    double walk = 100.0;
-    double F_val = walk;
-    double way = 0.0;
-    double preway = 0.0;
-    double prob_buf = F_prob(df_1, df_2, F_val);
-
-    if (CommFunc::Abs(prob_buf - prob) < eps) {
-        return F_val;
-    }
-
-    if (prob_buf > prob) {
-        preway = way = 1.0;
-        F_val += walk;
-    } else {
-        preway = way = -1.0;
-        F_val -= walk;
-    }
-
-    while (true) {
-        prob_buf = F_prob(df_1, df_2, F_val);
-        way = (prob_buf > prob) ? 1.0 : -1.0;
-
-        if (CommFunc::Abs(preway - way) > eps) {
-            walk *= 0.5;
-        }
-        F_val += walk * way;
-        preway = way;
-
-        if (walk < eps) break;
-    }
-
-    return F_val;
+    return boost::math::quantile(
+        boost::math::complement(boost::math::fisher_f(df_1, df_2), prob));
 }
 
 double StatFunc::ControlFDR(std::span<const double> P_Value, double alpha, bool Restrict) {
@@ -634,128 +422,56 @@ void StatFunc::splint(std::vector<double> &xa, std::vector<double> &ya, std::vec
         ((a * a * a - a) * y2a[klo] + (b * b * b - b) * y2a[khi]) * (h * h) / 6.0;
 }
 
-double StatFunc::erf(double x) noexcept {
-    constexpr double a1 = 0.070523084;
-    constexpr double a2 = 0.0422820123;
-    constexpr double a3 = 0.0092705272;
-    constexpr double a4 = 0.0001520143;
-    constexpr double a5 = 0.0002765672;
-    constexpr double a6 = 0.0000430638;
-    
-    const double tmp = 1.0 + a1 * x + a2 * std::pow(x, 2) + a3 * std::pow(x, 3) + 
-                       a4 * std::pow(x, 4) + a5 * std::pow(x, 5) + a6 * std::pow(x, 6);
-    return 1.0 - std::pow(tmp, -16);
-}
-
-/*
-n <- length(p)
-lp <- length(p)
-i <- lp:1L
-o <- order(p, decreasing = TRUE)
-ro <- order(o) #This is the index of the initial p-values, highest to lowest
-pmin(1, cummin(n/i * p[o]))[ro]
-*/
-
 std::vector<double> StatFunc::ControlFDR_BH(std::span<const double> p_value) {
     const int n = static_cast<int>(p_value.size());
-    
     std::vector<std::pair<double, int>> pval_buf(n);
-    for (int i = 0; i < n; ++i) {
-        pval_buf[i] = {p_value[i], i};
-    }
-    
+    for (int i = 0; i < n; ++i) pval_buf[i] = std::make_pair(p_value[i], i);
+
     std::ranges::stable_sort(pval_buf, [](const auto& a, const auto& b) {
         return a.first > b.first;
     });
-    
+
     std::vector<double> fdr(n);
     double min_val = 1.0;
-    
+
     for (int i = 0; i < n; ++i) {
         const double c = static_cast<double>(n) / static_cast<double>(n - i) * pval_buf[i].first;
         min_val = std::min(c, min_val);
         fdr[pval_buf[i].second] = std::min(1.0, min_val);
     }
-    
+
     return fdr;
 }
 
-double StatFunc::pnorm(double x) noexcept {
-    const double z = (x > 0) ? -x : x;
-    constexpr double sqrt2pi = 2.50662827463;
-    
-    const double t0 = 1.0 / (1.0 + 0.2316419 * std::fabs(z));
-    const double z1 = std::exp(-0.5 * z * z) / sqrt2pi;
-    const double p0 = z1 * t0 * (0.31938153 + t0 * (-0.356563782 + 
-                      t0 * (1.781477937 + t0 * (-1.821255978 + 1.330274429 * t0))));
-    
-    return (x >= 0) ? p0 : 1.0 - p0;
+// Default: upper-tail P(Z > x)
+double StatFunc::pnorm(double x) {
+    return boost::math::cdf(
+        boost::math::complement(boost::math::normal(), x));
 }
 
-double StatFunc::dnorm(double x) noexcept {
-    constexpr double inv_sqrt_2pi = 0.39894228;
-    return inv_sqrt_2pi * std::exp(-0.5 * x * x);
+double StatFunc::dnorm(double x) {
+    return boost::math::pdf(boost::math::normal(), x);
 }
 
-double StatFunc::qnorm_sub(double x, double y) {
-    const double y2 = y * y;
-    const double y3 = y2 * y;
-    const double y4 = y3 * y;
-    const double x2 = x * x;
-    const double x3 = x2 * x;
-    
-    return y + 0.5 * x * y2 + (2 * x2 + 1) * y3 / 6.0 + 
-           (6 * x3 + 7 * x) * y4 / 12.0;
-}
-
+// qnorm(p, upper=true): returns Phi^{-1}(p), the lower-tail normal quantile.
+// When upper=false: finds x such that P(Z > x) = p (upper-tail quantile).
 double StatFunc::qnorm(double p, bool upper) {
-    if (upper) {
-        p = 1.0 - p;
-    }
-    
-    double x = 0.0;
-    for (int i = 0; i < 4; ++i) {
-        x = x + qnorm_sub(x, (pnorm(x) - p) / dnorm(x));
-    }
-    return x;
+    if (upper)
+        return boost::math::quantile(boost::math::normal(), p);
+    return boost::math::quantile(
+        boost::math::complement(boost::math::normal(), p));
 }
 
-double StatFunc::pchisq(double x, double df) {
-    if (x < 0) return -9;
-
-    double p, q;
-    int st = 0; // error variable
-    int w = 1; // function variable
-    double bnd = 1; // boundary function
-
-    // NCP is set to 0
-    cdfchi(&w, &p, &q, &x, &df, &st, &bnd);
-
-    // Check status
-    if (st != 0) return -9;
-
-    // Return p-value
-    return q;
+double StatFunc::pchisq(double x, double df, bool log_p) {
+    if (x < 0) return log_p ? std::numeric_limits<double>::quiet_NaN() : -9;
+    return chi_prob(df, x, log_p);
 }
 
 double StatFunc::qchisq(double q, double df) {
     if (q < 0) return -9;
-    else if (q >= 1) return 0;
-
-    double x;
-    double p = 1 - q;
-    int st = 0; // error variable
-    int w = 2; // function variable
-    double bnd = 1; // boundary function
-
-    // NCP is set to 0
-    cdfchi(&w, &p, &q, &x, &df, &st, &bnd);
-
-    // Check status
-    if (st != 0) return -9;
-
-    // Return p-value
-    return x;
+    if (q >= 1) return 0;
+    return boost::math::quantile(
+        boost::math::complement(boost::math::chi_squared(df), q));
 }
 
 //#################
@@ -787,9 +503,9 @@ double StatFunc::psadd(double x, Eigen::VectorXd lambda) {
     double v = hatzeta * sqrt(Kpp(hatzeta, lambda));
 
     // debug
-    //LOGGER<<"hatzeta = "<<hatzeta<<endl;
-    //LOGGER<<"w = "<<w<<endl;
-    //LOGGER<<"v = "<<v<<endl;
+    //LOGGER<<"hatzeta = "<<hatzeta<<std::endl;
+    //LOGGER<<"w = "<<w<<std::endl;
+    //LOGGER<<"v = "<<v<<std::endl;
 
     
     if (fabs(hatzeta) < 1e-04) return 2.0;

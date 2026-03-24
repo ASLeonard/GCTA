@@ -22,7 +22,7 @@ void gcta::make_XMat_mkl(float *X, bool grm_d_flag)
 {
     if (_mu.empty()) calcu_mu();
 
-    LOGGER << "Recoding genotypes (individual major mode) ..." << endl;
+    LOGGER << "Recoding genotypes (individual major mode) ..." << std::endl;
     unsigned long i = 0, j = 0, k = 0, n = _keep.size(), m = _include.size();
 
     if (!grm_d_flag) {
@@ -78,7 +78,7 @@ void gcta::make_XMat_mkl(float *X, bool grm_d_flag)
     }
 }
 
-void gcta::std_XMat_mkl(float *X, vector<double> &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std) {
+void gcta::std_XMat_mkl(float *X, std::vector<double> &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std) {
     if (_mu.empty()) calcu_mu();
 
     unsigned long i = 0, j = 0, k = 0, n = _keep.size(), m = _include.size();
@@ -131,7 +131,7 @@ void gcta::std_XMat_mkl(float *X, vector<double> &sd_SNP, bool grm_xchr_flag, bo
     }
 }
 
-void gcta::std_XMat_d_mkl(float *X, vector<double> &sd_SNP, bool miss_with_mu, bool divid_by_std) {
+void gcta::std_XMat_d_mkl(float *X, std::vector<double> &sd_SNP, bool miss_with_mu, bool divid_by_std) {
     if (_mu.empty()) calcu_mu();
 
     unsigned long i = 0, j = 0, k = 0, n = _keep.size(), m = _include.size();
@@ -157,7 +157,7 @@ void gcta::std_XMat_d_mkl(float *X, vector<double> &sd_SNP, bool miss_with_mu, b
     } else {
         for (j = 0; j < m; j++) sd_SNP[j] = sd_SNP[j] * sd_SNP[j];
     }
-    vector<double> psq(m);
+    std::vector<double> psq(m);
     for (j = 0; j < m; j++) psq[j] = 0.5 * _mu[_include[j]] * _mu[_include[j]];
 
 #pragma omp parallel for private(j, k)
@@ -183,7 +183,7 @@ void gcta::make_grm_mkl(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool o
     _geno_mkl = new float[n * m]; // alloc memory to X matrix
 
     make_XMat_mkl(_geno_mkl, grm_d_flag);
-    vector<double> sd_SNP, sd_SNP_buf;
+    std::vector<double> sd_SNP, sd_SNP_buf;
     if (grm_mtd == 0) {
         if (grm_d_flag) std_XMat_d_mkl(_geno_mkl, sd_SNP, false, true);
         else std_XMat_mkl(_geno_mkl, sd_SNP, grm_xchr_flag, false, true);
@@ -193,11 +193,11 @@ void gcta::make_grm_mkl(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool o
         else std_XMat_mkl(_geno_mkl, sd_SNP, grm_xchr_flag, false, false);
     }
 
-    if (!mlmassoc) LOGGER << "\nCalculating the" << ((grm_d_flag) ? " dominance" : "") << " genetic relationship matrix (GRM)" << (grm_xchr_flag ? " for the X chromosome" : "") << (_dosage_flag ? " using imputed dosage data" : "") << " ... (Note: default speed-optimized mode, may use huge RAM)" << endl;
-    else LOGGER << "\nCalculating the genetic relationship matrix (GRM) ... " << endl;
+    if (!mlmassoc) LOGGER << "\nCalculating the" << ((grm_d_flag) ? " dominance" : "") << " genetic relationship matrix (GRM)" << (grm_xchr_flag ? " for the X chromosome" : "") << (_dosage_flag ? " using imputed dosage data" : "") << " ... (Note: default speed-optimized mode, may use huge RAM)" << std::endl;
+    else LOGGER << "\nCalculating the genetic relationship matrix (GRM) ... " << std::endl;
 
     // count the number of missing genotypes
-    vector< vector<int> > miss_pos(n);
+    std::vector< std::vector<int> > miss_pos(n);
     std::vector<bool> X_bool(static_cast<size_t>(n) * m);
     for (i = 0; i < n; i++) {
         for (j = 0; j < m; j++) {
@@ -281,7 +281,7 @@ void gcta::make_grm_mkl(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool o
         }
     } else {
         // Output A_N and A
-        string out_buf = _out;
+        std::string out_buf = _out;
         if (grm_d_flag) _out += ".d";
         output_grm_mkl(_grm_mkl, output_bin);
         _out = out_buf;
@@ -295,29 +295,29 @@ void gcta::make_grm_mkl(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool o
 void gcta::output_grm_mkl(float* A, bool output_grm_bin)
 {
     unsigned long i = 0, j = 0, n = _keep.size();
-    string grm_file;
+    std::string grm_file;
 
     if (output_grm_bin) {
         // Save matrix A in binary file
         grm_file = _out + ".grm.bin";
-        fstream A_Bin(grm_file.c_str(), ios::out | ios::binary);
+        std::fstream A_Bin(grm_file.c_str(), std::ios::out | std::ios::binary);
         if (!A_Bin) LOGGER.e(0, "cannot open the file [" + grm_file + "] to write.");
         int size = sizeof (float);
         for (i = 0; i < n; i++) {
             for (j = 0; j <= i; j++) A_Bin.write((char*) &(A[i * n + j]), size);
         }
         A_Bin.close();
-        LOGGER << "GRM of " << n << " individuals has been saved in the file [" + grm_file + "] (in binary format)." << endl;
+        LOGGER << "GRM of " << n << " individuals has been saved in the file [" + grm_file + "] (in binary format)." << std::endl;
 
-        string grm_N_file = _out + ".grm.N.bin";
-        fstream N_Bin(grm_N_file.c_str(), ios::out | ios::binary);
+        std::string grm_N_file = _out + ".grm.N.bin";
+        std::fstream N_Bin(grm_N_file.c_str(), std::ios::out | std::ios::binary);
         if (!N_Bin) LOGGER.e(0, "cannot open the file [" + grm_N_file + "] to write.");
         size = sizeof (float);
         for (i = 0; i < n; i++) {
             for (j = 0; j <= i; j++) N_Bin.write((char*) &(_grm_N(i,j)), size);
         }
         N_Bin.close();
-        LOGGER << "Number of SNPs to calculate the genetic relationship between each pair of individuals has been saved in the file [" + grm_N_file + "] (in binary format)." << endl;
+        LOGGER << "Number of SNPs to calculate the genetic relationship between each std::pair of individuals has been saved in the file [" + grm_N_file + "] (in binary format)." << std::endl;
     } else {
         // Save A matrix in txt format
         grm_file = _out + ".grm.gz";
@@ -326,23 +326,23 @@ void gcta::output_grm_mkl(float* A, bool output_grm_bin)
         boost::iostreams::filtering_ostream zoutf;
         zoutf.push(boost::iostreams::gzip_compressor());
         zoutf.push(raw_file);
-        LOGGER << "Saving the genetic relationship matrix to the file [" + grm_file + "] (in compressed text format)." << endl;
-        zoutf.setf(ios::scientific);
+        LOGGER << "Saving the genetic relationship matrix to the file [" + grm_file + "] (in compressed text format)." << std::endl;
+        zoutf.setf(std::ios::scientific);
         zoutf.precision(6);
         for (i = 0; i < n; i++) {
-            for (j = 0; j <= i; j++) zoutf << i + 1 << '\t' << j + 1 << '\t' << _grm_N(i,j) << '\t' << A[i * n + j] << endl;
+            for (j = 0; j <= i; j++) zoutf << i + 1 << '\t' << j + 1 << '\t' << _grm_N(i,j) << '\t' << A[i * n + j] << std::endl;
         }
         zoutf.reset();
         raw_file.close();
-        LOGGER << "The genetic relationship matrix has been saved in the file [" + grm_file + "] (in compressed text format)." << endl;
+        LOGGER << "The genetic relationship matrix has been saved in the file [" + grm_file + "] (in compressed text format)." << std::endl;
     }
 
-    string famfile = _out + ".grm.id";
-    ofstream Fam(famfile.c_str());
+    std::string famfile = _out + ".grm.id";
+    std::ofstream Fam(famfile.c_str());
     if (!Fam) LOGGER.e(0, "cannot open the file [" + famfile + "] to write.");
-    for (i = 0; i < n; i++) Fam << _fid[_keep[i]] + "\t" + _pid[_keep[i]] << endl;
+    for (i = 0; i < n; i++) Fam << _fid[_keep[i]] + "\t" + _pid[_keep[i]] << std::endl;
     Fam.close();
-    LOGGER << "IDs for the GRM file [" + grm_file + "] have been saved in the file [" + famfile + "]." << endl;
+    LOGGER << "IDs for the GRM file [" + grm_file + "] have been saved in the file [" + famfile + "]." << std::endl;
 }
 
 ///////////
@@ -350,7 +350,7 @@ void gcta::output_grm_mkl(float* A, bool output_grm_bin)
 
 bool gcta::comput_inverse_logdet_LDLT_mkl(eigenMatrix &Vi, double &logdet)
 {
-    //LOGGER << "LDLT" << endl;
+    //LOGGER << "LDLT" << std::endl;
     uint64_t n = Vi.cols();
     double* Vi_mkl = new double[n * n];
     //float* Vi_mkl=new float[n*n];
@@ -361,14 +361,14 @@ bool gcta::comput_inverse_logdet_LDLT_mkl(eigenMatrix &Vi, double &logdet)
             Vi_mkl[i * n + j] = Vi(i, j);
         }
     }
-    //LOGGER << "Finished copy" << endl;
+    //LOGGER << "Finished copy" << std::endl;
 
     // Cholesky decomposition
     gcta_blas_int info = 0;
     gcta_blas_int int_n = (gcta_blas_int) n;
     char uplo = 'L';
     dpotrf(&uplo, &int_n, Vi_mkl, &int_n, &info);
-    //LOGGER << "Finished decompose" << endl;
+    //LOGGER << "Finished decompose" << std::endl;
     //spotrf( &uplo, &n, Vi_mkl, &n, &info );
     if (info < 0){
         LOGGER.e(0, "Cholesky decomposition failed. Invalid values found in the matrix.\n");
@@ -382,10 +382,10 @@ bool gcta::comput_inverse_logdet_LDLT_mkl(eigenMatrix &Vi, double &logdet)
             logdet += log(d_buf * d_buf);
         }
 
-        //LOGGER << "start inverse" << endl;
+        //LOGGER << "start inverse" << std::endl;
         // Calcualte V inverse
         dpotri(&uplo, &int_n, Vi_mkl, &int_n, &info);
-        //LOGGER << "Inverse finished" << endl;
+        //LOGGER << "Inverse finished" << std::endl;
         //spotri( &uplo, &n, Vi_mkl, &n, &info );
         if (info < 0){
             LOGGER.e(0, "invalid values found in the variance-covariance (V) matrix.\n");
@@ -397,7 +397,7 @@ bool gcta::comput_inverse_logdet_LDLT_mkl(eigenMatrix &Vi, double &logdet)
             for (uint64_t j = 0; j < n; j++) {
                 for (uint64_t i = 0; i <= j; i++) Vi(i, j) = Vi(j, i) = Vi_mkl[i * n + j];
             }
-            //LOGGER << "IDLT finished" << endl;
+            //LOGGER << "IDLT finished" << std::endl;
         }
     }
 
@@ -523,34 +523,34 @@ void gcta::LD_pruning_mkl(double rsq_cutoff, int wind_size) {
     unsigned long i = 0, j = 0, k = 0, l = 0, n = _keep.size(), m = _include.size();
     _geno_mkl = new float[n * m]; // alloc memory to X matrix
     make_XMat_mkl(_geno_mkl, false);
-    vector<double> sd_SNP;
+    std::vector<double> sd_SNP;
     std_XMat_mkl(_geno_mkl, sd_SNP, false, true, true);
 
-    LOGGER << "\nPruning SNPs for LD ..." << endl;
-    vector<int> brk_pnt1, brk_pnt2, brk_pnt3;
+    LOGGER << "\nPruning SNPs for LD ..." << std::endl;
+    std::vector<int> brk_pnt1, brk_pnt2, brk_pnt3;
     get_ld_blk_pnt(brk_pnt1, brk_pnt2, brk_pnt3, wind_size*2);
 
-    vector<int> rm_snp_indx;
+    std::vector<int> rm_snp_indx;
     LD_pruning_blk_mkl(_geno_mkl, brk_pnt1, rsq_cutoff, rm_snp_indx);
     if (brk_pnt2.size() > 1) LD_pruning_blk_mkl(_geno_mkl, brk_pnt2, rsq_cutoff, rm_snp_indx);
-    stable_sort(rm_snp_indx.begin(), rm_snp_indx.end());
+    std::stable_sort(rm_snp_indx.begin(), rm_snp_indx.end());
     rm_snp_indx.erase(unique(rm_snp_indx.begin(), rm_snp_indx.end()), rm_snp_indx.end());
     int m_sub = rm_snp_indx.size();
-    vector<string> rm_snp_name(m_sub);
+    std::vector<std::string> rm_snp_name(m_sub);
 #pragma omp parallel for
     for (i = 0; i < m_sub; i++) rm_snp_name[i] = _snp_name[_include[rm_snp_indx[i]]];
     update_id_map_rm(rm_snp_name, _snp_name_map, _include);
     m = _include.size();
 
-    LOGGER << "After LD-pruning, " << m << " SNPs remain." << endl;
-    string pruned_file = _out + ".prune.in";
-    ofstream oprune(pruned_file.data());
-    for (i = 0; i < m; i++) oprune << _snp_name[_include[i]] << endl;
-    oprune << endl;
-    LOGGER << "The list of " << m << " LD-pruned SNPs (pruned in) has been saved in the file [" + pruned_file + "]." << endl;
+    LOGGER << "After LD-pruning, " << m << " SNPs remain." << std::endl;
+    std::string pruned_file = _out + ".prune.in";
+    std::ofstream oprune(pruned_file.data());
+    for (i = 0; i < m; i++) oprune << _snp_name[_include[i]] << std::endl;
+    oprune << std::endl;
+    LOGGER << "The list of " << m << " LD-pruned SNPs (pruned in) has been saved in the file [" + pruned_file + "]." << std::endl;
 }
 
-void gcta::LD_pruning_blk_mkl(float *X, vector<int> &brk_pnt, double rsq_cutoff, vector<int> &rm_snp_ID1)
+void gcta::LD_pruning_blk_mkl(float *X, std::vector<int> &brk_pnt, double rsq_cutoff, std::vector<int> &rm_snp_ID1)
 {
     unsigned long i = 0, j = 0, k = 0, l = 0, n = _keep.size(), m = _include.size(), size = 0;
 
@@ -575,7 +575,7 @@ void gcta::LD_pruning_blk_mkl(float *X, vector<int> &brk_pnt, double rsq_cutoff,
                 rsq_sub[l] = rsq_sub[l] * rsq_sub[l];
             }
         }
-        vector<int> rm_snp_buf;
+        std::vector<int> rm_snp_buf;
         rm_cor_snp((int) size, brk_pnt[i], rsq_sub, rsq_cutoff, rm_snp_buf);
         rm_snp_ID1.insert(rm_snp_ID1.end(), rm_snp_buf.begin(), rm_snp_buf.end());
 
@@ -591,12 +591,12 @@ void gcta::calcu_mean_rsq_mkl(int wind_size, double rsq_cutoff)
     unsigned long i = 0, j = 0, k = 0, l = 0, n = _keep.size(), m = _include.size();
     _geno_mkl = new float[n * m];
     make_XMat_mkl(_geno_mkl, false);
-    vector<double> sd_SNP;
+    std::vector<double> sd_SNP;
     std_XMat_mkl(_geno_mkl, sd_SNP, false, true, true);
     calcu_ssx_sqrt_i_mkl(_geno_mkl, sd_SNP);
 
-    LOGGER << "Calculating mean and maximum LD rsq (window size = at least " << wind_size / 1000 << "Kb in either direction; LD rsq threshold = " << rsq_cutoff << ") ... " << endl;
-    vector<int> brk_pnt1, brk_pnt2, brk_pnt3;
+    LOGGER << "Calculating mean and maximum LD rsq (window size = at least " << wind_size / 1000 << "Kb in either direction; LD rsq threshold = " << rsq_cutoff << ") ... " << std::endl;
+    std::vector<int> brk_pnt1, brk_pnt2, brk_pnt3;
     get_ld_blk_pnt(brk_pnt1, brk_pnt2, brk_pnt3, wind_size*2);
 
     eigenVector mean_rsq = eigenVector::Zero(m);
@@ -605,14 +605,14 @@ void gcta::calcu_mean_rsq_mkl(int wind_size, double rsq_cutoff)
     calcu_ld_blk_mkl(_geno_mkl, sd_SNP, brk_pnt1, brk_pnt3, mean_rsq, snp_num, max_rsq, false, rsq_cutoff);
     if (brk_pnt2.size() > 1) calcu_ld_blk_mkl(_geno_mkl, sd_SNP, brk_pnt2, brk_pnt3, mean_rsq, snp_num, max_rsq, true, rsq_cutoff);
 
-    string mrsq_file = _out + ".mrsq.ld";
-    ofstream o_mrsq(mrsq_file.data());
-    for (i = 0; i < m; i++) o_mrsq << _snp_name[_include[i]] << " " << 0.5 * _mu[_include[i]] << " " << mean_rsq[i] << " " << snp_num[i] << " " << max_rsq[i] << endl;
-    o_mrsq << endl;
-    LOGGER << "Mean and maximum LD rsq for " << m << " SNPs have been saved in the file [" + mrsq_file + "]." << endl;
+    std::string mrsq_file = _out + ".mrsq.ld";
+    std::ofstream o_mrsq(mrsq_file.data());
+    for (i = 0; i < m; i++) o_mrsq << _snp_name[_include[i]] << " " << 0.5 * _mu[_include[i]] << " " << mean_rsq[i] << " " << snp_num[i] << " " << max_rsq[i] << std::endl;
+    o_mrsq << std::endl;
+    LOGGER << "Mean and maximum LD rsq for " << m << " SNPs have been saved in the file [" + mrsq_file + "]." << std::endl;
 }
 
-void gcta::calcu_ssx_sqrt_i_mkl(float *X_std, vector<double> &ssx_sqrt_i)
+void gcta::calcu_ssx_sqrt_i_mkl(float *X_std, std::vector<double> &ssx_sqrt_i)
 {
     unsigned long i = 0, j = 0, k = 0, m = _include.size(), n = _keep.size();
 
@@ -631,7 +631,7 @@ void gcta::calcu_ssx_sqrt_i_mkl(float *X_std, vector<double> &ssx_sqrt_i)
     }
 }
 
-void gcta::calcu_ld_blk_mkl(float *X, vector<double> &ssx, vector<int> &brk_pnt, vector<int> &brk_pnt3, eigenVector &mean_rsq, eigenVector &snp_num, eigenVector &max_rsq, bool second, double rsq_cutoff)
+void gcta::calcu_ld_blk_mkl(float *X, std::vector<double> &ssx, std::vector<int> &brk_pnt, std::vector<int> &brk_pnt3, eigenVector &mean_rsq, eigenVector &snp_num, eigenVector &max_rsq, bool second, double rsq_cutoff)
 {
     unsigned long i = 0, j = 0, k = 0, l = 0, s1 = 0, s2 = 0, n = _keep.size(), m = _include.size(), size = 0, size_limit = 10000;
 
@@ -653,9 +653,9 @@ void gcta::calcu_ld_blk_mkl(float *X, vector<double> &ssx, vector<int> &brk_pnt,
         for (j = 0; j < n; j++) {
             for (k = 0, l = brk_pnt[i]; k < size; k++, l++) X_sub[j * size + k] = X[j * m + l];
         }
-        vector<double> ssx_sub(size);
+        std::vector<double> ssx_sub(size);
         for (k = 0, l = brk_pnt[i]; k < size; k++, l++) ssx_sub[k] = ssx[l];
-        vector<double> rsq_size(size), mean_rsq_sub(size), max_rsq_sub(size);
+        std::vector<double> rsq_size(size), mean_rsq_sub(size), max_rsq_sub(size);
         for(j = 0; j < size; j++) max_rsq_sub[j] = -1.0;
 
         if (size > size_limit) calcu_ld_blk_split_mkl(size, size_limit, X_sub, ssx_sub, rsq_cutoff, rsq_size, mean_rsq_sub, max_rsq_sub, s1, s2, second);
@@ -705,10 +705,10 @@ void gcta::calcu_ld_blk_mkl(float *X, vector<double> &ssx, vector<int> &brk_pnt,
     }
 }
 
-void gcta::calcu_ld_blk_split_mkl(int size, int size_limit, float *X_sub, vector<double> &ssx_sub, double rsq_cutoff, vector<double> &rsq_size, vector<double> &mean_rsq_sub, vector<double> &max_rsq_sub, int s1, int s2, bool second)
+void gcta::calcu_ld_blk_split_mkl(int size, int size_limit, float *X_sub, std::vector<double> &ssx_sub, double rsq_cutoff, std::vector<double> &rsq_size, std::vector<double> &mean_rsq_sub, std::vector<double> &max_rsq_sub, int s1, int s2, bool second)
 {
     unsigned long i = 0, j = 0, k = 0, l = 0, m = 0, n = _keep.size();
-    vector<int> brk_pnt;
+    std::vector<int> brk_pnt;
     brk_pnt.push_back(0);
     for (i = size_limit; i < size - size_limit; i += size_limit) {
         brk_pnt.push_back(i - 1);
@@ -729,14 +729,14 @@ void gcta::calcu_ld_blk_split_mkl(int size, int size_limit, float *X_sub, vector
         for (j = 0; j < n; j++) {
             for (k = 0, l = brk_pnt[i]; k < size_sub; k++, l++) X_sub_sub[k * n + j] = X_sub[j * size + l];
         }
-        vector<double> ssx_sub_sub(size_sub);
+        std::vector<double> ssx_sub_sub(size_sub);
         for (k = 0, l = brk_pnt[i]; k < size_sub; k++, l++) ssx_sub_sub[k] = ssx_sub[l];
 
         float *rsq_sub_sub = new float[size_sub * size];
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, size_sub, size, n, 1.0, X_sub_sub, n, X_sub, size, 0.0, rsq_sub_sub, size);
         delete[] X_sub_sub;
 
-        vector<double> rsq_size_sub(size_sub), mean_rsq_sub_sub(size_sub), max_rsq_sub_sub(size_sub);
+        std::vector<double> rsq_size_sub(size_sub), mean_rsq_sub_sub(size_sub), max_rsq_sub_sub(size_sub);
         for (j = 0; j < size_sub; j++) max_rsq_sub_sub[j] = -1.0;
         #pragma omp parallel for private(k,l)
         for (j = 0; j < size_sub; j++) {

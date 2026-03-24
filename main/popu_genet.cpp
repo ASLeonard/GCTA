@@ -14,7 +14,7 @@
 #include "gcta.h"
 
 // paa: proportion of ancestral alleles
-void gcta::paa(string aa_file)
+void gcta::paa(std::string aa_file)
 {
     check_autosome();
     if(_mu.empty()) calcu_mu();
@@ -23,13 +23,13 @@ void gcta::paa(string aa_file)
     int i=0, j=0, k=0;
     
     // read ancestral alleles from a file
-    ifstream i_aa(aa_file.c_str());
+    std::ifstream i_aa(aa_file.c_str());
     if(!i_aa) LOGGER.e(0, "cannot open the file ["+aa_file+"] to read.");
-    string cbuf=".";
-    string str_buf;
-	LOGGER<<"Reading ancestral alleles of the SNPs from ["+aa_file+"]."<<endl;
-    map<string, int>::iterator iter, End=_snp_name_map.end();
-    vector<string> aa(_snp_num);
+    std::string cbuf=".";
+    std::string str_buf;
+	LOGGER<<"Reading ancestral alleles of the SNPs from ["+aa_file+"]."<<std::endl;
+    std::map<std::string, int>::iterator iter, End=_snp_name_map.end();
+    std::vector<std::string> aa(_snp_num);
     for(i=0; i<_snp_num; i++) aa[i]=".";
     int icount=0;
 	while(i_aa){
@@ -43,11 +43,11 @@ void gcta::paa(string aa_file)
 		}
 	}
     i_aa.close();
-	LOGGER<<"Ancestral alleles for "<<icount<<" SNPs are included from ["+aa_file+"]."<<endl;
+	LOGGER<<"Ancestral alleles for "<<icount<<" SNPs are included from ["+aa_file+"]."<<std::endl;
     
-	LOGGER<<"Calculating proportion of ancestral alleles ..."<<endl;
+	LOGGER<<"Calculating proportion of ancestral alleles ..."<<std::endl;
 	double x=0.0;
-	vector<double> hom_aa_rare(_keep.size()), hom_aa_comm(_keep.size()), hom_da_rare(_keep.size()), hom_da_comm(_keep.size()), het_aa_rare(_keep.size()), het_aa_comm(_keep.size()), nomiss(_keep.size());
+	std::vector<double> hom_aa_rare(_keep.size()), hom_aa_comm(_keep.size()), hom_da_rare(_keep.size()), hom_da_comm(_keep.size()), het_aa_rare(_keep.size()), het_aa_comm(_keep.size()), nomiss(_keep.size());
 	for(i=0; i<_keep.size(); i++){
  		for(k=0; k<_include.size(); k++){
  		    if(aa[_include[k]]==".") continue;
@@ -96,13 +96,13 @@ void gcta::paa(string aa_file)
 	}
     
     // Save matrix A in binary file
-	string paa_file=_out+".paa";
-	ofstream o_paa(paa_file.c_str());
+	std::string paa_file=_out+".paa";
+	std::ofstream o_paa(paa_file.c_str());
 	if(!o_paa) LOGGER.e(0, "cannot open the file ["+paa_file+"] to write.");
-	o_paa<<"FID\tIID\tNOMISS\tHOM_AA_RARE\tHOM_AA_COMM\tHOM_DA_RARE\tHOM_DA_COMM\tHET_AA_RARE\tHET_AA_COMM"<<endl;
-	for(i=0; i<_keep.size(); i++) o_paa<<_fid[i]<<"\t"<<_pid[i]<<"\t"<<nomiss[i]<<"\t"<<hom_aa_rare[i]<<"\t"<<hom_aa_comm[i]<<"\t"<<hom_da_rare[i]<<"\t"<<hom_da_comm[i]<<"\t"<<het_aa_rare[i]<<"\t"<<het_aa_comm[i]<<endl;
+	o_paa<<"FID\tIID\tNOMISS\tHOM_AA_RARE\tHOM_AA_COMM\tHOM_DA_RARE\tHOM_DA_COMM\tHET_AA_RARE\tHET_AA_COMM"<<std::endl;
+	for(i=0; i<_keep.size(); i++) o_paa<<_fid[i]<<"\t"<<_pid[i]<<"\t"<<nomiss[i]<<"\t"<<hom_aa_rare[i]<<"\t"<<hom_aa_comm[i]<<"\t"<<hom_da_rare[i]<<"\t"<<hom_da_comm[i]<<"\t"<<het_aa_rare[i]<<"\t"<<het_aa_comm[i]<<std::endl;
 	o_paa.close();
-	LOGGER<<"Proportion of ancestral alleles has been saved in file ["+paa_file+"]."<<endl;
+	LOGGER<<"Proportion of ancestral alleles has been saved in file ["+paa_file+"]."<<std::endl;
 }
 
 // inbreeding coefficient
@@ -115,8 +115,8 @@ void gcta::ibc(bool ibc_all)
     int i=0, j=0, k=0;
     
 	// Calcuate A matrix
-	LOGGER<<"Calculating the inbreeding coefficients ..."<<endl;
-	vector<double> h(_include.size()), h_i(_include.size()), w(_include.size()), p(_include.size()), p_q(_include.size()), q_p(_include.size()); // variance of each SNP, 2pq
+	LOGGER<<"Calculating the inbreeding coefficients ..."<<std::endl;
+	std::vector<double> h(_include.size()), h_i(_include.size()), w(_include.size()), p(_include.size()), p_q(_include.size()), q_p(_include.size()); // variance of each SNP, 2pq
 	#pragma omp parallel for
     for(j=0; j<_include.size(); j++){
 	    p[j]=0.5*_mu[_include[j]];
@@ -128,7 +128,7 @@ void gcta::ibc(bool ibc_all)
         if(fabs(h[j])<1.0e-50) h_i[j]=0.0;
         else h_i[j]=1.0/h[j];
 	}
-	vector<double> Fhat1, Fhat1_w, Fhat2, Fhat2_w, Fhat3, Fhat4, Fhat5, Fhat6, Fhat7, rare_hom, comm_hom, nomiss;
+	std::vector<double> Fhat1, Fhat1_w, Fhat2, Fhat2_w, Fhat3, Fhat4, Fhat5, Fhat6, Fhat7, rare_hom, comm_hom, nomiss;
     Fhat1.resize(_keep.size());
     Fhat2.resize(_keep.size());
     Fhat3.resize(_keep.size());
@@ -197,24 +197,24 @@ void gcta::ibc(bool ibc_all)
 	}
     
     // Save matrix A in binary file
-	string ibc_file=_out+".ibc";
-	ofstream o_ibc(ibc_file.c_str());
+	std::string ibc_file=_out+".ibc";
+	std::ofstream o_ibc(ibc_file.c_str());
 	if(!o_ibc) LOGGER.e(0, "cannot open the file ["+ibc_file+"] to write.");
 	if(ibc_all){
-        o_ibc<<"FID\tIID\tNOMISS\tP_RARE_HOM\tP_COMM_HOM\tFhat1\tFhat1_w\tFhat2\tFhat2_w\tFhat3\tFhat4\tFhat5\tFhat6\tFhat7"<<endl;
-        for(i=0; i<_keep.size(); i++) o_ibc<<_fid[_keep[i]]<<"\t"<<_pid[_keep[i]]<<"\t"<<nomiss[i]<<"\t"<<rare_hom[i]<<"\t"<<comm_hom[i]<<"\t"<<Fhat1[i]-1.0<<"\t"<<Fhat1_w[i]-1.0<<"\t"<<Fhat2[i]<<"\t"<<Fhat2_w[i]<<"\t"<<Fhat3[i]<<"\t"<<Fhat4[i]-1.0<<"\t"<<Fhat5[i]<<"\t"<<Fhat6[i]<<"\t"<<Fhat7[i]<<endl;
+        o_ibc<<"FID\tIID\tNOMISS\tP_RARE_HOM\tP_COMM_HOM\tFhat1\tFhat1_w\tFhat2\tFhat2_w\tFhat3\tFhat4\tFhat5\tFhat6\tFhat7"<<std::endl;
+        for(i=0; i<_keep.size(); i++) o_ibc<<_fid[_keep[i]]<<"\t"<<_pid[_keep[i]]<<"\t"<<nomiss[i]<<"\t"<<rare_hom[i]<<"\t"<<comm_hom[i]<<"\t"<<Fhat1[i]-1.0<<"\t"<<Fhat1_w[i]-1.0<<"\t"<<Fhat2[i]<<"\t"<<Fhat2_w[i]<<"\t"<<Fhat3[i]<<"\t"<<Fhat4[i]-1.0<<"\t"<<Fhat5[i]<<"\t"<<Fhat6[i]<<"\t"<<Fhat7[i]<<std::endl;
 	}
 	else{
-        o_ibc<<"FID\tIID\tNOMISS\tFhat1\tFhat2\tFhat3"<<endl;
-        for(i=0; i<_keep.size(); i++) o_ibc<<_fid[_keep[i]]<<"\t"<<_pid[_keep[i]]<<"\t"<<nomiss[i]<<"\t"<<Fhat1[i]-1.0<<"\t"<<Fhat2[i]<<"\t"<<Fhat3[i]<<endl;
+        o_ibc<<"FID\tIID\tNOMISS\tFhat1\tFhat2\tFhat3"<<std::endl;
+        for(i=0; i<_keep.size(); i++) o_ibc<<_fid[_keep[i]]<<"\t"<<_pid[_keep[i]]<<"\t"<<nomiss[i]<<"\t"<<Fhat1[i]-1.0<<"\t"<<Fhat2[i]<<"\t"<<Fhat3[i]<<std::endl;
 	}
 	o_ibc.close();
-	LOGGER<<"Inbreeding coefficients have been saved in the file ["+ibc_file+"]."<<endl;
+	LOGGER<<"Inbreeding coefficients have been saved in the file ["+ibc_file+"]."<<std::endl;
 }
 
-void gcta::Fst(string filename)
+void gcta::Fst(std::string filename)
 {
-    vector<string> subpopu, subpopu_name;
+    std::vector<std::string> subpopu, subpopu_name;
     read_subpopu(filename, subpopu, subpopu_name);
    
     eigenMatrix S;
@@ -229,13 +229,13 @@ void gcta::Fst(string filename)
     double n_bar_r = n_bar * r;
     double n_c = (n_bar_r - n_sub.squaredNorm() / n_bar_r) / (r - 1.0);
     
-    string outfile=_out+".fst";
-    LOGGER<<"\nSaving the Fst test results"<<_include.size()<<" SNPs to ["+outfile+"] ..."<<endl;
-    ofstream ofile(outfile.c_str());
+    std::string outfile=_out+".fst";
+    LOGGER<<"\nSaving the Fst test results"<<_include.size()<<" SNPs to ["+outfile+"] ..."<<std::endl;
+    std::ofstream ofile(outfile.c_str());
     if(!ofile) LOGGER.e(0, "cannot open the file ["+outfile+"] to write.");
     ofile<<"Chr\tSNP\tbp\trefA\t";
     for(i=0; i<r; i++) ofile<<"freq_"<<subpopu_name[i]<<"(n="<<n_sub[i]<<")\t";
-    ofile<<"Fst"<<endl;
+    ofile<<"Fst"<<std::endl;
     double p_bar=0.0, s_sq=0.0, h_bar=0.0, a=0.0, b=0.0, c=0.0, Fst=0.0, d_buf=0.0;
     for(i=0; i<_include.size(); i++){
         ofile<<_chr[_include[i]]<<"\t"<<_snp_name[_include[i]]<<"\t"<<_bp[_include[i]]<<"\t"<<_ref_A[_include[i]]<<"\t";
@@ -262,27 +262,27 @@ void gcta::Fst(string filename)
         Fst_fixed = Fst_fixed / (p_mean * (1.0 - p_mean));
         Fst_fixed = Fst_fixed / ((r - 1.0) * n_bar);*/
 
-        ofile<<Fst<<endl;
+        ofile<<Fst<<std::endl;
     }
     ofile.close();
 }
 
-void gcta::read_subpopu(string filename, vector<string> &subpopu, vector<string> &subpopu_name)
+void gcta::read_subpopu(std::string filename, std::vector<std::string> &subpopu, std::vector<std::string> &subpopu_name)
 {
-    LOGGER<<"Reading sub-population information from ["+filename+"]."<<endl;
-    ifstream ifstream_subpopu(filename.c_str());
+    LOGGER<<"Reading sub-population information from ["+filename+"]."<<std::endl;
+    std::ifstream ifstream_subpopu(filename.c_str());
     if(!ifstream_subpopu) LOGGER.e(0, "cannot open the file ["+filename+"] to read.");
     
-    vector<string> ID;
-    vector< vector<string> > subpopu_buf;
+    std::vector<std::string> ID;
+    std::vector< std::vector<std::string> > subpopu_buf;
     read_fac(ifstream_subpopu, ID, subpopu_buf);
     update_id_map_kp(ID, _id_map, _keep);
-    LOGGER<<"Sub-population information for "<<_keep.size()<<" individuals matched to the genotype data."<<endl;
+    LOGGER<<"Sub-population information for "<<_keep.size()<<" individuals matched to the genotype data."<<std::endl;
     
     int i=0, j=0;
-    map<string, int> uni_id_map;
-    map<string, int>::iterator iter;
-    for(i=0; i<_keep.size(); i++) uni_id_map.insert(pair<string,int>(_fid[_keep[i]]+":"+_pid[_keep[i]], i));
+    std::map<std::string, int> uni_id_map;
+    std::map<std::string, int>::iterator iter;
+    for(i=0; i<_keep.size(); i++) uni_id_map.insert(std::pair<std::string,int>(_fid[_keep[i]]+":"+_pid[_keep[i]], i));
     subpopu.clear();
     subpopu.resize(_keep.size());
     for(i=0; i<ID.size(); i++){
@@ -292,13 +292,13 @@ void gcta::read_subpopu(string filename, vector<string> &subpopu, vector<string>
     
     subpopu_name.clear();
     subpopu_name=subpopu;
-    stable_sort(subpopu_name.begin(), subpopu_name.end());
+    std::stable_sort(subpopu_name.begin(), subpopu_name.end());
     subpopu_name.erase(unique(subpopu_name.begin(), subpopu_name.end()), subpopu_name.end());
  }
 
- void gcta::std_XMat_subpopu(string subpopu_file, Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std)
+ void gcta::std_XMat_subpopu(std::string subpopu_file, Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std)
 {
-    vector<string> subpopu, subpopu_name;
+    std::vector<std::string> subpopu, subpopu_name;
     read_subpopu(subpopu_file, subpopu, subpopu_name);
    
     eigenMatrix S;
@@ -323,7 +323,7 @@ void gcta::read_subpopu(string filename, vector<string> &subpopu, vector<string>
     }
 
     int popu = 0;
-    vector<eigenVector> sd_SNP_sub(popu_num), mu_SNP_sub(popu_num);
+    std::vector<eigenVector> sd_SNP_sub(popu_num), mu_SNP_sub(popu_num);
     for(popu  = 0; popu < popu_num; popu++) {
         (mu_SNP_sub[popu]).resize(m);
         (sd_SNP_sub[popu]).resize(m);

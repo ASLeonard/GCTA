@@ -29,7 +29,7 @@
 
 double eps = 1e-6;
 
-bool file_exists(string filestr) {
+bool file_exists(std::string filestr) {
     if(FILE *input_file = fopen(filestr.c_str(), "r")) {
         fclose(input_file);
         return true;
@@ -37,10 +37,10 @@ bool file_exists(string filestr) {
     else return false;
 }
 
-vector<vector<int>> split_extract(vector<int> extract) {
+std::vector<std::vector<int>> split_extract(std::vector<int> extract) {
     int i = 0, nBlock = 0, nExtract = extract.size();
-    vector<int> indexToExtract(2);
-    vector<vector<int>> blockToExtract;
+    std::vector<int> indexToExtract(2);
+    std::vector<std::vector<int>> blockToExtract;
   
     indexToExtract[0] = indexToExtract[1] = extract[0];
     blockToExtract.push_back(indexToExtract);
@@ -56,13 +56,13 @@ vector<vector<int>> split_extract(vector<int> extract) {
     return(blockToExtract);
 }
 
-void extractRow(eigenMatrix &matrix, vector<int> rowToExtract)
+void extractRow(eigenMatrix &matrix, std::vector<int> rowToExtract)
 {
     int i = 0;
     int numRows = rowToExtract.size(), numCols = matrix.cols();
     eigenMatrix matrix_new(numRows, numCols);
 
-    vector<vector<int>> blockToExtract = split_extract(rowToExtract);
+    std::vector<std::vector<int>> blockToExtract = split_extract(rowToExtract);
     int nBlock = blockToExtract.size(), rowIndex = 0;
     for( i = 0; i < nBlock; i++ ) {
         int numRowsBuf = blockToExtract[i][1] - blockToExtract[i][0] + 1;
@@ -73,13 +73,13 @@ void extractRow(eigenMatrix &matrix, vector<int> rowToExtract)
     matrix = matrix_new;
 }
 
-void extractCol(eigenMatrix &matrix, vector<int> colToExtract)
+void extractCol(eigenMatrix &matrix, std::vector<int> colToExtract)
 {
     int i = 0;
     int numRows = matrix.rows(), numCols = colToExtract.size();
     eigenMatrix matrix_new(numRows, numCols);
 
-    vector<vector<int>> blockToExtract = split_extract(colToExtract);
+    std::vector<std::vector<int>> blockToExtract = split_extract(colToExtract);
     int nBlock = blockToExtract.size(), colIndex = 0;
     for( i = 0; i < nBlock; i++ ) {
         int numColsBuf = blockToExtract[i][1] - blockToExtract[i][0] + 1;
@@ -122,38 +122,38 @@ void removeColumn(eigenMatrix &matrix, int colToRemove)
     matrix.conservativeResize(numRows,numCols);
 }
 
-vector<string> update_common_snps(const vector<string> snplist, vector<string> common_snps) {
+std::vector<std::string> update_common_snps(const std::vector<std::string> snplist, std::vector<std::string> common_snps) {
     
     int i = 0, nsnpbuf = snplist.size();
-    vector<string> snpbuf;
-    std::vector<string>::iterator iter;
+    std::vector<std::string> snpbuf;
+    std::vector<std::string>::iterator iter;
     
     for(i=0; i<nsnpbuf; i++) {
-        iter = find(common_snps.begin(), common_snps.end(), snplist[i]);
+        iter = std::find(common_snps.begin(), common_snps.end(), snplist[i]);
         if( iter != common_snps.end()) snpbuf.push_back(snplist[i]);
     }
-    stable_sort(snpbuf.begin(), snpbuf.end());
+    std::stable_sort(snpbuf.begin(), snpbuf.end());
     
     return snpbuf;
 }
 
-void read_metafile_list(string mtcojolist_file, string &target_pheno, string &target_pheno_file, vector<string> &covar_pheno, vector<string> &covar_pheno_file, vector<double> &popu_prev, vector<double> &smpl_prev) {
+void read_metafile_list(std::string mtcojolist_file, std::string &target_pheno, std::string &target_pheno_file, std::vector<std::string> &covar_pheno, std::vector<std::string> &covar_pheno_file, std::vector<double> &popu_prev, std::vector<double> &smpl_prev) {
 
-    ifstream meta_list(mtcojolist_file.c_str());
+    std::ifstream meta_list(mtcojolist_file.c_str());
     if (!meta_list)
         LOGGER.e(0, "cannot open the file [" + mtcojolist_file + "] to read.");
     
-    string strbuf="", prevbuf1="", prevbuf2="";
+    std::string strbuf="", prevbuf1="", prevbuf2="";
     double d_prev1 = 0.0, d_prev2 = 0.0;
     // Retrieve the GWAS summary data file
     // The 1st row: the target trait
     int line_number = 1;
     std::getline(meta_list, strbuf);
     std::istringstream linebuf(strbuf);
-    std::istream_iterator<string> begin_title(linebuf), end_title;
-    vector<string> line_elements(begin_title, end_title);
+    std::istream_iterator<std::string> begin_title(linebuf), end_title;
+    std::vector<std::string> line_elements(begin_title, end_title);
     if(line_elements.size() != 2 && line_elements.size() != 4) {
-        LOGGER.e(0, "the format of file [" + mtcojolist_file + "] is incorrect, line " + to_string(line_number) + ".");
+        LOGGER.e(0, "the format of file [" + mtcojolist_file + "] is incorrect, line " + std::to_string(line_number) + ".");
     }
     target_pheno=line_elements[0]; target_pheno_file=line_elements[1];
     // prevelance
@@ -181,10 +181,10 @@ void read_metafile_list(string mtcojolist_file, string &target_pheno, string &ta
         //std::istringstream linebuf(strbuf);
         linebuf.clear();
         linebuf.str(strbuf);
-        std::istream_iterator<string> begin(linebuf), end;
-        vector<string> line_elements(begin, end);
+        std::istream_iterator<std::string> begin(linebuf), end;
+        std::vector<std::string> line_elements(begin, end);
         if(line_elements.size() != 2 && line_elements.size() != 4) {
-            LOGGER.e(0, "the format of file [" + mtcojolist_file + "] is incorrect, line " + to_string(line_number) + ".");
+            LOGGER.e(0, "the format of file [" + mtcojolist_file + "] is incorrect, line " + std::to_string(line_number) + ".");
         }
         covar_pheno.push_back(line_elements[0]);
         covar_pheno_file.push_back(line_elements[1]);
@@ -210,13 +210,13 @@ void read_metafile_list(string mtcojolist_file, string &target_pheno, string &ta
     meta_list.close();
 }
 
-void gcta::init_meta_snp_map(vector<string> snplist, map<string, int> &snp_name_map, vector<string> &snp_name, vector<int> &remain_snp) {
+void gcta::init_meta_snp_map(std::vector<std::string> snplist, std::map<std::string, int> &snp_name_map, std::vector<std::string> &snp_name, std::vector<int> &remain_snp) {
     int i=0, size=0, nsnp = snplist.size();
 
     snp_name_map.clear(); remain_snp.clear();
     remain_snp.resize(nsnp); 
     for(i=0; i<nsnp; i++) {
-        snp_name_map.insert( pair<string,int>(snplist[i], i) );
+        snp_name_map.insert( std::pair<std::string,int>(snplist[i], i) );
         if(size==snp_name_map.size()) LOGGER.e(0, "Duplicated SNP ID found: " + snplist[i] + ".");
         size = snp_name_map.size();
         remain_snp[i] = i;
@@ -225,7 +225,7 @@ void gcta::init_meta_snp_map(vector<string> snplist, map<string, int> &snp_name_
     snp_name.clear(); snp_name = snplist;
 }
 
-void gcta::init_gwas_variable(vector<vector<string>> &snp_a1, vector<vector<string>> &snp_a2, eigenMatrix &snp_freq, eigenMatrix &snp_b, eigenMatrix &snp_se, eigenMatrix &snp_pval, eigenMatrix &n, int npheno, int nsnp) {
+void gcta::init_gwas_variable(std::vector<std::vector<std::string>> &snp_a1, std::vector<std::vector<std::string>> &snp_a2, eigenMatrix &snp_freq, eigenMatrix &snp_b, eigenMatrix &snp_se, eigenMatrix &snp_pval, eigenMatrix &n, int npheno, int nsnp) {
     int i = 0;
     // two alleles
     snp_a1.clear(); snp_a2.clear();
@@ -240,9 +240,9 @@ void gcta::init_gwas_variable(vector<vector<string>> &snp_a1, vector<vector<stri
     snp_pval.resize(nsnp, npheno); n.resize(nsnp, npheno);
 }
 
-void gcta::update_meta_snp_list(vector<string> &snplist, map<string, int> snp_id_map) {
+void gcta::update_meta_snp_list(std::vector<std::string> &snplist, std::map<std::string, int> snp_id_map) {
     int i = 0, nsnpbuf = 0;
-    vector<string> snpbuf(snplist);
+    std::vector<std::string> snpbuf(snplist);
     nsnpbuf = snplist.size();
 
     snplist.clear();
@@ -252,28 +252,28 @@ void gcta::update_meta_snp_list(vector<string> &snplist, map<string, int> snp_id
     }
 }
 
-void gcta::update_meta_snp_map(vector<string> snplist, map<string, int> &snp_id_map, vector<string> &snp_id, vector<int> &snp_indx, bool indx_flag) {
+void gcta::update_meta_snp_map(std::vector<std::string> snplist, std::map<std::string, int> &snp_id_map, std::vector<std::string> &snp_id, std::vector<int> &snp_indx, bool indx_flag) {
     int i = 0, j = 0, size = 0, nsnp = snplist.size();
-    map<string,int> snp_add_map;
+    std::map<std::string,int> snp_add_map;
     
     for(i=0, j=snp_id_map.size(); i<nsnp; i++) {
         // Check duplicated SNP ID
-        snp_add_map.insert(pair<string,int>(snplist[i], i));
+        snp_add_map.insert(std::pair<std::string,int>(snplist[i], i));
         if(size==snp_add_map.size()) LOGGER.e(0, "Duplicated SNP ID found: " + snplist[i] + ".");
         size = snp_add_map.size();
 
         if(snp_id_map.find(snplist[i]) != snp_id_map.end()) continue;
-        snp_id_map.insert(pair<string, int>(snplist[i], j));
+        snp_id_map.insert(std::pair<std::string, int>(snplist[i], j));
         snp_id.push_back(snplist[i]);
         if(indx_flag) snp_indx.push_back(j);
         j++;
     }
 }
 
-void gcta::update_meta_snp(map<string,int> &snp_name_map, vector<string> &snp_name, vector<int> &snp_remain) {
+void gcta::update_meta_snp(std::map<std::string,int> &snp_name_map, std::vector<std::string> &snp_name, std::vector<int> &snp_remain) {
     int i = 0, nsnp = snp_remain.size();
-    vector<int> snp_remain_buf;
-    vector<string> snp_name_buf;
+    std::vector<int> snp_remain_buf;
+    std::vector<std::string> snp_name_buf;
 
     snp_name_buf = snp_name;
     snp_remain_buf = snp_remain;
@@ -287,16 +287,16 @@ void gcta::update_meta_snp(map<string,int> &snp_name_map, vector<string> &snp_na
     // reset snp_name_map
     snp_name_map.clear();
     for(i=0; i<nsnp; i++) 
-        snp_name_map.insert(pair<string, int>(snp_name[i], i));
+        snp_name_map.insert(std::pair<std::string, int>(snp_name[i], i));
 }
 
-void update_mtcojo_snp_kp(const vector<string> adjsnps, map<string,int> &snp_id_map, vector<int> &remain_snp_indx) {
+void update_mtcojo_snp_kp(const std::vector<std::string> adjsnps, std::map<std::string,int> &snp_id_map, std::vector<int> &remain_snp_indx) {
     
     int i=0, nsnpbuf = adjsnps.size();
-    map<string,int> snp_id_map_buf(snp_id_map);
+    std::map<std::string,int> snp_id_map_buf(snp_id_map);
     for(i=0; i<nsnpbuf; i++) snp_id_map_buf.erase(adjsnps[i]);
     
-    std::map<string,int>::iterator iter;
+    std::map<std::string,int>::iterator iter;
     for(iter=snp_id_map_buf.begin(); iter!=snp_id_map_buf.end(); iter++)
         snp_id_map.erase(iter->first);
     
@@ -304,13 +304,13 @@ void update_mtcojo_snp_kp(const vector<string> adjsnps, map<string,int> &snp_id_
     remain_snp_indx.clear(); remain_snp_indx.resize(nsnpbuf);
     for(iter=snp_id_map.begin(), i=0; iter!=snp_id_map.end(); iter++, i++) remain_snp_indx[i] = iter->second;
     
-    stable_sort(remain_snp_indx.begin(), remain_snp_indx.end());
+    std::stable_sort(remain_snp_indx.begin(), remain_snp_indx.end());
 }
 
-void gcta::update_mtcojo_snp_rm(vector<string> adjsnps, map<string,int> &snp_id_map, vector<int> &remain_snp_indx) {
+void gcta::update_mtcojo_snp_rm(std::vector<std::string> adjsnps, std::map<std::string,int> &snp_id_map, std::vector<int> &remain_snp_indx) {
     
     int i=0, nsnpbuf=adjsnps.size();
-    std::map<string,int>::iterator iter;
+    std::map<std::string,int>::iterator iter;
     
     for(i=0; i<nsnpbuf; i++) snp_id_map.erase(adjsnps[i]);
     
@@ -318,26 +318,26 @@ void gcta::update_mtcojo_snp_rm(vector<string> adjsnps, map<string,int> &snp_id_
     remain_snp_indx.clear(); remain_snp_indx.resize(nsnpbuf);
     for(iter=snp_id_map.begin(), i=0; iter!=snp_id_map.end(); iter++, i++) remain_snp_indx[i] = iter->second;
 
-    stable_sort(remain_snp_indx.begin(), remain_snp_indx.end());
+    std::stable_sort(remain_snp_indx.begin(), remain_snp_indx.end());
 }
 
-vector<string> gcta::read_snp_metafile_txt(string metafile, map<string,int> &gws_snp_name_map, double thresh) {
-    ifstream meta_snp(metafile.c_str());
+std::vector<std::string> gcta::read_snp_metafile_txt(std::string metafile, std::map<std::string,int> &gws_snp_name_map, double thresh) {
+    std::ifstream meta_snp(metafile.c_str());
     if (!meta_snp)
          LOGGER.e(0, "cannot open the file [" + metafile + "] to read.");
     
-    string strbuf="", valbuf = "";
-    vector<string> snplist;
+    std::string strbuf="", valbuf = "";
+    std::vector<std::string> snplist;
     int line_number=0;
 
     // Read the summary data
     while(std::getline(meta_snp, strbuf)) {
         line_number++;
         std::istringstream linebuf(strbuf);
-        std::istream_iterator<string> begin(linebuf), end;
-        vector<string> line_elements(begin, end);
+        std::istream_iterator<std::string> begin(linebuf), end;
+        std::vector<std::string> line_elements(begin, end);
         if(line_elements.size() != 8) {
-            LOGGER.e(0, "the GWAS summary data file [" + metafile + "] should be in GCTA-COJO format, line " + to_string(line_number) + ".");
+            LOGGER.e(0, "the GWAS summary data file [" + metafile + "] should be in GCTA-COJO format, line " + std::to_string(line_number) + ".");
         }
         if(line_number==1) continue;
         // keep significant SNPs
@@ -347,16 +347,16 @@ vector<string> gcta::read_snp_metafile_txt(string metafile, map<string,int> &gws
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") pval_buf = atof(valbuf.c_str());
         if( pval_buf < thresh && (gws_snp_name_map.find(line_elements[0]) == gws_snp_name_map.end()) ) {
             int size = gws_snp_name_map.size();
-            gws_snp_name_map.insert(pair<string,int>(line_elements[0], size));
+            gws_snp_name_map.insert(std::pair<std::string,int>(line_elements[0], size));
         }
     }
     meta_snp.close();
     return snplist;
 }
 
-vector<string> gcta::read_snp_metafile_gz(string metafile, map<string,int> &gws_snp_name_map, double thresh) {
-    string strbuf="", snpbuf="";
-    vector<string> snplist;
+std::vector<std::string> gcta::read_snp_metafile_gz(std::string metafile, std::map<std::string,int> &gws_snp_name_map, double thresh) {
+    std::string strbuf="", snpbuf="";
+    std::vector<std::string> snplist;
     int line_number=0;
     
     std::ifstream raw_file(metafile, std::ios::binary);
@@ -366,26 +366,26 @@ vector<string> gcta::read_snp_metafile_gz(string metafile, map<string,int> &gws_
     meta_snp.push(boost::iostreams::gzip_decompressor());
     meta_snp.push(raw_file);
     
-    string err_msg = "Failed to read [" + metafile + "]. An error occurs in line ";
+    std::string err_msg = "Failed to read [" + metafile + "]. An error occurs in line ";
 
     // Read the summary data
-    string line;
+    std::string line;
     while(std::getline(meta_snp, line)) {
         line_number ++;
         if(line_number==1) continue;
-        stringstream ss(line);
-        if (!(ss >> snpbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
+        std::stringstream ss(line);
+        if (!(ss >> snpbuf)) LOGGER.e(0, err_msg + std::to_string(line_number) + "," + line);
         // Save the SNPs
         snplist.push_back(snpbuf);
         int i = 0;
         for( i=0; i<6; i++)
-            if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
+            if (!(ss >> strbuf)) LOGGER.e(0, err_msg + std::to_string(line_number) + "," + line);
         // Save the p-value
         double pval_buf = 1.0;
         if(strbuf!="." && strbuf!="NA" && strbuf!="NAN") pval_buf = atof(strbuf.c_str());
         if( pval_buf < thresh && (gws_snp_name_map.find(snpbuf) == gws_snp_name_map.end()) ) {
             int size = gws_snp_name_map.size();
-            gws_snp_name_map.insert(pair<string,int>(snpbuf, size));
+            gws_snp_name_map.insert(std::pair<std::string,int>(snpbuf, size));
         }
     }
 
@@ -394,31 +394,31 @@ vector<string> gcta::read_snp_metafile_gz(string metafile, map<string,int> &gws_
     return snplist;
 }
 
-double gcta::read_single_metafile_txt(string metafile, map<string, int> id_map,
-                         vector<string> &snp_a1, vector<string> &snp_a2,
+double gcta::read_single_metafile_txt(std::string metafile, std::map<std::string, int> id_map,
+                         std::vector<std::string> &snp_a1, std::vector<std::string> &snp_a2,
                          eigenVector &snp_freq, eigenVector &snp_b,
                          eigenVector &snp_se, eigenVector &snp_pval,
-                         eigenVector &snp_n, vector<bool> &snp_flag) {
+                         eigenVector &snp_n, std::vector<bool> &snp_flag) {
    
-    ifstream meta_raw(metafile.c_str());
+    std::ifstream meta_raw(metafile.c_str());
     if (!meta_raw)
         LOGGER.e(0, "cannot open the file [" + metafile + "] to read.");
-    string strbuf="", valbuf="";
+    std::string strbuf="", valbuf="";
     int line_number=0, snp_indx=0;
-    map<string, int>::iterator iter;
+    std::map<std::string, int>::iterator iter;
     // Read the summary data
     double pval_thresh = 0.5, h_buf = 0.0, vp_buf = 0.0, median_vp = 0.0;
     bool missing_flag = false;
-    vector<double> vec_vp_buf;
+    std::vector<double> vec_vp_buf;
      
     while(std::getline(meta_raw, strbuf)) {
         missing_flag = false;
         line_number++;
         std::istringstream linebuf(strbuf);
-        std::istream_iterator<string> begin(linebuf), end;
-        vector<string> line_elements(begin, end);
+        std::istream_iterator<std::string> begin(linebuf), end;
+        std::vector<std::string> line_elements(begin, end);
         if(line_elements.size() != 8) {
-            LOGGER.e(0, "the GWAS summary data file [" + metafile + "] should be in GCTA-COJO format, line " + to_string(line_number) + ".");
+            LOGGER.e(0, "the GWAS summary data file [" + metafile + "] should be in GCTA-COJO format, line " + std::to_string(line_number) + ".");
         }        
         // Read the summary data
         if(line_number==1) continue;
@@ -457,11 +457,11 @@ double gcta::read_single_metafile_txt(string metafile, map<string, int> id_map,
     return median_vp;
 }
 
-double gcta::read_single_metafile_gz(string metafile, map<string, int> id_map,
-                         vector<string> &snp_a1, vector<string> &snp_a2,
+double gcta::read_single_metafile_gz(std::string metafile, std::map<std::string, int> id_map,
+                         std::vector<std::string> &snp_a1, std::vector<std::string> &snp_a2,
                          eigenVector &snp_freq, eigenVector &snp_b,
                          eigenVector &snp_se, eigenVector &snp_pval,
-                         eigenVector &snp_n, vector<bool> &snp_flag) {
+                         eigenVector &snp_n, std::vector<bool> &snp_flag) {
    
     std::ifstream raw_file(metafile, std::ios::binary);
     if (!raw_file.is_open())
@@ -469,54 +469,54 @@ double gcta::read_single_metafile_gz(string metafile, map<string, int> id_map,
     boost::iostreams::filtering_istream meta_raw;
     meta_raw.push(boost::iostreams::gzip_decompressor());
     meta_raw.push(raw_file);
-    string err_msg = "Failed to read [" + metafile + "]. An error occurs in line ";
+    std::string err_msg = "Failed to read [" + metafile + "]. An error occurs in line ";
 
     int line_number=0, snp_indx=0;
-    map<string, int>::iterator iter;
+    std::map<std::string, int>::iterator iter;
     // Read the summary data
     double pval_thresh = 0.5, h_buf = 0.0, vp_buf = 0.0, median_vp = 0.0;
     bool missing_flag = false;
-    string strbuf = "";
-    vector<double> vec_vp_buf;
-    string line;
+    std::string strbuf = "";
+    std::vector<double> vec_vp_buf;
+    std::string line;
     while(std::getline(meta_raw, line)) {
         missing_flag = false;
         line_number++;
         if(line_number==1) continue;
          
-        string snpbuf = "", strbuf = "", valbuf = "";
-        stringstream ss(line);
+        std::string snpbuf = "", strbuf = "", valbuf = "";
+        std::stringstream ss(line);
         // SNP
-        if (!(ss >> snpbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
+        if (!(ss >> snpbuf)) LOGGER.e(0, err_msg + std::to_string(line_number) + "," + line);
         iter = id_map.find(snpbuf);
         if(iter == id_map.end()) continue;     
         snp_indx = iter->second;
         // a1 
-        if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
+        if (!(ss >> strbuf)) LOGGER.e(0, err_msg + std::to_string(line_number) + "," + line);
         StrFunc::to_upper(strbuf);
         snp_a1[snp_indx] = strbuf;
         // a2
-        if (!(ss >> strbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
+        if (!(ss >> strbuf)) LOGGER.e(0, err_msg + std::to_string(line_number) + "," + line);
         StrFunc::to_upper(strbuf);
         snp_a2[snp_indx] = strbuf;
         // freq
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + std::to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_freq(snp_indx) = atof(valbuf.c_str());
         else { snp_freq(snp_indx) = nan(""); missing_flag=true; }
         // b
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + std::to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_b(snp_indx) = atof(valbuf.c_str());
         else { snp_b(snp_indx) = nan(""); missing_flag=true; }
         // se
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + std::to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_se(snp_indx) = atof(valbuf.c_str());
         else { snp_se(snp_indx) = nan(""); missing_flag=true; }
         // p-value
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + std::to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_pval(snp_indx) = atof(valbuf.c_str());
         else { snp_pval(snp_indx) = nan(""); missing_flag=true; }
         // n
-        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + to_string(line_number) + "," + line);
+        if (!(ss >> valbuf)) LOGGER.e(0, err_msg + std::to_string(line_number) + "," + line);
         if(valbuf!="." && valbuf!="NA" && valbuf!="NAN") snp_n(snp_indx) = atof(valbuf.c_str());
         else { snp_n(snp_indx) = nan(""); missing_flag=true; }
         snp_flag[snp_indx] = true;
@@ -534,16 +534,16 @@ double gcta::read_single_metafile_gz(string metafile, map<string, int> id_map,
     return median_vp;
 }
 
-vector<string> gcta::remove_bad_snps(vector<string> snp_name, vector<int> snp_remain, vector<vector<bool>> snp_flag, vector<vector<string>> &snp_a1, vector<vector<string>> &snp_a2, eigenMatrix &snp_freq,  
-                                    eigenMatrix &snp_b, eigenMatrix snp_se, eigenMatrix snp_pval, eigenMatrix snp_n, map<string,int> plink_snp_name_map, vector<string> snp_ref_a1, vector<string> snp_ref_a2, 
-                                    int ntarget, int ncovar, string outfile_name) {
+std::vector<std::string> gcta::remove_bad_snps(std::vector<std::string> snp_name, std::vector<int> snp_remain, std::vector<std::vector<bool>> snp_flag, std::vector<std::vector<std::string>> &snp_a1, std::vector<std::vector<std::string>> &snp_a2, eigenMatrix &snp_freq,  
+                                    eigenMatrix &snp_b, eigenMatrix snp_se, eigenMatrix snp_pval, eigenMatrix snp_n, std::map<std::string,int> plink_snp_name_map, std::vector<std::string> snp_ref_a1, std::vector<std::string> snp_ref_a2, 
+                                    int ntarget, int ncovar, std::string outfile_name) {
     int i=0, j=0, nsnp = snp_remain.size(), npheno = ntarget+ncovar;
     double snp_freq_bak = 0.0;
-    string snp_a1_bak = "", snp_a2_bak = ""; 
-    vector<string> badsnps;
-    vector<int> bad_indx;
-    map<string,int>::iterator iter;
-    vector<vector<bool>> flip_flag(npheno);
+    std::string snp_a1_bak = "", snp_a2_bak = ""; 
+    std::vector<std::string> badsnps;
+    std::vector<int> bad_indx;
+    std::map<std::string,int>::iterator iter;
+    std::vector<std::vector<bool>> flip_flag(npheno);
 
     for(i=0; i<npheno; i++) {
         flip_flag[i].resize(nsnp);
@@ -553,7 +553,7 @@ vector<string> gcta::remove_bad_snps(vector<string> snp_name, vector<int> snp_re
     for( i=0; i<nsnp; i++) {
         bool iterFlag=true;
         int snpindx = -9;
-        vector<string> allelebuf;
+        std::vector<std::string> allelebuf;
         // Choose a SNP
         iter = plink_snp_name_map.find(snp_name[snp_remain[i]]);
         if(iter!=plink_snp_name_map.end()) snpindx = iter->second;
@@ -595,7 +595,7 @@ vector<string> gcta::remove_bad_snps(vector<string> snp_name, vector<int> snp_re
         }
 
         // Remove SNPs with multiple alleles
-        stable_sort(allelebuf.begin(), allelebuf.end());      
+        std::stable_sort(allelebuf.begin(), allelebuf.end());      
         allelebuf.erase(unique(allelebuf.begin(), allelebuf.end()), allelebuf.end());
         if(allelebuf.size()!=2) iterFlag=false;
         // Collect bad SNPs
@@ -612,29 +612,29 @@ vector<string> gcta::remove_bad_snps(vector<string> snp_name, vector<int> snp_re
     }
 
     if (!badsnps.empty()) {
-        string badsnpfile = outfile_name + ".badsnps", strbuf="";
-        ofstream obadsnp(badsnpfile.c_str());
+        std::string badsnpfile = outfile_name + ".badsnps", strbuf="";
+        std::ofstream obadsnp(badsnpfile.c_str());
         if(!obadsnp) LOGGER.e(0, "cannot open file [" + badsnpfile + "] to write bad SNPs.");
         int nbadsnps = badsnps.size();
         for (i = 0; i < nbadsnps; i++) 
-            obadsnp << badsnps[i] << endl;
+            obadsnp << badsnps[i] << std::endl;
         obadsnp.close();
-        LOGGER.i(0,  to_string(nbadsnps) + " SNPs have missing value or mismatched alleles. These SNPs have been saved in [" + badsnpfile + "].");
+        LOGGER.i(0,  std::to_string(nbadsnps) + " SNPs have missing value or mismatched alleles. These SNPs have been saved in [" + badsnpfile + "].");
     }
    
-    stable_sort(badsnps.begin(), badsnps.end());
+    std::stable_sort(badsnps.begin(), badsnps.end());
     return badsnps;
 }
 
-vector<string> gcta::remove_freq_diff_snps(vector<string> meta_snp_name, vector<int> meta_snp_remain, map<string,int> snp_name_map, vector<double> ref_freq, eigenMatrix meta_freq, vector<vector<bool>> snp_flag, int ntrait, double freq_thresh, string outfile_name) {
+std::vector<std::string> gcta::remove_freq_diff_snps(std::vector<std::string> meta_snp_name, std::vector<int> meta_snp_remain, std::map<std::string,int> snp_name_map, std::vector<double> ref_freq, eigenMatrix meta_freq, std::vector<std::vector<bool>> snp_flag, int ntrait, double freq_thresh, std::string outfile_name) {
     int i = 0, nsnp = meta_snp_remain.size(), nsnp_ttl = meta_snp_remain.size();
-    string snpbuf="";
-    vector<string> afsnps;
-    map<string,int>::iterator iter_ref;
+    std::string snpbuf="";
+    std::vector<std::string> afsnps;
+    std::map<std::string,int>::iterator iter_ref;
 
     for( i=0; i<nsnp; i++ ) {
         int refsnp_index = 0;
-        vector<double> snpfreq;
+        std::vector<double> snpfreq;
 
         // AF from the reference sample
         snpbuf = meta_snp_name[meta_snp_remain[i]];
@@ -665,23 +665,23 @@ vector<string> gcta::remove_freq_diff_snps(vector<string> meta_snp_name, vector<
     }  
 
     if (!afsnps.empty()) {
-        string afsnpfile = outfile_name + ".freq.badsnps", strbuf="";
-        ofstream oafsnp(afsnpfile.c_str());
+        std::string afsnpfile = outfile_name + ".freq.badsnps", strbuf="";
+        std::ofstream oafsnp(afsnpfile.c_str());
         if(!oafsnp) LOGGER.e(0, "cannot open file [" + afsnpfile + "] to write bad SNPs.");
         int nafsnps = afsnps.size();
-        for (i = 0; i < nafsnps; i++) oafsnp << afsnps[i] << endl;
+        for (i = 0; i < nafsnps; i++) oafsnp << afsnps[i] << std::endl;
         oafsnp.close();
-        LOGGER.i(0,  to_string(nafsnps) + " SNP(s) have large difference of allele frequency between the GWAS summary data and the reference sample. These SNPs have been saved in [" + afsnpfile + "].");
+        LOGGER.i(0,  std::to_string(nafsnps) + " SNP(s) have large difference of allele frequency between the GWAS summary data and the reference sample. These SNPs have been saved in [" + afsnpfile + "].");
         if(nafsnps > nsnp_ttl*0.05) 
             LOGGER.e(0, "there are too many SNPs that have large difference in allele frequency. Please check the GWAS summary data.");
     }
     return(afsnps);
 }
 
-vector<string> gcta::remove_mono_snps(map<string,int> snp_name_map, vector<double> ref_snpfreq, string outfile_name) {
+std::vector<std::string> gcta::remove_mono_snps(std::map<std::string,int> snp_name_map, std::vector<double> ref_snpfreq, std::string outfile_name) {
     int i = 0, n_raresnp = 0;
-    vector<string> afsnps;
-    map<string,int>::iterator iter;
+    std::vector<std::string> afsnps;
+    std::map<std::string,int>::iterator iter;
 
     for(iter=snp_name_map.begin(); iter!=snp_name_map.end(); iter++) {
         double af = ref_snpfreq[iter->second]/2;
@@ -690,25 +690,25 @@ vector<string> gcta::remove_mono_snps(map<string,int> snp_name_map, vector<doubl
         if(af < 0.01) n_raresnp++;
     }
 
-    if(n_raresnp > 0) LOGGER.w(0,  "There are " + to_string(n_raresnp) + " SNPs with MAF < 0.01 in the reference sample.");
+    if(n_raresnp > 0) LOGGER.w(0,  "There are " + std::to_string(n_raresnp) + " SNPs with MAF < 0.01 in the reference sample.");
 
     if (!afsnps.empty()) {
-        string afsnpfile = outfile_name + ".mono.badsnps", strbuf="";
-        ofstream oafsnp(afsnpfile.c_str());
+        std::string afsnpfile = outfile_name + ".mono.badsnps", strbuf="";
+        std::ofstream oafsnp(afsnpfile.c_str());
         if(!oafsnp) LOGGER.e(0, "cannot open file [" + afsnpfile + "] to write bad SNPs.");
         int nafsnps = afsnps.size();
-        for (i = 0; i < nafsnps; i++) oafsnp << afsnps[i] << endl;
+        for (i = 0; i < nafsnps; i++) oafsnp << afsnps[i] << std::endl;
         oafsnp.close();
-        LOGGER.i(0,  to_string(nafsnps) + " monomorphic SNP(s) have been saved in [" + afsnpfile + "].");
+        LOGGER.i(0,  std::to_string(nafsnps) + " monomorphic SNP(s) have been saved in [" + afsnpfile + "].");
     }
 
     return(afsnps);
 }
 
-vector<string> gcta::filter_meta_snp_pval(vector<string> snp_name, vector<int> remain_snp_indx,  eigenMatrix snp_pval, int start_indx, int end_indx, vector<vector<bool>> snp_flag, double pval_thresh) {
+std::vector<std::string> gcta::filter_meta_snp_pval(std::vector<std::string> snp_name, std::vector<int> remain_snp_indx,  eigenMatrix snp_pval, int start_indx, int end_indx, std::vector<std::vector<bool>> snp_flag, double pval_thresh) {
     
     int i=0, j=0, nsnpbuf = remain_snp_indx.size();
-    vector<string> kpsnps;
+    std::vector<std::string> kpsnps;
    
     for(i=0; i<nsnpbuf; i++) {
         for(j=start_indx; j<end_indx; j++) {
@@ -721,13 +721,13 @@ vector<string> gcta::filter_meta_snp_pval(vector<string> snp_name, vector<int> r
     return kpsnps;
 }
 
-int gcta::read_mtcojofile(string mtcojolist_file, double gwas_thresh, int nsnp_gsmr) {
+int gcta::read_mtcojofile(std::string mtcojolist_file, double gwas_thresh, int nsnp_gsmr) {
 
     int ncovar=0, i=0, j=0;
-    string target_pheno_file="";
-    vector<string> covar_pheno_file, snplist;
+    std::string target_pheno_file="";
+    std::vector<std::string> covar_pheno_file, snplist;
     
-    std::map<string,int>::iterator iter;
+    std::map<std::string,int>::iterator iter;
 
     // Read the summary data
     LOGGER.i(0, "\nReading GWAS summary data from [" + mtcojolist_file + "] ...");
@@ -737,7 +737,7 @@ int gcta::read_mtcojofile(string mtcojolist_file, double gwas_thresh, int nsnp_g
 
     // Read the SNPs
     // Covariates
-    map<string,int> gws_snp_name_map;
+    std::map<std::string,int> gws_snp_name_map;
     ncovar = _covar_pheno_name.size();
     for( i=0; i<ncovar; i++) {
         if(covar_pheno_file[i].substr(covar_pheno_file[i].length()-3,3)!=".gz")
@@ -758,7 +758,7 @@ int gcta::read_mtcojofile(string mtcojolist_file, double gwas_thresh, int nsnp_g
     // Initialization of variables
     int nsnp = _meta_snp_name_map.size();
     eigenMatrix snp_freq;
-    vector<vector<string>> snp_a1, snp_a2;
+    std::vector<std::vector<std::string>> snp_a1, snp_a2;
 
     init_gwas_variable(snp_a1, snp_a2, snp_freq, _meta_snp_b, _meta_snp_se, _meta_snp_pval, _meta_snp_n_o, ncovar+1, nsnp); 
 
@@ -771,7 +771,7 @@ int gcta::read_mtcojofile(string mtcojolist_file, double gwas_thresh, int nsnp_g
 //        iter->second = i;
 //        _meta_remain_snp[i] = i;
 //    }
-    LOGGER.i(0, to_string(nsnp) + " SNPs in common between the target trait and the covariate trait(s).");
+    LOGGER.i(0, std::to_string(nsnp) + " SNPs in common between the target trait and the covariate trait(s).");
     // Read the meta analysis
     eigenVector snp_freq_buf(nsnp), snp_b_buf(nsnp), snp_se_buf(nsnp), snp_pval_buf(nsnp), snp_n_buf(nsnp);
 
@@ -799,7 +799,7 @@ int gcta::read_mtcojofile(string mtcojolist_file, double gwas_thresh, int nsnp_g
         if(covar_pheno_file[i].substr(covar_pheno_file[i].length()-3,3)!=".gz")
             _meta_vp_trait(i+1) = read_single_metafile_txt(covar_pheno_file[i], _meta_snp_name_map,  snp_a1[i+1], snp_a2[i+1], snp_freq_buf, snp_b_buf, snp_se_buf, snp_pval_buf, snp_n_buf, _snp_val_flag[i+1]);
         else _meta_vp_trait(i+1) = read_single_metafile_gz(covar_pheno_file[i], _meta_snp_name_map,  snp_a1[i+1], snp_a2[i+1], snp_freq_buf, snp_b_buf, snp_se_buf, snp_pval_buf, snp_n_buf, _snp_val_flag[i+1]);
-        if(_meta_vp_trait(i+1) < 0) LOGGER.e(0, "negative phenotypic variance of the covariate #" + to_string(i+1) + ", " + _covar_pheno_name[i+1] + ".");
+        if(_meta_vp_trait(i+1) < 0) LOGGER.e(0, "negative phenotypic variance of the covariate #" + std::to_string(i+1) + ", " + _covar_pheno_name[i+1] + ".");
         snp_freq.col(i+1) = snp_freq_buf;
         _meta_snp_b.col(i+1) = snp_b_buf;
         _meta_snp_se.col(i+1) = snp_se_buf;
@@ -810,7 +810,7 @@ int gcta::read_mtcojofile(string mtcojolist_file, double gwas_thresh, int nsnp_g
     // QC of SNPs
     LOGGER.i(0, "Filtering out SNPs with multiple alleles or missing value ...");
    
-    vector<string> badsnps;
+    std::vector<std::string> badsnps;
     badsnps = remove_bad_snps(_meta_snp_name, _meta_remain_snp, _snp_val_flag, snp_a1, snp_a2, snp_freq,  _meta_snp_b, _meta_snp_se, _meta_snp_pval, _meta_snp_n_o, 
                              _snp_name_map, _allele1, _allele2, 1, ncovar, _out);
                                 
@@ -824,42 +824,42 @@ int gcta::read_mtcojofile(string mtcojolist_file, double gwas_thresh, int nsnp_g
     _meta_snp_freq = snp_freq;  
     nsnp = _meta_remain_snp.size();
     if(nsnp<1) LOGGER.e(0, "no SNP is retained after filtering.");
-    else LOGGER.i(0, to_string(nsnp) + " SNPs are retained after filtering.");
+    else LOGGER.i(0, std::to_string(nsnp) + " SNPs are retained after filtering.");
   
     // Only keep SNPs with p-value < threshold
     double pval_thresh =  gwas_thresh;
-    vector<string> keptsnps; 
+    std::vector<std::string> keptsnps; 
     
     keptsnps = filter_meta_snp_pval(_meta_snp_name, _meta_remain_snp, _meta_snp_pval, 1, 1+ncovar, _snp_val_flag, pval_thresh);
     update_id_map_kp(keptsnps, _snp_name_map, _include);
     std::stringstream ss;
     ss << std::scientific << std::setprecision(1) << gwas_thresh;
-    LOGGER.i(0, "There are " + to_string(_include.size()) + " genome-wide significant SNPs with p < " + ss.str() + ".\n");
-    if(keptsnps.size() < nsnp_gsmr) LOGGER.w(0, "We will use LD score regression to estimate bxy, because there are not enough significant SNPs for GSMR analysis. At least " + to_string(nsnp_gsmr) + " SNPs are required.\n");
+    LOGGER.i(0, "There are " + std::to_string(_include.size()) + " genome-wide significant SNPs with p < " + ss.str() + ".\n");
+    if(keptsnps.size() < nsnp_gsmr) LOGGER.w(0, "We will use LD score regression to estimate bxy, because there are not enough significant SNPs for GSMR analysis. At least " + std::to_string(nsnp_gsmr) + " SNPs are required.\n");
 
     return(_include.size());
 }
 
-eigenVector read_external_bxy(string filestr, vector<string> covar_pheno_name) {
+eigenVector read_external_bxy(std::string filestr, std::vector<std::string> covar_pheno_name) {
     // Read the external bxy
     int i = 0, ncovar = covar_pheno_name.size();
-    string strbuf="";
+    std::string strbuf="";
     eigenVector bxy_est(ncovar);
-    map<string,int> covar_pheno_map;
+    std::map<std::string,int> covar_pheno_map;
     bxy_est.setConstant(-999999.0);
 
-    ifstream extern_bxy(filestr.c_str());
+    std::ifstream extern_bxy(filestr.c_str());
     if (!extern_bxy) LOGGER.e(0, "cannot open the file [" + filestr + "] to read.");
 
-    for(i=0; i<ncovar; i++) covar_pheno_map.insert(pair<string,int>(covar_pheno_name[i], i));
+    for(i=0; i<ncovar; i++) covar_pheno_map.insert(std::pair<std::string,int>(covar_pheno_name[i], i));
     
     while(std::getline(extern_bxy, strbuf)) {
         std::istringstream linebuf(strbuf);
-        std::istream_iterator<string> begin(linebuf), end;
-        vector<string> line_elements(begin, end);
+        std::istream_iterator<std::string> begin(linebuf), end;
+        std::vector<std::string> line_elements(begin, end);
         if(line_elements.size() != 2) LOGGER.e(0, "the format of file [" + filestr + "] is not correct.");
-        string phenobuf = line_elements[0].c_str();
-        map<string,int>::iterator iter = covar_pheno_map.find(phenobuf);
+        std::string phenobuf = line_elements[0].c_str();
+        std::map<std::string,int>::iterator iter = covar_pheno_map.find(phenobuf);
         if(iter==covar_pheno_map.end()) continue;
         bxy_est(iter->second) = atof(line_elements[1].c_str());
     }
@@ -867,21 +867,21 @@ eigenVector read_external_bxy(string filestr, vector<string> covar_pheno_name) {
     return(bxy_est);
 }
 
-vector<string> gcta::clumping_meta(eigenVector snp_chival, vector<bool> snp_flag, double pval_thresh, int wind_size, double r2_thresh) {   
+std::vector<std::string> gcta::clumping_meta(eigenVector snp_chival, std::vector<bool> snp_flag, double pval_thresh, int wind_size, double r2_thresh) {   
     wind_size = wind_size*1e3;
     // Only select SNPs that are matched with plink binary file
-    vector<pair<double, int>> snp_pvalbuf;
+    std::vector<std::pair<double, int>> snp_pvalbuf;
     int i = 0, indx = 0, nsnp_plink = _include.size(), nsnp_meta = _meta_remain_snp.size();
     double pvalbuf = 0.0;
-    string snpbuf = "", snpbuf_left="", snpbuf_right="";
-    map<string,int>::iterator iter;
+    std::string snpbuf = "", snpbuf_left="", snpbuf_right="";
+    std::map<std::string,int>::iterator iter;
 
     // Sort the p-value
     for(i=0; i<nsnp_meta; i++) {
         if(!snp_flag[i]) continue;
         iter = _snp_name_map.find(_meta_snp_name[_meta_remain_snp[i]]);
         if(iter==_snp_name_map.end()) continue;
-        snp_pvalbuf.push_back(make_pair(snp_chival(_meta_remain_snp[i]), _meta_remain_snp[i]));
+        snp_pvalbuf.push_back(std::make_pair(snp_chival(_meta_remain_snp[i]), _meta_remain_snp[i]));
     }
 
     std::stable_sort(snp_pvalbuf.begin(), snp_pvalbuf.end());
@@ -890,19 +890,19 @@ vector<string> gcta::clumping_meta(eigenVector snp_chival, vector<bool> snp_flag
     int nsnp_clumped=snp_pvalbuf.size();
     pval_thresh = StatFunc::qchisq(pval_thresh, 1);
     // Start to clump
-    map<string, bool> clumped_snp;
+    std::map<std::string, bool> clumped_snp;
     for(i=0; i<nsnp_clumped; i++) {
         pvalbuf = snp_pvalbuf[i].first;
         if( pvalbuf <= pval_thresh) continue;
         indx = snp_pvalbuf[i].second;
-        clumped_snp.insert(pair<string,bool>(_meta_snp_name[indx],false));
+        clumped_snp.insert(std::pair<std::string,bool>(_meta_snp_name[indx],false));
     }
 
-    map<string, bool>::iterator iter_clump;
+    std::map<std::string, bool>::iterator iter_clump;
     int geno_indx=0, geno_indx_j = 0, geno_indx_buf = 0, geno_indx_center = 0, nindi=_keep.size();
     int left_indx = 0, right_indx = 0;
     double r2_left=0.0, r2_right=0.0;
-    vector<string> indices_snp;
+    std::vector<std::string> indices_snp;
     eigenVector x(nindi), x_j(nindi);
     nsnp_clumped=clumped_snp.size();
     for(i=0; i<nsnp_clumped; i++) {
@@ -957,13 +957,13 @@ vector<string> gcta::clumping_meta(eigenVector snp_chival, vector<bool> snp_flag
     return indices_snp;
 }
 
-vector<int> rm_cor_elements(eigenMatrix r_mat, double r2_thresh, bool r2_flag) {
+std::vector<int> rm_cor_elements(eigenMatrix r_mat, double r2_thresh, bool r2_flag) {
     int i = 0, j = 0, n = r_mat.cols();
-    vector<int> kept_ID;
+    std::vector<int> kept_ID;
 
     if(r2_flag) r2_thresh = sqrt(r2_thresh);
     // identify the positions where you see a value > than the threshold
-    vector<int> rm_mat_ID1, rm_mat_ID2;
+    std::vector<int> rm_mat_ID1, rm_mat_ID2;
     for (i = 0; i < n; i++) {
         for (j = 0; j < i; j++) {
             if (abs(r_mat(i, j)) > r2_thresh) {
@@ -975,19 +975,19 @@ vector<int> rm_cor_elements(eigenMatrix r_mat, double r2_thresh, bool r2_flag) {
 
     if(rm_mat_ID1.size() > 0) {
         int i_buf = 0;
-        // count the number of appearance of each "position" in the vector, which involves a few steps
-        vector<int> rm_uni_ID(rm_mat_ID1);
+        // count the number of appearance of each "position" in the std::vector, which involves a few steps
+        std::vector<int> rm_uni_ID(rm_mat_ID1);
         rm_uni_ID.insert(rm_uni_ID.end(), rm_mat_ID2.begin(), rm_mat_ID2.end());
-        stable_sort(rm_uni_ID.begin(), rm_uni_ID.end());
+        std::stable_sort(rm_uni_ID.begin(), rm_uni_ID.end());
         rm_uni_ID.erase(unique(rm_uni_ID.begin(), rm_uni_ID.end()), rm_uni_ID.end());
-        map<int, int> rm_uni_ID_count;
+        std::map<int, int> rm_uni_ID_count;
         for (i = 0; i < rm_uni_ID.size(); i++) {
             i_buf = count(rm_mat_ID1.begin(), rm_mat_ID1.end(), rm_uni_ID[i]) + count(rm_mat_ID2.begin(), rm_mat_ID2.end(), rm_uni_ID[i]);
-            rm_uni_ID_count.insert(pair<int, int>(rm_uni_ID[i], i_buf));
+            rm_uni_ID_count.insert(std::pair<int, int>(rm_uni_ID[i], i_buf));
         }
 
         // swapping
-        map<int, int>::iterator iter1, iter2;
+        std::map<int, int>::iterator iter1, iter2;
         int n_buf = rm_mat_ID1.size();
         for (i = 0; i < n_buf; i++) {
             iter1 = rm_uni_ID_count.find(rm_mat_ID1[i]);
@@ -999,7 +999,7 @@ vector<int> rm_cor_elements(eigenMatrix r_mat, double r2_thresh, bool r2_flag) {
             }
         }
     
-        stable_sort(rm_mat_ID1.begin(), rm_mat_ID1.end());
+        std::stable_sort(rm_mat_ID1.begin(), rm_mat_ID1.end());
         rm_mat_ID1.erase(unique(rm_mat_ID1.begin(), rm_mat_ID1.end()), rm_mat_ID1.end());
         
         int k = 0;
@@ -1016,9 +1016,9 @@ vector<int> rm_cor_elements(eigenMatrix r_mat, double r2_thresh, bool r2_flag) {
     return kept_ID;
 }
 
-void adjust_ld_r_fdr(eigenMatrix &ld_r_mat, vector<int> kept_ID, vector<pair<double, int>> ld_pval, int m, double thresh) {
+void adjust_ld_r_fdr(eigenMatrix &ld_r_mat, std::vector<int> kept_ID, std::vector<std::pair<double, int>> ld_pval, int m, double thresh) {
     int i = 0, nproc = ld_pval.size(), row_indx=0, col_indx=0;
-    vector<double> pval_buf(nproc);
+    std::vector<double> pval_buf(nproc);
 
     for(i=0; i<nproc; i++) pval_buf[i] = ld_pval[i].first;
 
@@ -1032,9 +1032,9 @@ void adjust_ld_r_fdr(eigenMatrix &ld_r_mat, vector<int> kept_ID, vector<pair<dou
     }
 }
 
-vector<int> init_interval_bxy(eigenVector bxy_sort, eigenVector bxy, vector<int> kept_ID, double lower_prob, double upper_prob) {
+std::vector<int> init_interval_bxy(eigenVector bxy_sort, eigenVector bxy, std::vector<int> kept_ID, double lower_prob, double upper_prob) {
     int i = 0, nsnp = kept_ID.size();
-    vector<int> ci_index;
+    std::vector<int> ci_index;
 
     double lower_bounder = CommFunc::quantile(bxy_sort, lower_prob);
     double upper_bounder = CommFunc::quantile(bxy_sort, upper_prob);
@@ -1046,12 +1046,12 @@ vector<int> init_interval_bxy(eigenVector bxy_sort, eigenVector bxy, vector<int>
     return(ci_index);
 }
 
-int topsnp_bxy(eigenVector bxy, eigenVector bzx, eigenVector bzx_se, map<string, int> meta_snp_name_map, vector<string> indices_snp, vector<int> kept_ID, int n_indices_snp) {
+int topsnp_bxy(eigenVector bxy, eigenVector bzx, eigenVector bzx_se, std::map<std::string, int> meta_snp_name_map, std::vector<std::string> indices_snp, std::vector<int> kept_ID, int n_indices_snp) {
     // find the top SNP
     int i = 0, topindex = -9;
     double lower_bounder=0.0, upper_bounder = 0.0, max_bzx_chival=0.0;
     eigenVector bxy_sort(n_indices_snp);
-    map<string, int>::iterator iter;
+    std::map<std::string, int>::iterator iter;
     for(i=0; i<n_indices_snp; i++) bxy_sort(i) = bxy(kept_ID[i]);
     std::stable_sort(bxy_sort.data(), bxy_sort.data()+bxy_sort.size());
     lower_bounder = CommFunc::quantile(bxy_sort, 0.4);
@@ -1071,14 +1071,14 @@ int topsnp_bxy(eigenVector bxy, eigenVector bzx, eigenVector bzx_se, map<string,
 }
 
 void est_cov_bxy(eigenMatrix &cov_bxy_p1, eigenMatrix &cov_bxy_p2, eigenVector bzx, eigenVector bzx_se, eigenVector bzy_se, eigenMatrix ld_r_mat,
-            map<string, int> meta_snp_name_map, vector<string> indices_snp, vector<int> kept_ID) {
+            std::map<std::string, int> meta_snp_name_map, std::vector<std::string> indices_snp, std::vector<int> kept_ID) {
 
     int n_indices_snp = kept_ID.size();
     eigenVector zscore_inv1(n_indices_snp), zscore_inv2(n_indices_snp);
 
     #pragma omp parallel for
     for(int i=0; i<n_indices_snp; i++) {
-        map<string, int>::iterator iter;
+        std::map<std::string, int>::iterator iter;
         iter = meta_snp_name_map.find(indices_snp[kept_ID[i]]);
         zscore_inv1(i) = bzx_se(iter->second)/bzx(iter->second);
         zscore_inv2(i) = bzy_se(iter->second)/bzx(iter->second);
@@ -1094,7 +1094,7 @@ void est_cov_bxy(eigenMatrix &cov_bxy_p1, eigenMatrix &cov_bxy_p2, eigenVector b
 }
 
 void est_cov_bxy_gsmr(eigenMatrix &cov_bxy, double bxy_hat, eigenVector bzx, eigenVector bzx_se, eigenVector bzy_se, eigenMatrix ld_r_mat,
-                            map<string, int> meta_snp_name_map, vector<string> indices_snp, vector<int> kept_ID) {
+                            std::map<std::string, int> meta_snp_name_map, std::vector<std::string> indices_snp, std::vector<int> kept_ID) {
     int n_indices_snp = kept_ID.size();
     eigenMatrix cov_bxy_p1(n_indices_snp, n_indices_snp), cov_bxy_p2(n_indices_snp, n_indices_snp);
     est_cov_bxy(cov_bxy_p1, cov_bxy_p2, bzx, bzx_se, bzy_se, ld_r_mat,
@@ -1103,7 +1103,7 @@ void est_cov_bxy_gsmr(eigenMatrix &cov_bxy, double bxy_hat, eigenVector bzx, eig
 }
 
 void est_cov_bxy_heidi(eigenMatrix &cov_bxy, double bxy_hat, eigenVector bzx, eigenVector bzx_se, eigenVector bzy, eigenVector bzy_se, eigenMatrix ld_r_mat,
-                            map<string, int> meta_snp_name_map, vector<string> indices_snp, vector<int> kept_ID) {
+                            std::map<std::string, int> meta_snp_name_map, std::vector<std::string> indices_snp, std::vector<int> kept_ID) {
     int n_indices_snp = kept_ID.size();
     eigenMatrix cov_bxy_p1(n_indices_snp, n_indices_snp), cov_bxy_p2(n_indices_snp, n_indices_snp);
 
@@ -1113,14 +1113,14 @@ void est_cov_bxy_heidi(eigenMatrix &cov_bxy, double bxy_hat, eigenVector bzx, ei
     eigenMatrix cov_bxy_buf(cov_bxy_p2);
     #pragma omp parallel for
     for(int i=0; i<n_indices_snp; i++) {
-        map<string,int>::iterator iter = meta_snp_name_map.find(indices_snp[kept_ID[i]]);
+        std::map<std::string,int>::iterator iter = meta_snp_name_map.find(indices_snp[kept_ID[i]]);
         double bxy_i = bzy(iter->second)/bzx(iter->second);
         cov_bxy_p2.col(i) = cov_bxy_buf.col(i)*(bxy_i*bxy_hat);
     }
     cov_bxy = cov_bxy_p1 + cov_bxy_p2.transpose();
 }
 
-vector<double> est_bxy_gsmr(eigenVector bxy_sort, eigenVector bxy, vector<string> indices_snp, vector<int> kept_ID, eigenVector bzx, eigenVector bzx_se, eigenVector bzy, eigenVector bzy_se, eigenMatrix ld_r_mat, map<string, int> meta_snp_name_map, eigenVector &vec_1t_v) {
+std::vector<double> est_bxy_gsmr(eigenVector bxy_sort, eigenVector bxy, std::vector<std::string> indices_snp, std::vector<int> kept_ID, eigenVector bzx, eigenVector bzx_se, eigenVector bzy, eigenVector bzy_se, eigenMatrix ld_r_mat, std::map<std::string, int> meta_snp_name_map, eigenVector &vec_1t_v) {
     double bxy_median = CommFunc::quantile(bxy_sort, 0.50);
 
     // cov(bxy_i, bxy_j)
@@ -1149,31 +1149,31 @@ vector<double> est_bxy_gsmr(eigenVector bxy_sort, eigenVector bxy, vector<string
     double bxy_gsmr_pval = StatFunc::pchisq( bxy_gsmr*bxy_gsmr/bxy_gsmr_se, 1);
     bxy_gsmr_se = sqrt(bxy_gsmr_se);
     // save the result
-    vector<double> rst(4);
+    std::vector<double> rst(4);
     rst[0] = bxy_gsmr; rst[1] = bxy_gsmr_se; rst[2] = bxy_gsmr_pval; rst[3] = (double)n_indices_snp;
     return rst;
 }
 
 void est_var_bxy(eigenVector &var_bxy, eigenVector bzx, eigenVector bzx_se, eigenVector bzy, eigenVector bzy_se,
-                        vector<string> indices_snp, vector<int> kept_ID, map<string,int> meta_snp_name_map) {
+                        std::vector<std::string> indices_snp, std::vector<int> kept_ID, std::map<std::string,int> meta_snp_name_map) {
     int n_indices_snp = kept_ID.size();
     
     #pragma omp parallel for
     for(int i = 0; i < n_indices_snp; i++) {
-        map<string, int>::iterator iter;
+        std::map<std::string, int>::iterator iter;
         iter = meta_snp_name_map.find(indices_snp[kept_ID[i]]);
         double d_buf = pow(bzx_se(iter->second),2.0)*pow(bzy(iter->second), 2.0)/pow(bzx(iter->second), 4.0) + pow(bzy_se(iter->second), 2.0)/pow(bzx(iter->second), 2.0);
         var_bxy(i) = d_buf;
     }                        
 }
 
-void est_diff_bxy(eigenVector &bxy_diff, double bxy_est, vector<string> indices_snp, vector<int> kept_ID, 
-                             eigenVector bzx, eigenVector bzy, map<string,int> meta_snp_name_map) {
+void est_diff_bxy(eigenVector &bxy_diff, double bxy_est, std::vector<std::string> indices_snp, std::vector<int> kept_ID, 
+                             eigenVector bzx, eigenVector bzy, std::map<std::string,int> meta_snp_name_map) {
     int n_indices_snp = kept_ID.size(); 
 
     #pragma omp parallel for
     for(int i=0; i<n_indices_snp; i++ ) {
-        map<string,int>::iterator iter = meta_snp_name_map.find(indices_snp[kept_ID[i]]);
+        std::map<std::string,int>::iterator iter = meta_snp_name_map.find(indices_snp[kept_ID[i]]);
         double d_buf = bzy(iter->second)/bzx(iter->second) - bxy_est;
         bxy_diff(i) = d_buf;
     }
@@ -1191,8 +1191,8 @@ void est_var_diff_bxy(eigenMatrix &var_d, eigenMatrix cov_bxy, eigenVector cov_b
     }
 }
 
-vector<double> indi_heidi_pvalue(double bxy_hat, double bxy_hat_se, eigenVector vec_1t_v, eigenVector bzx, eigenVector bzx_se, eigenVector bzy, eigenVector bzy_se, 
-                              eigenMatrix ld_r_mat, map<string,int> meta_snp_name_map, vector<string> indices_snp, vector<int> kept_ID, vector<int> remain_index) {
+std::vector<double> indi_heidi_pvalue(double bxy_hat, double bxy_hat_se, eigenVector vec_1t_v, eigenVector bzx, eigenVector bzx_se, eigenVector bzy, eigenVector bzy_se, 
+                              eigenMatrix ld_r_mat, std::map<std::string,int> meta_snp_name_map, std::vector<std::string> indices_snp, std::vector<int> kept_ID, std::vector<int> remain_index) {
     int i = 0, j = 0, n_indices_snp = kept_ID.size();
 
     // var(bxy)
@@ -1202,7 +1202,7 @@ vector<double> indi_heidi_pvalue(double bxy_hat, double bxy_hat_se, eigenVector 
     eigenMatrix cov_bxy(n_indices_snp, n_indices_snp);
     est_cov_bxy_heidi(cov_bxy, bxy_hat, bzx, bzx_se, bzy, bzy_se, ld_r_mat, meta_snp_name_map, indices_snp, kept_ID);
 
-    vector<int> slct_index(remain_index.size());
+    std::vector<int> slct_index(remain_index.size());
     for(i=0, j=0; i<n_indices_snp; i++) {
         if(kept_ID[i]!=remain_index[j]) continue;
         slct_index[j++] = i;
@@ -1220,7 +1220,7 @@ vector<double> indi_heidi_pvalue(double bxy_hat, double bxy_hat_se, eigenVector 
     est_diff_bxy(d, bxy_hat, indices_snp, kept_ID, bzx, bzy, meta_snp_name_map);
 
     eigenVector var_d = var_bxy + bxy_hat_se*bxy_hat_se*eigenVector::Ones(n_indices_snp) - 2*cov_bxy_bgsmr;
-    vector<double> indi_het_pval(n_indices_snp);
+    std::vector<double> indi_het_pval(n_indices_snp);
     for(i = 0; i < n_indices_snp; i++) 
         indi_het_pval[i] = StatFunc::pchisq(d(i)*d(i)/var_d(i), 1);
 
@@ -1228,7 +1228,7 @@ vector<double> indi_heidi_pvalue(double bxy_hat, double bxy_hat_se, eigenVector 
 }
 
 double global_heidi_pvalue(double bxy_hat, double bxy_hat_se, eigenVector bzx, eigenVector bzx_se, eigenVector bzy, eigenVector bzy_se, 
-                           eigenMatrix ld_r_mat, eigenVector vec_1t_v, vector<string> indices_snp, vector<int> kept_ID, map<string, int> meta_snp_name_map) {
+                           eigenMatrix ld_r_mat, eigenVector vec_1t_v, std::vector<std::string> indices_snp, std::vector<int> kept_ID, std::map<std::string, int> meta_snp_name_map) {
     int n_indices_snp = kept_ID.size();
 
     // d = bxy_i - bxy_gsmr
@@ -1262,27 +1262,27 @@ double global_heidi_pvalue(double bxy_hat, double bxy_hat_se, eigenVector bzx, e
 }
 
 // Excluding SNPs based on HEIDI-outlier p-value at individual SNP
-vector<int> indi_heidi_outlier(eigenVector bxy, eigenVector bzx, eigenVector bzx_se, eigenVector bzy, eigenVector bzy_se, 
-                               eigenMatrix ld_r_mat, map<string,int> meta_snp_name_map, vector<string> indices_snp, vector<int> kept_ID) {
+std::vector<int> indi_heidi_outlier(eigenVector bxy, eigenVector bzx, eigenVector bzx_se, eigenVector bzy, eigenVector bzy_se, 
+                               eigenMatrix ld_r_mat, std::map<std::string,int> meta_snp_name_map, std::vector<std::string> indices_snp, std::vector<int> kept_ID) {
     
     int i = 0, n_indices_snp = kept_ID.size();
     eigenVector bxy_sort(n_indices_snp);
     for(i=0; i<n_indices_snp; i++) bxy_sort(i) = bxy(kept_ID[i]);
     std::stable_sort(bxy_sort.data(), bxy_sort.data()+n_indices_snp);
-    vector<int> ci_index = init_interval_bxy(bxy_sort, bxy, kept_ID, 0.1, 0.9);
+    std::vector<int> ci_index = init_interval_bxy(bxy_sort, bxy, kept_ID, 0.1, 0.9);
     if(ci_index.size() == 0) return(ci_index);
 
     eigenVector vec_1t_v;
-    vector<double> gsmr_rst = est_bxy_gsmr(bxy_sort, bxy, indices_snp, ci_index, bzx, bzx_se, bzy, bzy_se, ld_r_mat, meta_snp_name_map, vec_1t_v);    
+    std::vector<double> gsmr_rst = est_bxy_gsmr(bxy_sort, bxy, indices_snp, ci_index, bzx, bzx_se, bzy, bzy_se, ld_r_mat, meta_snp_name_map, vec_1t_v);    
     double bxy_hat = gsmr_rst[0], bxy_hat_se = gsmr_rst[1];
 
-    vector<double> indi_het_pval;
+    std::vector<double> indi_het_pval;
     indi_het_pval = indi_heidi_pvalue(bxy_hat, bxy_hat_se, vec_1t_v, bzx, bzx_se, bzy, bzy_se, 
                                     ld_r_mat, meta_snp_name_map, indices_snp, kept_ID, ci_index);
 
-    vector<int> kept_ID_buf(kept_ID);
+    std::vector<int> kept_ID_buf(kept_ID);
     kept_ID.clear();
-    double indi_heidi_thresh = min(0.01, 0.05/(double)n_indices_snp);
+    double indi_heidi_thresh = std::min(0.01, 0.05/(double)n_indices_snp);
     for(i=0; i<n_indices_snp; i++) {
         if(indi_het_pval[i] < indi_heidi_thresh) continue;
         kept_ID.push_back(kept_ID_buf[i]); 
@@ -1291,26 +1291,26 @@ vector<int> indi_heidi_outlier(eigenVector bxy, eigenVector bzx, eigenVector bzx
     return(kept_ID);
 }
 
-vector<int> indi_heidi_outlier_iter(eigenVector bxy, eigenVector bzx, eigenVector bzx_se, eigenVector bzy, eigenVector bzy_se, 
-                               eigenMatrix ld_r_mat, map<string,int> meta_snp_name_map, vector<string> indices_snp, vector<int> kept_ID) {
+std::vector<int> indi_heidi_outlier_iter(eigenVector bxy, eigenVector bzx, eigenVector bzx_se, eigenVector bzy, eigenVector bzy_se, 
+                               eigenMatrix ld_r_mat, std::map<std::string,int> meta_snp_name_map, std::vector<std::string> indices_snp, std::vector<int> kept_ID) {
     int i = 0, n_indices_snp = kept_ID.size();
     eigenVector bxy_sort(n_indices_snp);
     for(i=0; i<n_indices_snp; i++) bxy_sort(i) = bxy(kept_ID[i]);
     std::stable_sort(bxy_sort.data(), bxy_sort.data()+n_indices_snp);
-    vector<int> ci_index = init_interval_bxy(bxy_sort, bxy, kept_ID, 0.1, 0.9);
+    std::vector<int> ci_index = init_interval_bxy(bxy_sort, bxy, kept_ID, 0.1, 0.9);
 
     if(ci_index.size() == 0) return(ci_index);
 
     eigenVector vec_1t_v;
-    vector<double> gsmr_rst = est_bxy_gsmr(bxy_sort, bxy, indices_snp, ci_index, bzx, bzx_se, bzy, bzy_se, ld_r_mat, meta_snp_name_map, vec_1t_v);    
+    std::vector<double> gsmr_rst = est_bxy_gsmr(bxy_sort, bxy, indices_snp, ci_index, bzx, bzx_se, bzy, bzy_se, ld_r_mat, meta_snp_name_map, vec_1t_v);    
 
     double bxy_hat = gsmr_rst[0], bxy_hat_se = gsmr_rst[1];
 
-    vector<double> indi_het_pval;
+    std::vector<double> indi_het_pval;
     indi_het_pval = indi_heidi_pvalue(bxy_hat, bxy_hat_se, vec_1t_v, bzx, bzx_se, bzy, bzy_se, 
                                     ld_r_mat, meta_snp_name_map, indices_snp, kept_ID, ci_index);
 
-    double indi_heidi_thresh = min(0.01, 0.05/(double)n_indices_snp);
+    double indi_heidi_thresh = std::min(0.01, 0.05/(double)n_indices_snp);
 //    double indi_heidi_thresh = 0.01;
     double min_pval = 1.0;
     int min_index = 0;
@@ -1325,7 +1325,7 @@ vector<int> indi_heidi_outlier_iter(eigenVector bxy, eigenVector bzx, eigenVecto
     return(kept_ID);
 }
 
-int topsnp_heidi_outlier(eigenVector bxy, vector<int> kept_ID, vector<int> ci_index, eigenVector bzx, eigenVector bzx_se, vector<string> indices_snp, map<string,int> meta_snp_name_map) {
+int topsnp_heidi_outlier(eigenVector bxy, std::vector<int> kept_ID, std::vector<int> ci_index, eigenVector bzx, eigenVector bzx_se, std::vector<std::string> indices_snp, std::map<std::string,int> meta_snp_name_map) {
     int nbins = 5, n_candidate_snp = ci_index.size();
     // 1. 5 bins of bxy
     double hist_prob[6] = {0, 0.2, 0.4, 0.6, 0.8, 1.0};
@@ -1350,7 +1350,7 @@ int topsnp_heidi_outlier(eigenVector bxy, vector<int> kept_ID, vector<int> ci_in
     for(int i = 0; i < n_candidate_snp; i++) {
         for(int j = 0; j < nbins; j++) {
             if(bxy(kept_ID[ci_index[i]]) < lower_bounder[j] || bxy(kept_ID[ci_index[i]]) >= upper_bounder[j]) continue;
-            map<string,int>::iterator iter = meta_snp_name_map.find(indices_snp[kept_ID[ci_index[i]]]);
+            std::map<std::string,int>::iterator iter = meta_snp_name_map.find(indices_snp[kept_ID[ci_index[i]]]);
             double chisqbuf = (bzx(iter->second)*bzx(iter->second))/(bzx_se(iter->second)*bzx_se(iter->second));
             chisq_bin[j] += chisqbuf; nsnps_bin[j]++;
             if(maximum_chisq[j] < chisqbuf) {
@@ -1376,7 +1376,7 @@ int topsnp_heidi_outlier(eigenVector bxy, vector<int> kept_ID, vector<int> ci_in
     return(topsnp_index);
 }
 
-double heidi_outlier_topsnp(eigenVector &indi_het_pval, eigenVector bxy, eigenMatrix cov_bxy, vector<int> kept_ID, eigenVector bzx, eigenVector bzy, int topsnp_index, vector<string> indices_snp, map<string,int> meta_snp_name_map, bool multi_snp_heidi_flag) {
+double heidi_outlier_topsnp(eigenVector &indi_het_pval, eigenVector bxy, eigenMatrix cov_bxy, std::vector<int> kept_ID, eigenVector bzx, eigenVector bzy, int topsnp_index, std::vector<std::string> indices_snp, std::map<std::string,int> meta_snp_name_map, bool multi_snp_heidi_flag) {
     int n_indices_snp = kept_ID.size();
 
     // 1. d = bxy_i - bxy_top
@@ -1416,12 +1416,12 @@ double heidi_outlier_topsnp(eigenVector &indi_het_pval, eigenVector bxy, eigenMa
     }
 }
 
-vector<int> keep_non_associate_snp(eigenVector bzy_pval, vector<string> indices_snp, vector<int> kept_ID, map<string,int> meta_snp_name_map, double pval_thresh) {
+std::vector<int> keep_non_associate_snp(eigenVector bzy_pval, std::vector<std::string> indices_snp, std::vector<int> kept_ID, std::map<std::string,int> meta_snp_name_map, double pval_thresh) {
     int n_indices_snp = kept_ID.size();
-    vector<int> ci_index;
+    std::vector<int> ci_index;
 
     for(int i=0; i<n_indices_snp; i++) {
-        map<string,int>::iterator iter = meta_snp_name_map.find(indices_snp[kept_ID[i]]);
+        std::map<std::string,int>::iterator iter = meta_snp_name_map.find(indices_snp[kept_ID[i]]);
         if(bzy_pval(iter->second) < pval_thresh) continue;
         ci_index.push_back(i);
     }
@@ -1430,10 +1430,10 @@ vector<int> keep_non_associate_snp(eigenVector bzy_pval, vector<string> indices_
 }
 
 int indi_heidi_outlier_topsnp_iter(eigenVector bxy, eigenMatrix &cov_bxy, eigenVector bzx, eigenVector bzx_se, eigenVector bzy, eigenVector bzy_se, eigenVector bzy_pval, 
-                               eigenMatrix ld_r_mat, map<string,int> meta_snp_name_map, vector<string> indices_snp, vector<int> &kept_ID, double heidi_thresh) {
+                               eigenMatrix ld_r_mat, std::map<std::string,int> meta_snp_name_map, std::vector<std::string> indices_snp, std::vector<int> &kept_ID, double heidi_thresh) {
     int n_indices_snp = kept_ID.size();
     double pval_thresh = 5e-8;
-    vector<int> ci_index;
+    std::vector<int> ci_index;
     // 1. removing SNPs with significant bzy
     //ci_index = keep_non_associate_snp(bzy_pval, indices_snp, kept_ID, meta_snp_name_map, pval_thresh);
     ci_index.resize(n_indices_snp);
@@ -1470,10 +1470,10 @@ int indi_heidi_outlier_topsnp_iter(eigenVector bxy, eigenMatrix &cov_bxy, eigenV
 }
 
 double global_heidi_outlier_topsnp_iter(eigenVector bxy, eigenMatrix &cov_bxy, eigenVector bzx, eigenVector bzx_se, eigenVector bzy, eigenVector bzy_se, eigenVector bzy_pval, 
-                               eigenMatrix ld_r_mat, map<string,int> meta_snp_name_map, vector<string> indices_snp, vector<int> &kept_ID, double heidi_thresh) {
+                               eigenMatrix ld_r_mat, std::map<std::string,int> meta_snp_name_map, std::vector<std::string> indices_snp, std::vector<int> &kept_ID, double heidi_thresh) {
     int n_indices_snp = kept_ID.size();
     double pval_thresh = 5e-8;
-    vector<int> ci_index;
+    std::vector<int> ci_index;
     // 1. removing SNPs with significant bzy
     ci_index = keep_non_associate_snp(bzy_pval, indices_snp, kept_ID, meta_snp_name_map, pval_thresh);
 
@@ -1508,15 +1508,15 @@ double global_heidi_outlier_topsnp_iter(eigenVector bxy, eigenMatrix &cov_bxy, e
     return(global_heidi_pvalue);
 }
 
-vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eigenVector bzx_se, eigenVector bzx_pval, eigenVector bzy, eigenVector bzy_se, eigenVector bzy_pval, double rho_pheno, vector<bool> snp_flag, double gwas_thresh, int wind_size, double r2_thresh, double std_heidi_thresh, double global_heidi_thresh, double ld_fdr_thresh, int nsnp_gsmr, string &pleio_snps, string &err_msg) {
+std::vector<double> gcta::gsmr_meta(std::vector<std::string> &snp_instru, eigenVector bzx, eigenVector bzx_se, eigenVector bzx_pval, eigenVector bzy, eigenVector bzy_se, eigenVector bzy_pval, double rho_pheno, std::vector<bool> snp_flag, double gwas_thresh, int wind_size, double r2_thresh, double std_heidi_thresh, double global_heidi_thresh, double ld_fdr_thresh, int nsnp_gsmr, std::string &pleio_snps, std::string &err_msg) {
 
     int i=0, j=0, nsnp = _include.size(), nindi=_keep.size();    
-    vector<string> indices_snp;
-    vector<double> rst(_n_gsmr_rst_item);
+    std::vector<std::string> indices_snp;
+    std::vector<double> rst(_n_gsmr_rst_item);
     for(i=0; i<_n_gsmr_rst_item; i++) rst[i] = nan("");
 
     if(nsnp < nsnp_gsmr) {
-        err_msg = "Not enough SNPs to perform the GSMR analysis. At least " + to_string(nsnp_gsmr) + " SNPs are required."; 
+        err_msg = "Not enough SNPs to perform the GSMR analysis. At least " + std::to_string(nsnp_gsmr) + " SNPs are required."; 
         return rst;
     }
 
@@ -1525,21 +1525,21 @@ vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eige
     indices_snp = clumping_meta(bzx_chival, snp_flag, gwas_thresh, wind_size, r2_thresh);
     int n_indices_snp = indices_snp.size();
 
-    //LOGGER.i(0, to_string(n_indices_snp) + " index SNPs are obtained from the clumping analysis of the " + nsnp + " genome-wide significant SNPs.");
+    //LOGGER.i(0, std::to_string(n_indices_snp) + " index SNPs are obtained from the clumping analysis of the " + nsnp + " genome-wide significant SNPs.");
 
     std::stringstream ss1, ss2;
     ss1 << std::scientific << std::setprecision(1) << gwas_thresh;
     ss2 << std::fixed << std::setprecision(2) << r2_thresh;
     if(n_indices_snp < nsnp_gsmr) {
-        LOGGER.i(0, to_string(n_indices_snp) + " index SNPs are obtained from the clumping analysis with p < " + ss1.str() + " and LD r2 < " + ss2.str() + ".");
-        err_msg = "Not enough SNPs to perform the GSMR analysis. At least " + to_string(nsnp_gsmr) + " SNPs are required."; 
+        LOGGER.i(0, std::to_string(n_indices_snp) + " index SNPs are obtained from the clumping analysis with p < " + ss1.str() + " and LD r2 < " + ss2.str() + ".");
+        err_msg = "Not enough SNPs to perform the GSMR analysis. At least " + std::to_string(nsnp_gsmr) + " SNPs are required."; 
         return rst;
     }
 
     // LD r
     Eigen::MatrixXf x_sub(nindi, n_indices_snp);
-    vector<int> snp_sn(n_indices_snp);
-    map<string, int>::iterator iter;
+    std::vector<int> snp_sn(n_indices_snp);
+    std::map<std::string, int>::iterator iter;
     int i_buf = 0;
     for( i = 0; i < n_indices_snp; i++ ) {
         iter = _snp_name_map.find(indices_snp[i]);
@@ -1563,29 +1563,29 @@ vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eige
     }
    
     // LD pruning
-    vector<int> kept_ID;
+    std::vector<int> kept_ID;
     kept_ID = rm_cor_elements(ld_r_mat, r2_thresh, true);
     n_indices_snp = kept_ID.size();
 
-    LOGGER.i(0, to_string(n_indices_snp) + " index SNPs are obtained from the clumping analysis with p < " + ss1.str() + " and LD r2 < " + ss2.str() + ".");
+    LOGGER.i(0, std::to_string(n_indices_snp) + " index SNPs are obtained from the clumping analysis with p < " + ss1.str() + " and LD r2 < " + ss2.str() + ".");
   
     if(n_indices_snp < nsnp_gsmr) {
-        err_msg = "Not enough SNPs to perform the GSMR analysis. At least " + to_string(nsnp_gsmr) + " SNPs are required."; 
+        err_msg = "Not enough SNPs to perform the GSMR analysis. At least " + std::to_string(nsnp_gsmr) + " SNPs are required."; 
         return rst;
     }
 
     // Adjust LD
     int k = 0;
     eigenMatrix ld_pval_mat(n_indices_snp, n_indices_snp);
-    vector<pair<double,int>> ld_pval(n_indices_snp*(n_indices_snp-1)/2);
+    std::vector<std::pair<double,int>> ld_pval(n_indices_snp*(n_indices_snp-1)/2);
 
     for(i=0, k=0; i<(n_indices_snp-1); i++) {
         for(j=(i+1); j<n_indices_snp; j++) {
-            ld_pval[k++] = make_pair(StatFunc::chi_prob(1, ld_r_mat(kept_ID[i],kept_ID[j])*ld_r_mat(kept_ID[i],kept_ID[j])*(double)nindi), i*n_indices_snp+j); 
+            ld_pval[k++] = std::make_pair(StatFunc::chi_prob(1, ld_r_mat(kept_ID[i],kept_ID[j])*ld_r_mat(kept_ID[i],kept_ID[j])*(double)nindi), i*n_indices_snp+j); 
         }
     }
 
-    stable_sort(ld_pval.begin(), ld_pval.end(), [](const pair<double,int> a, const pair<double,int> b) {return a.first > b.first;});
+    std::stable_sort(ld_pval.begin(), ld_pval.end(), [](const std::pair<double,int> a, const std::pair<double,int> b) {return a.first > b.first;});
     adjust_ld_r_fdr(ld_r_mat, kept_ID, ld_pval, n_indices_snp, ld_fdr_thresh);
 
     // estimate bxy
@@ -1596,7 +1596,7 @@ vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eige
         bxy(kept_ID[i]) = bzy(iter->second)/bzx(iter->second);
     }
 
-    vector<int> remain_index(kept_ID);
+    std::vector<int> remain_index(kept_ID);
     bool heidi_flag = CommFunc::FloatNotEqual(abs(global_heidi_thresh) + abs(std_heidi_thresh), 0) ? true : false;
 
     // estimate cov(bxy) matrix for HEIDI-outlier
@@ -1622,7 +1622,7 @@ vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eige
             if(n_kept_snp - n_indices_snp == 0 ) break;
             // check
             if(n_indices_snp < nsnp_gsmr || process == 0) {
-                err_msg = "Not enough SNPs to perform GSMR analysis. At least " + to_string(nsnp_gsmr) + " SNPs are required.";
+                err_msg = "Not enough SNPs to perform GSMR analysis. At least " + std::to_string(nsnp_gsmr) + " SNPs are required.";
                 return rst;
             }
         }
@@ -1638,7 +1638,7 @@ vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eige
             if(n_kept_snp - n_indices_snp == 0 ) break;
             // check
             if(n_indices_snp < nsnp_gsmr || global_heidi_pval < 0) {
-                err_msg = "Not enough SNPs to perform GSMR analysis. At least " + to_string(nsnp_gsmr) + " SNPs are required.";
+                err_msg = "Not enough SNPs to perform GSMR analysis. At least " + std::to_string(nsnp_gsmr) + " SNPs are required.";
                 return rst;
             }         
         }
@@ -1649,7 +1649,7 @@ vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eige
         int topsnp_index = -9;
         topsnp_index = topsnp_bxy(bxy, bzx, bzx_se, _meta_snp_name_map, indices_snp, kept_ID, n_indices_snp);
         if(topsnp_index < 0)  {
-            err_msg = "Not enough SNPs to perform the GSMR analysis. At least " + to_string(nsnp_gsmr) + " SNPs are required.";
+            err_msg = "Not enough SNPs to perform the GSMR analysis. At least " + std::to_string(nsnp_gsmr) + " SNPs are required.";
             return rst;
         }
 
@@ -1657,7 +1657,7 @@ vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eige
         // d = bxy_i - bxy_gsmr
         eigenVector indi_het_pval(n_indices_snp);
         heidi_outlier_topsnp(indi_het_pval, bxy, cov_bxy, kept_ID, bzx, bzy, topsnp_index, indices_snp, _meta_snp_name_map, false);        
-        vector<int> kept_ID_tmp;
+        std::vector<int> kept_ID_tmp;
         for(i = 0; i < n_indices_snp; i++) {
             if(i==topsnp_index) {
                 kept_ID_tmp.push_back(kept_ID[i]);
@@ -1674,7 +1674,7 @@ vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eige
     std::stable_sort(bxy_kept.data(), bxy_kept.data()+n_indices_snp);
 
     eigenVector vec_1t_v;
-    vector<double> gsmr_rst = est_bxy_gsmr(bxy_kept, bxy, indices_snp, kept_ID, bzx, bzx_se, bzy, bzy_se, ld_r_mat, _meta_snp_name_map, vec_1t_v);
+    std::vector<double> gsmr_rst = est_bxy_gsmr(bxy_kept, bxy, indices_snp, kept_ID, bzx, bzx_se, bzy, bzy_se, ld_r_mat, _meta_snp_name_map, vec_1t_v);
     rst[0] = gsmr_rst[0]; rst[1] = gsmr_rst[1]; 
     rst[2] = StatFunc::pchisq(rst[0]*rst[0]/(rst[1]*rst[1]), 1); rst[3] = n_indices_snp;
 
@@ -1690,28 +1690,28 @@ vector<double> gcta::gsmr_meta(vector<string> &snp_instru, eigenVector bzx, eige
             for(; i < nsnp_kept; i++) pleio_snps += indices_snp[remain_index[i]] + ",";
         }
         pleio_snps = pleio_snps.substr(0, pleio_snps.size()-1);
-        LOGGER.i(0, to_string(npleio) + " pleiotropic SNPs are filtered by HEIDI-outlier analysis.");	
+        LOGGER.i(0, std::to_string(npleio) + " pleiotropic SNPs are filtered by HEIDI-outlier analysis.");	
     }
     // save the SNPs after HEIDI-outlier
     snp_instru.clear(); snp_instru.resize(n_indices_snp);
     for(i=0; i<n_indices_snp; i++)
         snp_instru[i] = indices_snp[kept_ID[i]];
-    LOGGER.i(0, to_string(n_indices_snp) + " index SNPs are retained after HEIDI-outlier analysis.");    
+    LOGGER.i(0, std::to_string(n_indices_snp) + " index SNPs are retained after HEIDI-outlier analysis.");    
     return rst;
 }
 
-int read_ld_marker(string ref_ld_dirt) {
+int read_ld_marker(std::string ref_ld_dirt) {
     // Read the number of markers
     int i = 0, i_buf = 0, ttl_mk_num = 0, chr_num = 22;
-    string filestr = "", strbuf = "";
+    std::string filestr = "", strbuf = "";
     for(i=0; i<chr_num; i++) {
-        filestr = ref_ld_dirt + to_string(i+1)+ ".l2.M_5_50";
-        ifstream ref_marker(filestr.c_str());
+        filestr = ref_ld_dirt + std::to_string(i+1)+ ".l2.M_5_50";
+        std::ifstream ref_marker(filestr.c_str());
         if (!ref_marker) LOGGER.e(0, "cannot open the file [" + filestr + "] to read.");
         std::getline(ref_marker, strbuf);
         std::istringstream linebuf(strbuf);
-        std::istream_iterator<string> begin(linebuf), end;
-        vector<string> line_elements(begin, end);
+        std::istream_iterator<std::string> begin(linebuf), end;
+        std::vector<std::string> line_elements(begin, end);
         if(line_elements.size() != 1) LOGGER.e(0, "the format of file [" + filestr + "] is incorrect.");
         i_buf = atoi(line_elements[0].c_str());
         ttl_mk_num += i_buf;
@@ -1720,26 +1720,26 @@ int read_ld_marker(string ref_ld_dirt) {
     return ttl_mk_num;
 }
 
-vector<string> read_ld_score_txt(string filestr, map<string,int> snplist_map, vector<double> &ld_score) {
+std::vector<std::string> read_ld_score_txt(std::string filestr, std::map<std::string,int> snplist_map, std::vector<double> &ld_score) {
     
     int line_number = 0, indxbuf = 0, ldsc_index = 0;
     double ldscbuf = 0.0;
-    string strbuf = "", snpbuf = "";
-    vector<string> ld_score_snps;
-    map<string,int>::iterator snp_iter;
+    std::string strbuf = "", snpbuf = "";
+    std::vector<std::string> ld_score_snps;
+    std::map<std::string,int>::iterator snp_iter;
 
-    ifstream ldsc_marker(filestr.c_str());
+    std::ifstream ldsc_marker(filestr.c_str());
     while(std::getline(ldsc_marker, strbuf)) {
         line_number ++;
         std::istringstream linebuf(strbuf);
-        std::istream_iterator<string> begin(linebuf), end;
-        vector<string> line_elements(begin, end);
+        std::istream_iterator<std::string> begin(linebuf), end;
+        std::vector<std::string> line_elements(begin, end);
         if(line_elements.size() == 4) {
             ldsc_index = 3;
         } else if(line_elements.size() == 6) {
             ldsc_index = 5;
         } else {
-            LOGGER.e(0, "the format of file [" + filestr + "] is incorrect, line " + to_string(line_number) + ".");
+            LOGGER.e(0, "the format of file [" + filestr + "] is incorrect, line " + std::to_string(line_number) + ".");
         }
         if(line_number==1) continue;
         snpbuf = line_elements[1];
@@ -1756,32 +1756,32 @@ vector<string> read_ld_score_txt(string filestr, map<string,int> snplist_map, ve
     return ld_score_snps;
 }
 
-vector<string> read_ld_score_gz(string filestr, map<string,int> snplist_map, vector<double> &ld_score) {
+std::vector<std::string> read_ld_score_gz(std::string filestr, std::map<std::string,int> snplist_map, std::vector<double> &ld_score) {
     int indxbuf = 0, line_number = 0, ldsc_index = 0;
     double ldscbuf = 0.0;
-    string snpbuf = "";
-    vector<string> ld_score_snps;
-    map<string,int>::iterator snp_iter;
+    std::string snpbuf = "";
+    std::vector<std::string> ld_score_snps;
+    std::map<std::string,int>::iterator snp_iter;
 
-    string err_msg = "Failed to read [" + filestr + "]. An error occurs in line ";
+    std::string err_msg = "Failed to read [" + filestr + "]. An error occurs in line ";
 
     std::ifstream raw_file(filestr, std::ios::binary);
     if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + filestr + "] to read.");
     boost::iostreams::filtering_istream ldsc_marker;
     ldsc_marker.push(boost::iostreams::gzip_decompressor());
     ldsc_marker.push(raw_file);
-    string line;
+    std::string line;
     while(std::getline(ldsc_marker, line)) {
         line_number ++;
         std::istringstream linebuf(line);
-        std::istream_iterator<string> begin(linebuf), end;
-        vector<string> line_elements(begin, end);
+        std::istream_iterator<std::string> begin(linebuf), end;
+        std::vector<std::string> line_elements(begin, end);
         if(line_elements.size() == 4) {
             ldsc_index = 3;
         } else if(line_elements.size() == 6) {
             ldsc_index = 5;
         } else {
-            LOGGER.e(0, "the format of file [" + filestr + "] is not correct, line " + to_string(line_number) + ".");
+            LOGGER.e(0, "the format of file [" + filestr + "] is not correct, line " + std::to_string(line_number) + ".");
         }
         if(line_number==1) continue;
         snpbuf = line_elements[1];
@@ -1800,18 +1800,18 @@ vector<string> read_ld_score_gz(string filestr, map<string,int> snplist_map, vec
     return ld_score_snps;
 }
 
-vector<string> read_ld_score(string ld_dirt, map<string,int> snplist_map, int nsnp, vector<double> &ld_score) {
+std::vector<std::string> read_ld_score(std::string ld_dirt, std::map<std::string,int> snplist_map, int nsnp, std::vector<double> &ld_score) {
 
     // Read the reference / weighted LD score
     int i = 0, chr_num = 22;
-    string filestr_t1 = "", filestr_t2 = "";
-    vector<string> ld_score_snps, snpbuf;
+    std::string filestr_t1 = "", filestr_t2 = "";
+    std::vector<std::string> ld_score_snps, snpbuf;
     
     ld_score.clear(); ld_score.resize(nsnp);
     for(i=0; i<nsnp; i++) ld_score[i] = -9.0;
     for(i=0; i<chr_num; i++) {
-        filestr_t1 = ld_dirt  + to_string(i+1)+ ".l2.ldscore";
-        filestr_t2 = ld_dirt  + to_string(i+1)+ ".l2.ldscore.gz";
+        filestr_t1 = ld_dirt  + std::to_string(i+1)+ ".l2.ldscore";
+        filestr_t2 = ld_dirt  + std::to_string(i+1)+ ".l2.ldscore.gz";
         if(file_exists(filestr_t1)) {
             snpbuf = read_ld_score_txt(filestr_t1, snplist_map, ld_score);
             ld_score_snps.insert(ld_score_snps.end(), snpbuf.begin(), snpbuf.end());
@@ -1879,7 +1879,7 @@ eigenVector compute_irls(double &intercept, double &hsq, eigenMatrix x, eigenVec
     return w;
 }
 
-vector<double> est_hsq_trait_1_step(eigenVector chival, eigenVector n, eigenVector ref_ld, eigenVector w_ld, int n_ld_snp, int ttl_mk_num) {
+std::vector<double> est_hsq_trait_1_step(eigenVector chival, eigenVector n, eigenVector ref_ld, eigenVector w_ld, int n_ld_snp, int ttl_mk_num) {
 
     // Estimate prior of the weights
     eigenVector denominator = ref_ld.cwiseProduct(n);
@@ -1896,15 +1896,15 @@ vector<double> est_hsq_trait_1_step(eigenVector chival, eigenVector n, eigenVect
     double intercept_posterior = 0.0, h_posterior = 0.0;
     wt_ttl = compute_irls(intercept_posterior, h_posterior, x, chival, wt_ttl, ref_ld, w_ld, n, ttl_mk_num, n_ld_snp, true, false);
     
-    vector<double> ldsc_est(2);
+    std::vector<double> ldsc_est(2);
     ldsc_est[0]  = intercept_posterior; ldsc_est[1] = h_posterior;
     return ldsc_est;
 }
 
-vector<double> est_hsq_trait_2_steps(eigenVector chival, eigenVector n, eigenVector ref_ld, eigenVector w_ld, int n_ld_snp, int ttl_mk_num) {
+std::vector<double> est_hsq_trait_2_steps(eigenVector chival, eigenVector n, eigenVector ref_ld, eigenVector w_ld, int n_ld_snp, int ttl_mk_num) {
     int i = 0, n_subset_snp = 0;
     double thresh = 30;
-    vector<int> subset_indx;
+    std::vector<int> subset_indx;
     eigenVector subset_chi, subset_n, subset_ref_ld, subset_w_ld;
 
     // Estimate prior of the weights
@@ -1951,7 +1951,7 @@ vector<double> est_hsq_trait_2_steps(eigenVector chival, eigenVector n, eigenVec
     double h_posterior = 0.0;
     wt_ttl = compute_irls(intercept_posterior, h_posterior, x, chival, wt_ttl, ref_ld, w_ld, n, ttl_mk_num, n_ld_snp, false, false);
    
-    vector<double> ldsc_est(2);
+    std::vector<double> ldsc_est(2);
     ldsc_est[0]  = intercept_posterior; ldsc_est[1] = h_posterior;
 
     return ldsc_est;
@@ -2016,7 +2016,7 @@ eigenVector compute_irls_gcov(double &intercept_gcov, double &gcov, eigenMatrix 
     return w;
 }
 
-vector<double> est_gcov_trait_1_step(eigenVector zscore, eigenVector n_gcov, eigenVector ref_ld, eigenVector w_ld, double intercept1, double hsq1, eigenVector n1, double intercept2, double hsq2, eigenVector n2, int n_ld_snp, int ttl_mk_num) {
+std::vector<double> est_gcov_trait_1_step(eigenVector zscore, eigenVector n_gcov, eigenVector ref_ld, eigenVector w_ld, double intercept1, double hsq1, eigenVector n1, double intercept2, double hsq2, eigenVector n2, int n_ld_snp, int ttl_mk_num) {
     
     // Estimate prior of the weights
     eigenVector denominator = ref_ld.cwiseProduct(n_gcov);
@@ -2034,7 +2034,7 @@ vector<double> est_gcov_trait_1_step(eigenVector zscore, eigenVector n_gcov, eig
     wt_ttl = compute_irls_gcov(intercept_gcov_posterior, gcov_posterior, x, zscore, wt_ttl, ref_ld, w_ld, n_gcov, intercept1,  hsq1, n1, intercept2,  hsq2, n2, ttl_mk_num, n_ld_snp, true, false);
     wt_ttl = compute_irls_gcov(intercept_gcov_posterior, gcov_posterior, x, zscore, wt_ttl, ref_ld, w_ld, n_gcov, intercept1,  hsq1, n1, intercept2,  hsq2, n2, ttl_mk_num, n_ld_snp, true, false);
     
-    vector<double> ldsc_est(2);
+    std::vector<double> ldsc_est(2);
     ldsc_est[0]  = intercept_gcov_posterior; ldsc_est[1] = gcov_posterior/sqrt(hsq1*hsq2);
     return ldsc_est;
 }
@@ -2046,10 +2046,10 @@ double transform_hsq_L(double P, double K, double hsq) {
     return (hsq * C);
 }
 
-vector<string> gcta::read_snp_ldsc(map<string,int> ldsc_snp_name_map, vector<string> snp_name, vector<int> snp_remain, int &ttl_mk_num, 
-                                   string ref_ld_dirt, string w_ld_dirt, vector<double> &ref_ld_vec, vector<double> &w_ld_vec) {
+std::vector<std::string> gcta::read_snp_ldsc(std::map<std::string,int> ldsc_snp_name_map, std::vector<std::string> snp_name, std::vector<int> snp_remain, int &ttl_mk_num, 
+                                   std::string ref_ld_dirt, std::string w_ld_dirt, std::vector<double> &ref_ld_vec, std::vector<double> &w_ld_vec) {
     int i=0, nsnp = snp_remain.size();
-    vector<string> ref_ld_snps, w_ld_snps;
+    std::vector<std::string> ref_ld_snps, w_ld_snps;
 
     ref_ld_vec.clear(); w_ld_vec.clear();
     // Read the total number of markers
@@ -2059,11 +2059,11 @@ vector<string> gcta::read_snp_ldsc(map<string,int> ldsc_snp_name_map, vector<str
     // Read the weighted LD scores
     w_ld_snps = read_ld_score(w_ld_dirt, ldsc_snp_name_map, nsnp, w_ld_vec);
     // SNPs in common
-    map<string,int> w_ld_snp_map;
-    vector<string> cm_ld_snps;
+    std::map<std::string,int> w_ld_snp_map;
+    std::vector<std::string> cm_ld_snps;
     int n_ref_ld_snps = ref_ld_snps.size(), n_w_ld_snps = w_ld_snps.size();
     for(i=0; i<n_w_ld_snps; i++)
-        w_ld_snp_map.insert(pair<string, int>(w_ld_snps[i], i));
+        w_ld_snp_map.insert(std::pair<std::string, int>(w_ld_snps[i], i));
     for(i=0; i<n_ref_ld_snps; i++) {
         if(w_ld_snp_map.find(ref_ld_snps[i])!=w_ld_snp_map.end()) {
             cm_ld_snps.push_back(ref_ld_snps[i]);
@@ -2073,13 +2073,13 @@ vector<string> gcta::read_snp_ldsc(map<string,int> ldsc_snp_name_map, vector<str
     return cm_ld_snps;
 }
 
-void gcta::reorder_snp_effect(vector<int> snp_remain, eigenMatrix &bhat_z, eigenMatrix &bhat_n, eigenMatrix snp_b, eigenMatrix snp_se, eigenMatrix snp_n, 
-                              vector<vector<bool>> &snp_flag, vector<vector<bool>> snp_val_flag, vector<int> &nsnp_cm_trait,
-                              vector<string> cm_ld_snps, map<string,int> ldsc_snp_name_map,
-                              eigenVector &ref_ld, eigenVector &w_ld, vector<double> ref_ld_vec, vector<double> w_ld_vec, int ntrait) {
+void gcta::reorder_snp_effect(std::vector<int> snp_remain, eigenMatrix &bhat_z, eigenMatrix &bhat_n, eigenMatrix snp_b, eigenMatrix snp_se, eigenMatrix snp_n, 
+                              std::vector<std::vector<bool>> &snp_flag, std::vector<std::vector<bool>> snp_val_flag, std::vector<int> &nsnp_cm_trait,
+                              std::vector<std::string> cm_ld_snps, std::map<std::string,int> ldsc_snp_name_map,
+                              eigenVector &ref_ld, eigenVector &w_ld, std::vector<double> ref_ld_vec, std::vector<double> w_ld_vec, int ntrait) {
     // Re-order the variables
     int i = 0, j = 0, n_cm_ld_snps = cm_ld_snps.size(), indxbuf = 0;
-    map<string,int>::iterator iter;
+    std::map<std::string,int>::iterator iter;
 
     ref_ld.resize(n_cm_ld_snps); ref_ld.setZero(n_cm_ld_snps);
     w_ld.resize(n_cm_ld_snps); w_ld.setZero(n_cm_ld_snps);
@@ -2101,18 +2101,18 @@ void gcta::reorder_snp_effect(vector<int> snp_remain, eigenMatrix &bhat_z, eigen
     }
 }
 
-eigenMatrix gcta::ldsc_snp_h2(eigenMatrix bhat_z, eigenMatrix bhat_n, eigenVector ref_ld, eigenVector w_ld, vector<vector<bool>> snp_flag, vector<int> nsnp_cm_trait, int n_cm_ld_snps, int ttl_mk_num, vector<string> trait_name, int ntrait) {
+eigenMatrix gcta::ldsc_snp_h2(eigenMatrix bhat_z, eigenMatrix bhat_n, eigenVector ref_ld, eigenVector w_ld, std::vector<std::vector<bool>> snp_flag, std::vector<int> nsnp_cm_trait, int n_cm_ld_snps, int ttl_mk_num, std::vector<std::string> trait_name, int ntrait) {
     // Estimate SNP h2
     int i = 0, j = 0;
-    vector<double> rst_ldsc(2);
-    vector<vector<vector<double>>> ldsc_trait(3);
+    std::vector<double> rst_ldsc(2);
+    std::vector<std::vector<std::vector<double>>> ldsc_trait(3);
     eigenMatrix ldsc_var(ntrait, 2);
     int nsnp_ldsc_thresh = 5e5;
 
     for(i=0; i<ntrait; i++) {
         // Remove missing value
         if(nsnp_cm_trait[i] < nsnp_ldsc_thresh) 
-            LOGGER.w(0, "Only " + to_string(nsnp_cm_trait[i]) + " are retained in the univariate LD score regression analysis for " 
+            LOGGER.w(0, "Only " + std::to_string(nsnp_cm_trait[i]) + " are retained in the univariate LD score regression analysis for " 
                     + trait_name[i] + ". The estimate may not be accurate.");                    
         int k = 0, nsnp_buf = 0;
         eigenVector chi_val_buf(nsnp_cm_trait[i]), n_buf(nsnp_cm_trait[i]), ref_ld_buf(nsnp_cm_trait[i]), w_ld_buf(nsnp_cm_trait[i]);
@@ -2129,7 +2129,7 @@ eigenMatrix gcta::ldsc_snp_h2(eigenMatrix bhat_z, eigenMatrix bhat_n, eigenVecto
         ldsc_var(i, 0) = rst_ldsc[0];
         if(rst_ldsc[1]>0) {
             ldsc_var(i,1) = rst_ldsc[1];
-            LOGGER.i(0, trait_name[i] + ": " + to_string(rst_ldsc[0]) + " " + to_string(rst_ldsc[1]));  
+            LOGGER.i(0, trait_name[i] + ": " + std::to_string(rst_ldsc[0]) + " " + std::to_string(rst_ldsc[1]));  
         } else {
             LOGGER.e(0, "negative SNP heritability estimate for " + trait_name[i] + ". Exiting ...");
         }
@@ -2137,22 +2137,22 @@ eigenMatrix gcta::ldsc_snp_h2(eigenMatrix bhat_z, eigenMatrix bhat_n, eigenVecto
     return ldsc_var;
 }
 
-eigenMatrix gcta::ldsc_snp_rg(eigenMatrix ldsc_var_h2, eigenMatrix bhat_z, eigenMatrix bhat_n, eigenVector ref_ld, eigenVector w_ld, vector<vector<bool>> snp_flag, vector<int> trait_indx1, vector<int> trait_indx2, int n_cm_ld_snps, int ttl_mk_num, vector<string> trait_name) {
+eigenMatrix gcta::ldsc_snp_rg(eigenMatrix ldsc_var_h2, eigenMatrix bhat_z, eigenMatrix bhat_n, eigenVector ref_ld, eigenVector w_ld, std::vector<std::vector<bool>> snp_flag, std::vector<int> trait_indx1, std::vector<int> trait_indx2, int n_cm_ld_snps, int ttl_mk_num, std::vector<std::string> trait_name) {
     // Estimate SNP rg
     int i = 0, nproc = trait_indx1.size();
     eigenMatrix ldsc_var_rg(nproc, 2);
     eigenVector gcov_n1n2(n_cm_ld_snps);
-    vector<double> rst_ldsc(2);
+    std::vector<double> rst_ldsc(2);
     int nsnp_ldsc_thresh = 5e5;
     for( i = 0; i < nproc; i++ ) {
         int k = 0, n_cm_snps_buf = 0;
-        vector<bool> snp_pair_flag(n_cm_ld_snps);
+        std::vector<bool> snp_pair_flag(n_cm_ld_snps);
         for(k=0; k<n_cm_ld_snps; k++) {
             snp_pair_flag[k] = snp_flag[trait_indx1[i]][k] && snp_flag[trait_indx2[i]][k];
             n_cm_snps_buf += snp_pair_flag[k];
         }
         if(n_cm_snps_buf < nsnp_ldsc_thresh) 
-            LOGGER.w(0, "Only " + to_string(n_cm_snps_buf) + " are retained in the bivariate LD score regression analysis for " 
+            LOGGER.w(0, "Only " + std::to_string(n_cm_snps_buf) + " are retained in the bivariate LD score regression analysis for " 
                     + trait_name[trait_indx1[i]] + " and " + trait_name[trait_indx2[i]] + ". The estimate may not be accurate.");
         eigenVector gcov_z1z2(n_cm_snps_buf), gcov_n1n2(n_cm_snps_buf), ref_ld_buf(n_cm_snps_buf), w_ld_buf(n_cm_snps_buf), n_buf_i(n_cm_snps_buf), n_buf_j(n_cm_snps_buf);
         int t = 0;
@@ -2175,24 +2175,24 @@ eigenMatrix gcta::ldsc_snp_rg(eigenMatrix ldsc_var_h2, eigenMatrix bhat_z, eigen
     return ldsc_var_rg;
 }
 
-bool gcta::mtcojo_ldsc(vector<vector<bool>> snp_val_flag, eigenMatrix snp_b, eigenMatrix snp_se, eigenMatrix snp_n, int ntrait, 
-                vector<string> snp_name, vector<int> snp_remain, string ref_ld_dirt, string w_ld_dirt, vector<string> trait_name,
+bool gcta::mtcojo_ldsc(std::vector<std::vector<bool>> snp_val_flag, eigenMatrix snp_b, eigenMatrix snp_se, eigenMatrix snp_n, int ntrait, 
+                std::vector<std::string> snp_name, std::vector<int> snp_remain, std::string ref_ld_dirt, std::string w_ld_dirt, std::vector<std::string> trait_name,
                 eigenMatrix &ldsc_intercept, eigenMatrix &ldsc_slope) {
 
     int i = 0, j = 0, nsnp = snp_remain.size();
     int ttl_mk_num = 0;
-    vector<int> nsnp_cm_trait(ntrait);    
-    vector<double> ref_ld_vec, w_ld_vec;
-    vector<string> cm_ld_snps;
-    vector<vector<bool>> snp_flag;
-    map<string,int> ldsc_snp_name_map;
+    std::vector<int> nsnp_cm_trait(ntrait);    
+    std::vector<double> ref_ld_vec, w_ld_vec;
+    std::vector<std::string> cm_ld_snps;
+    std::vector<std::vector<bool>> snp_flag;
+    std::map<std::string,int> ldsc_snp_name_map;
     eigenVector ref_ld, w_ld;
     eigenMatrix bhat_z, bhat_n;
     bool proc_flag = true;
 
     // Initialize the parameters
     for(i=0; i<nsnp; i++) {
-        ldsc_snp_name_map.insert(pair<string,int>(snp_name[snp_remain[i]], i));
+        ldsc_snp_name_map.insert(std::pair<std::string,int>(snp_name[snp_remain[i]], i));
     }
     for(i=0; i<ntrait; i++) nsnp_cm_trait[i] = 0;
     // Read the LD scores
@@ -2224,10 +2224,10 @@ bool gcta::mtcojo_ldsc(vector<vector<bool>> snp_val_flag, eigenMatrix snp_b, eig
         ldsc_slope(i,i) = ldsc_var_h2(i,1);
     }
     // Estimate SNP rg
-    LOGGER.i(0, "Bivariate LD score regression analysis to estimate genetic correlation between each pair of traits ...");
+    LOGGER.i(0, "Bivariate LD score regression analysis to estimate genetic correlation between each std::pair of traits ...");
     int k = 0, nproc = ntrait*(ntrait-1)/2;
     eigenMatrix ldsc_var_rg;
-    vector<int> trait_indx1(nproc), trait_indx2(nproc);
+    std::vector<int> trait_indx1(nproc), trait_indx2(nproc);
     for( i=0, k=0; i<(ntrait-1); i++ ) {
         for( j=i+1; j<ntrait; j++, k++) {
             trait_indx1[k] = i; trait_indx2[k] = j;
@@ -2239,7 +2239,7 @@ bool gcta::mtcojo_ldsc(vector<vector<bool>> snp_val_flag, eigenMatrix snp_b, eig
         ldsc_slope(trait_indx1[i], trait_indx2[i]) = ldsc_slope(trait_indx2[i], trait_indx1[i]) = ldsc_var_rg(i,1);
     }
     // Print the intercept of rg
-    stringstream ss;
+    std::stringstream ss;
     LOGGER.i(0, "Intercept:");
     for(i=0; i<ntrait; i++) {
         ss.str("");
@@ -2318,29 +2318,29 @@ eigenMatrix mtcojo_cond_multiple_covars(eigenVector bzy, eigenVector bzy_se,  ei
     return mtcojo_est;
 }
 
-void mtcojo_cond_output(string output_file, vector<string> snp_name, vector<int> snp_remain, vector<string> snp_a1, vector<string> snp_a2, eigenVector snp_freq, eigenVector snp_b, eigenVector snp_se, eigenVector snp_pval, eigenMatrix mtcojo_est, eigenVector snp_n, int nsnp) {
+void mtcojo_cond_output(std::string output_file, std::vector<std::string> snp_name, std::vector<int> snp_remain, std::vector<std::string> snp_a1, std::vector<std::string> snp_a2, eigenVector snp_freq, eigenVector snp_b, eigenVector snp_se, eigenVector snp_pval, eigenMatrix mtcojo_est, eigenVector snp_n, int nsnp) {
     
     int i=0, snpindx=0;
-    ofstream ofile(output_file.c_str());
+    std::ofstream ofile(output_file.c_str());
     if (!ofile) LOGGER.e(0, "cannot open the file [" + output_file + "] to write.");
     
-    ofile << "SNP\tA1\tA2\tfreq\tb\tse\tp\tN\tbC\tbC_se\tbC_pval" <<endl;
+    ofile << "SNP\tA1\tA2\tfreq\tb\tse\tp\tN\tbC\tbC_se\tbC_pval" <<std::endl;
     for (i = 0; i < nsnp; i++) {
         snpindx = snp_remain[i];
         ofile << snp_name[snpindx] << "\t" <<snp_a1[snpindx] << "\t" << snp_a2[snpindx] << "\t" << snp_freq[snpindx] 
               << "\t" << snp_b[snpindx] << "\t" << snp_se[snpindx] << "\t"  << snp_pval[snpindx] << "\t" 
-              << snp_n[snpindx] << "\t" << mtcojo_est(i,0) << "\t" << mtcojo_est(i,1) <<"\t"<< mtcojo_est(i,2) << "\t" <<endl;
+              << snp_n[snpindx] << "\t" << mtcojo_est(i,0) << "\t" << mtcojo_est(i,1) <<"\t"<< mtcojo_est(i,2) << "\t" <<std::endl;
     }
     ofile.close();
 }
 
-void gcta::mtcojo(string mtcojo_bxy_file, string ref_ld_dirt, string w_ld_dirt, double freq_thresh, double gwas_thresh, int clump_wind_size, double clump_r2_thresh, double std_heidi_thresh, double global_heidi_thresh, double ld_fdr_thresh, int nsnp_gsmr, int gsmr_beta_version) {
+void gcta::mtcojo(std::string mtcojo_bxy_file, std::string ref_ld_dirt, std::string w_ld_dirt, double freq_thresh, double gwas_thresh, int clump_wind_size, double clump_r2_thresh, double std_heidi_thresh, double global_heidi_thresh, double ld_fdr_thresh, int nsnp_gsmr, int gsmr_beta_version) {
     if(gsmr_beta_version) { _n_gsmr_rst_item = 5; _gsmr_beta_version = 1; }
     else { _n_gsmr_rst_item = 4; _gsmr_beta_version = 0; }
 
     int i=0, j=0, nsnp=_meta_remain_snp.size(), ncovar=_covar_pheno_name.size();
-    vector<bool> snp_pair_flag(nsnp);
-    vector<string> afsnps;
+    std::vector<bool> snp_pair_flag(nsnp);
+    std::vector<std::string> afsnps;
     eigenVector bxy_est(ncovar);
     bxy_est.setConstant(-999999.0);
 
@@ -2351,14 +2351,14 @@ void gcta::mtcojo(string mtcojo_bxy_file, string ref_ld_dirt, string w_ld_dirt, 
     if (_mu.empty()) calcu_mu();
     LOGGER.i(0, "Checking the difference in allele frequency between the GWAS summary datasets and the LD reference sample...");
     afsnps = remove_freq_diff_snps(_meta_snp_name, _meta_remain_snp, _snp_name_map, _mu, _meta_snp_freq, _snp_val_flag, ncovar+1, freq_thresh, _out);
-    // Update SNPs set
+    // Update SNPs std::set
     if( afsnps.size()>0 ) {
         update_id_map_rm(afsnps, _snp_name_map, _include);
         update_mtcojo_snp_rm(afsnps, _meta_snp_name_map, _meta_remain_snp);
     }
     // Remove monomorphic SNPs
     afsnps = remove_mono_snps(_snp_name_map, _mu, _out);
-    // Update SNPs set
+    // Update SNPs std::set
     if( afsnps.size()>0 ) {
         update_id_map_rm(afsnps, _snp_name_map, _include);
         update_mtcojo_snp_rm(afsnps, _meta_snp_name_map, _meta_remain_snp);
@@ -2370,7 +2370,7 @@ void gcta::mtcojo(string mtcojo_bxy_file, string ref_ld_dirt, string w_ld_dirt, 
 
     // LDSC analysis to estimate h2 and rg
     eigenMatrix ldsc_intercept, ldsc_slope;
-    vector<string> trait_name;
+    std::vector<std::string> trait_name;
     trait_name.push_back(_target_pheno_name);
     trait_name.insert(trait_name.end(), _covar_pheno_name.begin(), _covar_pheno_name.end());
    
@@ -2387,35 +2387,35 @@ void gcta::mtcojo(string mtcojo_bxy_file, string ref_ld_dirt, string w_ld_dirt, 
     } 
 
     // GSMR analysis
-    vector<double> gsmr_rst(_n_gsmr_rst_item);
+    std::vector<double> gsmr_rst(_n_gsmr_rst_item);
     std::stringstream ss_pleio;
     bool pleio_flag = false;
     for(i=1; i<=ncovar; i++) {
         if(fabs(bxy_est(i-1))<100) continue;
-        string pleio_snps = "";
-        vector<string> snp_instru;
-        string err_msg;
-        LOGGER.i(0, "\nGSMR analysis for covariate #" + to_string(i) + " (" + trait_name[i] + ")" + " ...");
+        std::string pleio_snps = "";
+        std::vector<std::string> snp_instru;
+        std::string err_msg;
+        LOGGER.i(0, "\nGSMR analysis for covariate #" + std::to_string(i) + " (" + trait_name[i] + ")" + " ...");
         for(j=0; j<nsnp; j++) snp_pair_flag[j] = _snp_val_flag[0][_meta_remain_snp[j]] && _snp_val_flag[i][_meta_remain_snp[j]];
         gsmr_rst =  gsmr_meta(snp_instru, _meta_snp_b.col(i), _meta_snp_se.col(i), _meta_snp_pval.col(i), _meta_snp_b.col(0), _meta_snp_se.col(0), _meta_snp_pval.col(0), 0, snp_pair_flag, gwas_thresh, clump_wind_size, clump_r2_thresh, std_heidi_thresh, global_heidi_thresh, ld_fdr_thresh, nsnp_gsmr, pleio_snps, err_msg);
         if(std::isnan(gsmr_rst[3])) {
             LOGGER.w(0, err_msg);
             LOGGER.i(0, "bxy is estimated from rg.");
             bxy_est(i-1) = ldsc_slope(i,0)*sqrt(ldsc_slope(0,0)/ldsc_slope(i,i));
-            LOGGER.i(0, "bxy " + to_string(gsmr_rst[0]) + " " + to_string(gsmr_rst[1]));
+            LOGGER.i(0, "bxy " + std::to_string(gsmr_rst[0]) + " " + std::to_string(gsmr_rst[1]));
         }
         // Saving pleiotropic SNPs
         if(pleio_snps.size() > 0) {
-            ss_pleio << _covar_pheno_name[i-1] << " " << _target_pheno_name << " " << pleio_snps << endl;
+            ss_pleio << _covar_pheno_name[i-1] << " " << _target_pheno_name << " " << pleio_snps << std::endl;
             pleio_flag = true;
         }
         bxy_est(i-1) = gsmr_rst[0];
-        LOGGER.i(0, "bxy " + to_string(gsmr_rst[0]) + " " + to_string(gsmr_rst[1]));
-        LOGGER.i(0, "GSMR analysis for covariate #" + to_string(i) + " (" + trait_name[i] + ") completed.");
+        LOGGER.i(0, "bxy " + std::to_string(gsmr_rst[0]) + " " + std::to_string(gsmr_rst[1]));
+        LOGGER.i(0, "GSMR analysis for covariate #" + std::to_string(i) + " (" + trait_name[i] + ") completed.");
     }
     if(pleio_flag) {
-        string pleio_snpfile = _out + ".pleio_snps";	
-        ofstream o_pleio_snp(pleio_snpfile.c_str());	
+        std::string pleio_snpfile = _out + ".pleio_snps";	
+        std::ofstream o_pleio_snp(pleio_snpfile.c_str());	
         if(!o_pleio_snp) LOGGER.e(0, "cannot open file [" + pleio_snpfile + "] to write pleiotropic SNPs.");
         o_pleio_snp << ss_pleio.str();            
         o_pleio_snp.close();	
@@ -2425,7 +2425,7 @@ void gcta::mtcojo(string mtcojo_bxy_file, string ref_ld_dirt, string w_ld_dirt, 
     // mtcojo analysis
     // SNPs in common across the whole traits
     int n_buf = 0;
-    vector<string> snp_buf;
+    std::vector<std::string> snp_buf;
     for(i=0; i<nsnp; i++) {
         n_buf = 0;
         for(j=0; j<ncovar+1; j++) n_buf += _snp_val_flag[j][_meta_remain_snp[i]];
@@ -2447,7 +2447,7 @@ void gcta::mtcojo(string mtcojo_bxy_file, string ref_ld_dirt, string w_ld_dirt, 
     }
 
     LOGGER.i(0, "\nmtCOJO analysis ...");
-    LOGGER.i(0, "There are " + to_string(nsnp) + " SNPs in common between the target trait and all the covariate trait(s).");
+    LOGGER.i(0, "There are " + std::to_string(nsnp) + " SNPs in common between the target trait and all the covariate trait(s).");
     if(ncovar==1) {
         mtcojo_est = mtcojo_cond_single_covar(snp_bzy, snp_bzy_se, snp_bzx, snp_bzx_se, bxy_est(0), ldsc_intercept, ldsc_slope, nsnp);
     } else {
@@ -2455,8 +2455,8 @@ void gcta::mtcojo(string mtcojo_bxy_file, string ref_ld_dirt, string w_ld_dirt, 
     }
     
     // Output
-    string output_filename = _out + ".mtcojo.cma";
-    LOGGER.i(0, "Saving the mtCOJO analysis results of " + to_string(nsnp) + " remaining SNPs to [" + output_filename + "] ...");
+    std::string output_filename = _out + ".mtcojo.cma";
+    LOGGER.i(0, "Saving the mtCOJO analysis results of " + std::to_string(nsnp) + " remaining SNPs to [" + output_filename + "] ...");
     LOGGER.i(0, "mtCOJO analysis completed.");
     mtcojo_cond_output(output_filename, _meta_snp_name, _meta_remain_snp, _meta_snp_a1, _meta_snp_a2, _meta_snp_freq, _meta_snp_b.col(0), _meta_snp_se.col(0), _meta_snp_pval.col(0), mtcojo_est, _meta_snp_n_o.col(0), nsnp);
 }
