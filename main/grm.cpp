@@ -39,7 +39,7 @@ void gcta::check_sex() {
     }
 }
 
-void gcta::make_grm(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool output_bin, int grm_mtd, bool mlmassoc, bool diag_f3_flag, string subpopu_file)
+void gcta::make_grm(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool output_bin, int grm_mtd, bool mlmassoc, bool diag_f3_flag, std::string subpopu_file)
 {
     bool have_mis = false;
 
@@ -63,12 +63,12 @@ void gcta::make_grm(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool outpu
         else std_XMat(_geno, sd_SNP, grm_xchr_flag, false, false);
     }
 
-    if (!mlmassoc) LOGGER << "\nCalculating the" << ((grm_d_flag) ? " dominance" : "") << " genetic relationship matrix (GRM)" << (grm_xchr_flag ? " for the X chromosome" : "") << (_dosage_flag ? " using imputed dosage data" : "") << " ... (Note: default speed-optimized mode, may use huge RAM)" << endl;
-    else LOGGER << "\nCalculating the genetic relationship matrix (GRM) ... " << endl;
+    if (!mlmassoc) LOGGER << "\nCalculating the" << ((grm_d_flag) ? " dominance" : "") << " genetic relationship matrix (GRM)" << (grm_xchr_flag ? " for the X chromosome" : "") << (_dosage_flag ? " using imputed dosage data" : "") << " ... (Note: default speed-optimized mode, may use huge RAM)" << std::endl;
+    else LOGGER << "\nCalculating the genetic relationship matrix (GRM) ... " << std::endl;
 
     // count the number of missing genotypes
-    vector< vector<int> > miss_pos;
-    vector< vector<bool> > X_bool;
+    std::vector< std::vector<int> > miss_pos;
+    std::vector< std::vector<bool> > X_bool;
     if(have_mis){
         miss_pos.resize(n);
         X_bool.resize(n);
@@ -123,11 +123,11 @@ void gcta::make_grm(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool outpu
     // GRM summary
     double diag_m = 0.0, diag_v = 0.0, off_m = 0.0, off_v = 0.0;
     calcu_grm_var(diag_m, diag_v, off_m, off_v);
-    LOGGER<<"\nSummary of the GRM:" << endl;
-    LOGGER<<"Mean of diagonals = "<<diag_m<<endl;
-    LOGGER<<"Variance of diagonals = "<<diag_v<<endl;
-    LOGGER<<"Mean of off-diagonals = " << off_m <<endl;
-    LOGGER<<"Variance of off-diagonals = " << off_v <<endl;
+    LOGGER<<"\nSummary of the GRM:" << std::endl;
+    LOGGER<<"Mean of diagonals = "<<diag_m<<std::endl;
+    LOGGER<<"Variance of diagonals = "<<diag_v<<std::endl;
+    LOGGER<<"Mean of off-diagonals = " << off_m <<std::endl;
+    LOGGER<<"Variance of off-diagonals = " << off_v <<std::endl;
 
     // re-calcuate the diagonals (Fhat3+1)
     if (diag_f3_flag) {
@@ -167,7 +167,7 @@ void gcta::make_grm(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool outpu
     } 
     else {
         // Output A_N and A
-        string out_buf = _out;
+        std::string out_buf = _out;
         if (grm_d_flag) _out += ".d";
         output_grm(output_bin);
         _out = out_buf;
@@ -191,11 +191,11 @@ void gcta::calcu_grm_var(double &diag_m, double &diag_v, double &off_m, double &
 void gcta::output_grm(bool output_grm_bin)
 {
     int i = 0, j = 0;
-    string grm_file;
+    std::string grm_file;
     if (output_grm_bin) {
         // Save matrix A in binary file
         grm_file = _out + ".grm.bin";
-        fstream A_Bin(grm_file.c_str(), ios::out | ios::binary);
+        std::fstream A_Bin(grm_file.c_str(), std::ios::out | std::ios::binary);
         if (!A_Bin) LOGGER.e(0, "cannot open the file [" + grm_file + "] to write.");
         float f_buf = 0.0;
         int size = sizeof (float);
@@ -206,10 +206,10 @@ void gcta::output_grm(bool output_grm_bin)
             }
         }
         A_Bin.close();
-        LOGGER << "GRM of " << _keep.size() << " individuals has been saved in the file [" + grm_file + "] (in binary format)." << endl;
+        LOGGER << "GRM of " << _keep.size() << " individuals has been saved in the file [" + grm_file + "] (in binary format)." << std::endl;
 
-        string grm_N_file = _out + ".grm.N.bin";
-        fstream N_Bin(grm_N_file.c_str(), ios::out | ios::binary);
+        std::string grm_N_file = _out + ".grm.N.bin";
+        std::fstream N_Bin(grm_N_file.c_str(), std::ios::out | std::ios::binary);
         if (!N_Bin) LOGGER.e(0, "cannot open the file [" + grm_N_file + "] to write.");
         f_buf = 0.0;
         size = sizeof (int);
@@ -220,7 +220,7 @@ void gcta::output_grm(bool output_grm_bin)
             }
         }
         N_Bin.close();
-        LOGGER << "Number of SNPs to calculate the genetic relationship between each pair of individuals has been saved in the file [" + grm_N_file + "] (in binary format)." << endl;
+        LOGGER << "Number of SNPs to calculate the genetic relationship between each std::pair of individuals has been saved in the file [" + grm_N_file + "] (in binary format)." << std::endl;
     } 
     else {
         // Save A matrix in txt format
@@ -230,41 +230,41 @@ void gcta::output_grm(bool output_grm_bin)
         boost::iostreams::filtering_ostream zoutf;
         zoutf.push(boost::iostreams::gzip_compressor());
         zoutf.push(raw_file);
-        LOGGER << "Saving the genetic relationship matrix to the file [" + grm_file + "] (in compressed text format)." << endl;
-        zoutf.setf(ios::scientific);
+        LOGGER << "Saving the genetic relationship matrix to the file [" + grm_file + "] (in compressed text format)." << std::endl;
+        zoutf.setf(std::ios::scientific);
         zoutf.precision(6);
         for (i = 0; i < _keep.size(); i++) {
             if (_grm_N.rows() > 0){
-                zoutf.setf(ios::scientific);
+                zoutf.setf(std::ios::scientific);
                 zoutf.precision(6);
-                for (j = 0; j <= i; j++) zoutf << i + 1 << '\t' << j + 1 << '\t' << _grm_N(i, j) << '\t' << _grm(i, j) << endl;
+                for (j = 0; j <= i; j++) zoutf << i + 1 << '\t' << j + 1 << '\t' << _grm_N(i, j) << '\t' << _grm(i, j) << std::endl;
             }
             else{ 
-                for (j = 0; j <= i; j++) zoutf << i + 1 << '\t' << j + 1 << "\t0\t" << _grm(i, j) << endl;
+                for (j = 0; j <= i; j++) zoutf << i + 1 << '\t' << j + 1 << "\t0\t" << _grm(i, j) << std::endl;
             }
         }
         zoutf.reset();
         raw_file.close();
-        LOGGER << "The genetic relationship matrix has been saved in the file [" + grm_file + "] (in compressed text format)." << endl;
+        LOGGER << "The genetic relationship matrix has been saved in the file [" + grm_file + "] (in compressed text format)." << std::endl;
     }
 
-    string famfile = _out + ".grm.id";
-    ofstream Fam(famfile.c_str());
+    std::string famfile = _out + ".grm.id";
+    std::ofstream Fam(famfile.c_str());
     if (!Fam) LOGGER.e(0, "cannot open the file [" + famfile + "] to write.");
-    for (i = 0; i < _keep.size(); i++) Fam << _fid[_keep[i]] + "\t" + _pid[_keep[i]] << endl;
+    for (i = 0; i < _keep.size(); i++) Fam << _fid[_keep[i]] + "\t" + _pid[_keep[i]] << std::endl;
     Fam.close();
-    LOGGER << "IDs for the GRM file [" + grm_file + "] have been saved in the file [" + famfile + "]." << endl;
+    LOGGER << "IDs for the GRM file [" + grm_file + "] have been saved in the file [" + famfile + "]." << std::endl;
 }
 
-int gcta::read_grm_id(string grm_file, vector<string> &grm_id, bool out_id_log, bool read_id_only)
+int gcta::read_grm_id(std::string grm_file, std::vector<std::string> &grm_id, bool out_id_log, bool read_id_only)
 {
     // read GRM IDs
-    string grm_id_file = grm_file + ".grm.id";
-    if (out_id_log) LOGGER << "Reading IDs of the GRM from [" + grm_id_file + "]." << endl;
-    ifstream i_grm_id(grm_id_file.c_str());
+    std::string grm_id_file = grm_file + ".grm.id";
+    if (out_id_log) LOGGER << "Reading IDs of the GRM from [" + grm_id_file + "]." << std::endl;
+    std::ifstream i_grm_id(grm_id_file.c_str());
     if (!i_grm_id) LOGGER.e(0, "cannot open the file [" + grm_id_file + "] to read.");
-    string str_buf, id_buf;
-    vector<string> fid, pid;
+    std::string str_buf, id_buf;
+    std::vector<std::string> fid, pid;
     grm_id.clear();
     while (i_grm_id) {
         i_grm_id >> str_buf;
@@ -275,11 +275,11 @@ int gcta::read_grm_id(string grm_file, vector<string> &grm_id, bool out_id_log, 
         pid.push_back(str_buf);
         id_buf += str_buf;
         grm_id.push_back(id_buf);
-        getline(i_grm_id, str_buf);
+        std::getline(i_grm_id, str_buf);
     }
     i_grm_id.close();
     int n = grm_id.size();
-    if (out_id_log) LOGGER << n << " IDs are read from [" + grm_id_file + "]." << endl;
+    if (out_id_log) LOGGER << n << " IDs are read from [" + grm_id_file + "]." << std::endl;
 
     if (_id_map.empty()) {
         _fid = fid;
@@ -292,18 +292,18 @@ int gcta::read_grm_id(string grm_file, vector<string> &grm_id, bool out_id_log, 
     return (n);
 }
 
-void gcta::read_grm(string grm_file, vector<string> &grm_id, bool out_id_log, bool read_id_only, bool dont_read_N)
+void gcta::read_grm(std::string grm_file, std::vector<std::string> &grm_id, bool out_id_log, bool read_id_only, bool dont_read_N)
 {
     if (_grm_bin_flag) read_grm_bin(grm_file, grm_id, out_id_log, read_id_only, dont_read_N);
     else read_grm_gz(grm_file, grm_id, out_id_log, read_id_only);
 }
 
-void gcta::read_grm_gz(string grm_file, vector<string> &grm_id, bool out_id_log, bool read_id_only) {
+void gcta::read_grm_gz(std::string grm_file, std::vector<std::string> &grm_id, bool out_id_log, bool read_id_only) {
     long n = read_grm_id(grm_file, grm_id, out_id_log, read_id_only);
 
     if (read_id_only) return;
 
-    string grm_gzfile = grm_file + ".grm.gz", str_buf;
+    std::string grm_gzfile = grm_file + ".grm.gz", str_buf;
     std::ifstream raw_file(grm_gzfile, std::ios::binary);
     if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + grm_gzfile + "] to read.");
     boost::iostreams::filtering_istream zinf;
@@ -312,19 +312,19 @@ void gcta::read_grm_gz(string grm_file, vector<string> &grm_id, bool out_id_log,
 
     long indx1 = 0, indx2 = 0, nline = 0;
     double grm_buf = 0.0, grm_N_buf;
-    string errmsg = "failed to read [" + grm_gzfile + "]. The format of the GRM file has been changed?\nError occurs in line:\n";
-    LOGGER << "Reading the GRM from [" + grm_gzfile + "]." << endl;
+    std::string errmsg = "failed to read [" + grm_gzfile + "]. The format of the GRM file has been changed?\nError occurs in line:\n";
+    LOGGER << "Reading the GRM from [" + grm_gzfile + "]." << std::endl;
     _grm.resize(n, n);
     _grm_N.resize(n, n);
-    string line;
+    std::string line;
     while (std::getline(zinf, line)) {
-        stringstream ss(line);
+        std::stringstream ss(line);
         if (!(ss >> indx1)) LOGGER.e(0, errmsg + line);
         if (!(ss >> indx2)) LOGGER.e(0, errmsg + line);
         if (!(ss >> grm_N_buf)) LOGGER.e(0, errmsg + line);
         if (!(ss >> grm_buf)) LOGGER.e(0, errmsg + line);
         if (indx1 < indx2 || indx1 > n || indx2 > n) LOGGER.e(0, errmsg + line);
-        if (grm_N_buf == 0) LOGGER << "Warning: " << line << endl;
+        if (grm_N_buf == 0) LOGGER << "Warning: " << line << std::endl;
         _grm_N(indx1 - 1, indx2 - 1) = _grm_N(indx2 - 1, indx1 - 1) = grm_N_buf;
         _grm(indx1 - 1, indx2 - 1) = _grm(indx2 - 1, indx1 - 1) = grm_buf;
         nline++;
@@ -333,25 +333,25 @@ void gcta::read_grm_gz(string grm_file, vector<string> &grm_id, bool out_id_log,
     zinf.reset();
     raw_file.close();
     if (!_within_family && nline != (long) n * (n + 1)*0.5){
-        stringstream errmsg_tmp;
-        errmsg_tmp << "there are " << nline << " lines in the [" << grm_gzfile << "] file. The expected number of lines is " << (long) (n * (n + 1)*0.5) << "." << endl;
+        std::stringstream errmsg_tmp;
+        errmsg_tmp << "there are " << nline << " lines in the [" << grm_gzfile << "] file. The expected number of lines is " << (long) (n * (n + 1)*0.5) << "." << std::endl;
         LOGGER.e(0, errmsg_tmp.str());
         //LOGGER.e(0, "incorrect number of lines in the grm file. Are *.grm.gz file and *.grm.id file mismatched?");
     }
-    LOGGER << "GRM for " << n << " individuals are included from [" + grm_gzfile + "]." << endl;
+    LOGGER << "GRM for " << n << " individuals are included from [" + grm_gzfile + "]." << std::endl;
 }
 
-void gcta::read_grm_bin(string grm_file, vector<string> &grm_id, bool out_id_log, bool read_id_only, bool dont_read_N)
+void gcta::read_grm_bin(std::string grm_file, std::vector<std::string> &grm_id, bool out_id_log, bool read_id_only, bool dont_read_N)
 {
     int i = 0, j = 0, n = read_grm_id(grm_file, grm_id, out_id_log, read_id_only);
 
     if (read_id_only) return;
 
-    string grm_binfile = grm_file + ".grm.bin";
-    ifstream A_bin(grm_binfile.c_str(), ios::in | ios::binary);
+    std::string grm_binfile = grm_file + ".grm.bin";
+    std::ifstream A_bin(grm_binfile.c_str(), std::ios::in | std::ios::binary);
     if (!A_bin.is_open()) LOGGER.e(0, "cannot open the file [" + grm_binfile + "] to read.");
     _grm.resize(n, n);
-    LOGGER << "Reading the GRM from [" + grm_binfile + "]." << endl;
+    LOGGER << "Reading the GRM from [" + grm_binfile + "]." << std::endl;
     int size = sizeof (float);
     float f_buf = 0.0;
     for (i = 0; i < n; i++) {
@@ -363,11 +363,11 @@ void gcta::read_grm_bin(string grm_file, vector<string> &grm_id, bool out_id_log
     A_bin.close();
 
     if(!dont_read_N){
-        string grm_Nfile = grm_file + ".grm.N.bin";
-        ifstream N_bin(grm_Nfile.c_str(), ios::in | ios::binary);
+        std::string grm_Nfile = grm_file + ".grm.N.bin";
+        std::ifstream N_bin(grm_Nfile.c_str(), std::ios::in | std::ios::binary);
         if (!N_bin.is_open()) LOGGER.e(0, "cannot open the file [" + grm_Nfile + "] to read.");
         _grm_N.resize(n, n);
-        LOGGER << "Reading the number of SNPs for the GRM from [" + grm_Nfile + "]." << endl;
+        LOGGER << "Reading the number of SNPs for the GRM from [" + grm_Nfile + "]." << std::endl;
         size = sizeof (float);
         f_buf = 0.0;
         for (i = 0; i < n; i++) {
@@ -379,16 +379,16 @@ void gcta::read_grm_bin(string grm_file, vector<string> &grm_id, bool out_id_log
         N_bin.close();
     }
 
-    LOGGER << "GRM for " << n << " individuals are included from [" + grm_binfile + "]." << endl;
+    LOGGER << "GRM for " << n << " individuals are included from [" + grm_binfile + "]." << std::endl;
 }
 
 void gcta::rm_cor_indi(double grm_cutoff) {
-    LOGGER << "Pruning the GRM with a cutoff of " << grm_cutoff << " ..." << endl;
+    LOGGER << "Pruning the GRM with a cutoff of " << grm_cutoff << " ..." << std::endl;
 
     int i = 0, j = 0, i_buf = 0;
 
     // identify the positions where you see a value > than the threshold
-    vector<int> rm_grm_ID1, rm_grm_ID2;
+    std::vector<int> rm_grm_ID1, rm_grm_ID2;
     for (i = 0; i < _keep.size(); i++) {
         for (j = 0; j < i; j++) {
             if (_grm(_keep[i], _keep[j]) > grm_cutoff) {
@@ -398,19 +398,19 @@ void gcta::rm_cor_indi(double grm_cutoff) {
         }
     }
 
-    // count the number of appearance of each "position" in the vector, which involves a few steps
-    vector<int> rm_uni_ID(rm_grm_ID1);
+    // count the number of appearance of each "position" in the std::vector, which involves a few steps
+    std::vector<int> rm_uni_ID(rm_grm_ID1);
     rm_uni_ID.insert(rm_uni_ID.end(), rm_grm_ID2.begin(), rm_grm_ID2.end());
-    stable_sort(rm_uni_ID.begin(), rm_uni_ID.end());
-    rm_uni_ID.erase(unique(rm_uni_ID.begin(), rm_uni_ID.end()), rm_uni_ID.end());
-    map<int, int> rm_uni_ID_count;
+    std::stable_sort(rm_uni_ID.begin(), rm_uni_ID.end());
+    rm_uni_ID.erase(std::unique(rm_uni_ID.begin(), rm_uni_ID.end()), rm_uni_ID.end());
+    std::map<int, int> rm_uni_ID_count;
     for (i = 0; i < rm_uni_ID.size(); i++) {
-        i_buf = count(rm_grm_ID1.begin(), rm_grm_ID1.end(), rm_uni_ID[i]) + count(rm_grm_ID2.begin(), rm_grm_ID2.end(), rm_uni_ID[i]);
-        rm_uni_ID_count.insert(pair<int, int>(rm_uni_ID[i], i_buf));
+        i_buf = std::count(rm_grm_ID1.begin(), rm_grm_ID1.end(), rm_uni_ID[i]) + std::count(rm_grm_ID2.begin(), rm_grm_ID2.end(), rm_uni_ID[i]);
+        rm_uni_ID_count.insert(std::pair<int, int>(rm_uni_ID[i], i_buf));
     }
 
     // swapping
-    map<int, int>::iterator iter1, iter2;
+    std::map<int, int>::iterator iter1, iter2;
     for (i = 0; i < rm_grm_ID1.size(); i++) {
         iter1 = rm_uni_ID_count.find(rm_grm_ID1[i]);
         iter2 = rm_uni_ID_count.find(rm_grm_ID2[i]);
@@ -421,19 +421,19 @@ void gcta::rm_cor_indi(double grm_cutoff) {
         }
     }
     
-    stable_sort(rm_grm_ID1.begin(), rm_grm_ID1.end());
-    rm_grm_ID1.erase(unique(rm_grm_ID1.begin(), rm_grm_ID1.end()), rm_grm_ID1.end());
-    vector<string> removed_ID;
+    std::stable_sort(rm_grm_ID1.begin(), rm_grm_ID1.end());
+    rm_grm_ID1.erase(std::unique(rm_grm_ID1.begin(), rm_grm_ID1.end()), rm_grm_ID1.end());
+    std::vector<std::string> removed_ID;
     for (i = 0; i < rm_grm_ID1.size(); i++) removed_ID.push_back(_fid[rm_grm_ID1[i]] + ":" + _pid[rm_grm_ID1[i]]);
 
     // update _keep and _id_map
     update_id_map_rm(removed_ID, _id_map, _keep);
 
-    LOGGER << "After pruning the GRM, there are " << _keep.size() << " individuals (" << removed_ID.size() << " individuals removed)." << endl;
+    LOGGER << "After pruning the GRM, there are " << _keep.size() << " individuals (" << removed_ID.size() << " individuals removed)." << std::endl;
 }
 
 void gcta::adj_grm(double adj_grm_fac) {
-    LOGGER << "Adjusting the GRM for sampling errors ..." << endl;
+    LOGGER << "Adjusting the GRM for sampling errors ..." << std::endl;
     int i = 0, j = 0, n = _keep.size();
     double off_mean = 0.0, diag_mean = 0.0, off_var = 0.0, diag_var = 0.0, d_buf = 0.0;
     for (i = 0; i < n; i++) {
@@ -463,8 +463,8 @@ void gcta::adj_grm(double adj_grm_fac) {
 
 void gcta::dc(int dosage_compen) {
     LOGGER << "Parameterizing the GRM under the assumption of ";
-    if (dosage_compen == 1) LOGGER << "full dosage compensation ..." << endl;
-    else if (dosage_compen == 0) LOGGER << "no dosage compensation ..." << endl;
+    if (dosage_compen == 1) LOGGER << "full dosage compensation ..." << std::endl;
+    else if (dosage_compen == 0) LOGGER << "no dosage compensation ..." << std::endl;
 
     int i = 0, j = 0, i_buf = 0;
     double c1 = 1.0, c2 = 1.0;
@@ -485,11 +485,11 @@ void gcta::dc(int dosage_compen) {
     }
 }
 
-void gcta::manipulate_grm(string grm_file, string keep_indi_file, string remove_indi_file, string sex_file, double grm_cutoff, double adj_grm_fac, int dosage_compen, bool merge_grm_flag, bool dont_read_N)
+void gcta::manipulate_grm(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, std::string sex_file, double grm_cutoff, double adj_grm_fac, int dosage_compen, bool merge_grm_flag, bool dont_read_N)
 {
     int i = 0, j = 0;
 
-    vector<string> grm_id;
+    std::vector<std::string> grm_id;
     if (merge_grm_flag) merge_grm(grm_file);
     else read_grm(grm_file, grm_id, true, false, dont_read_N);
 
@@ -516,14 +516,14 @@ void gcta::manipulate_grm(string grm_file, string keep_indi_file, string remove_
     }
 }
 
-void gcta::save_grm(string grm_file, string keep_indi_file, string remove_indi_file, string sex_file, double grm_cutoff, double adj_grm_fac, int dosage_compen, bool merge_grm_flag, bool output_grm_bin) {
+void gcta::save_grm(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, std::string sex_file, double grm_cutoff, double adj_grm_fac, int dosage_compen, bool merge_grm_flag, bool output_grm_bin) {
     if (dosage_compen>-1) check_sex();
     manipulate_grm(grm_file, keep_indi_file, remove_indi_file, sex_file, grm_cutoff, adj_grm_fac, dosage_compen, merge_grm_flag);
     output_grm(output_grm_bin);
 }
 
-void gcta::merge_grm(string merge_grm_file) {
-    vector<string> grm_files, grm_id;
+void gcta::merge_grm(std::string merge_grm_file) {
+    std::vector<std::string> grm_files, grm_id;
     read_grm_filenames(merge_grm_file, grm_files);
 
     int f = 0, i = 0, j = 0;
@@ -531,17 +531,17 @@ void gcta::merge_grm(string merge_grm_file) {
         read_grm(grm_files[f], grm_id, false, true);
         update_id_map_kp(grm_id, _id_map, _keep);
     }
-    vector<string> uni_id;
+    std::vector<std::string> uni_id;
     for (i = 0; i < _keep.size(); i++) uni_id.push_back(_fid[_keep[i]] + ":" + _pid[_keep[i]]);
     _n = uni_id.size();
     if (_n == 0) LOGGER.e(0, "no individual is in common among the GRM files.");
-    else LOGGER << _n << " individuals in common in the GRM files." << endl;
+    else LOGGER << _n << " individuals in common in the GRM files." << std::endl;
 
-    vector<int> kp;
+    std::vector<int> kp;
     eigenMatrix grm = eigenMatrix::Zero(_n, _n);
     eigenMatrix grm_N = eigenMatrix::Zero(_n, _n);
     for (f = 0; f < grm_files.size(); f++) {
-        LOGGER << "Reading the GRM from the " << f + 1 << "th file ..." << endl;
+        LOGGER << "Reading the GRM from the " << f + 1 << "th file ..." << std::endl;
         read_grm(grm_files[f], grm_id);
         StrFunc::match(uni_id, grm_id, kp);
         for (i = 0; i < _n; i++) {
@@ -565,11 +565,11 @@ void gcta::merge_grm(string merge_grm_file) {
     }
     grm.resize(0, 0);
     grm_N.resize(0, 0);
-    LOGGER << "\n" << grm_files.size() << " GRMs have been merged together." << endl;
+    LOGGER << "\n" << grm_files.size() << " GRMs have been merged together." << std::endl;
 }
 
-void gcta::align_grm(string m_grm_file) {
-    vector<string> grm_files, grm_id;
+void gcta::align_grm(std::string m_grm_file) {
+    std::vector<std::string> grm_files, grm_id;
     read_grm_filenames(m_grm_file, grm_files);
     
     int f = 0, i = 0, j = 0;
@@ -577,19 +577,19 @@ void gcta::align_grm(string m_grm_file) {
         read_grm(grm_files[f], grm_id, false, true);
         update_id_map_kp(grm_id, _id_map, _keep);
     }
-    vector<string> uni_id;
+    std::vector<std::string> uni_id;
     for (i = 0; i < _keep.size(); i++) uni_id.push_back(_fid[_keep[i]] + ":" + _pid[_keep[i]]);
     _n = uni_id.size();
     if (_n == 0) LOGGER.e(0, "no individual is in common among the GRM files.");
-    else LOGGER << _n << " individuals are in common among the GRM files." << endl;
+    else LOGGER << _n << " individuals are in common among the GRM files." << std::endl;
     
-    string _out_save = _out;
+    std::string _out_save = _out;
     
-    vector<int> kp;
+    std::vector<int> kp;
     eigenMatrix grm = eigenMatrix::Zero(_n, _n);
     eigenMatrix grm_N = eigenMatrix::Zero(_n, _n);
     for (f = 0; f < grm_files.size(); f++) {
-        LOGGER << "Reading the GRM from the " << f + 1 << "th file ..." << endl;
+        LOGGER << "Reading the GRM from the " << f + 1 << "th file ..." << std::endl;
         grm.setZero(_n, _n);
         grm_N.setZero(_n, _n);
         read_grm(grm_files[f], grm_id);
@@ -621,30 +621,30 @@ void gcta::align_grm(string m_grm_file) {
     
     grm.resize(0, 0);
     grm_N.resize(0, 0);
-    LOGGER << "\n" << grm_files.size() << " GRMs have been aligned." << endl;
+    LOGGER << "\n" << grm_files.size() << " GRMs have been aligned." << std::endl;
 }
 
 
-void gcta::read_grm_filenames(string merge_grm_file, vector<string> &grm_files, bool out_log) {
-    ifstream merge_grm(merge_grm_file.c_str());
+void gcta::read_grm_filenames(std::string merge_grm_file,std::vector<std::string> &grm_files, bool out_log) {
+    std::ifstream merge_grm(merge_grm_file.c_str());
     if (!merge_grm) LOGGER.e(0, "cannot open the file [" + merge_grm_file + "] to read.");
-    string str_buf;
+    std::string str_buf;
     grm_files.clear();
-    vector<string> vs_buf;
-    while (getline(merge_grm, str_buf)) {
+    std::vector<std::string> vs_buf;
+    while (std::getline(merge_grm, str_buf)) {
         if (!str_buf.empty()) {
             if (StrFunc::split_string(str_buf, vs_buf) == 1) grm_files.push_back(vs_buf[0]);
         }
     }
-    if (out_log) LOGGER << "There are " << grm_files.size() << " GRM file names specified in [" + merge_grm_file + "]." << endl;
+    if (out_log) LOGGER << "There are " << grm_files.size() << " GRM file names specified in [" + merge_grm_file + "]." << std::endl;
     if (grm_files.size() > 1000) LOGGER.e(0, "too many GRM file names specified in [" + merge_grm_file + "]. The maximum number is 1000.");
     if (grm_files.size() < 1) LOGGER.e(0, "no GRM file name is found in [" + merge_grm_file + "].");
 }
 
-void gcta::grm_bK(string grm_file, string keep_indi_file, string remove_indi_file, double threshold, bool grm_out_bin_flag)
+void gcta::grm_bK(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double threshold, bool grm_out_bin_flag)
 {
     int i = 0, j = 0;
-    vector<string> grm_id;
+    std::vector<std::string> grm_id;
     read_grm(grm_file, grm_id);
     if (!keep_indi_file.empty()) keep_indi(keep_indi_file);
     if (!remove_indi_file.empty()) remove_indi(remove_indi_file);
@@ -662,7 +662,7 @@ void gcta::grm_bK(string grm_file, string keep_indi_file, string remove_indi_fil
         }
     }
 
-    LOGGER << "\nThe off-diagonals that are < " << threshold << " are set to zero.\n" << endl;
+    LOGGER << "\nThe off-diagonals that are < " << threshold << " are std::set to zero.\n" << std::endl;
     for (i = 0; i < _keep.size(); i++) {
         for (j = 0; j < i; j++){
             if(_grm(i, j) < threshold) _grm(i, j) = 0.0;
@@ -672,55 +672,55 @@ void gcta::grm_bK(string grm_file, string keep_indi_file, string remove_indi_fil
     output_grm(grm_out_bin_flag);
 }
 
-void gcta::pca(string grm_file, string keep_indi_file, string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num)
+void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num)
 {
     manipulate_grm(grm_file, keep_indi_file, remove_indi_file, "", grm_cutoff, -2.0, -2, merge_grm_flag, true);
     _grm_N.resize(0, 0);
     int i = 0, j = 0, n = _keep.size();
-    LOGGER << "\nPerforming principal component analysis ..." << endl;
+    LOGGER << "\nPerforming principal component analysis ..." << std::endl;
 
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(_grm.cast<double>());
     Eigen::MatrixXd evec = (eigensolver.eigenvectors());
     Eigen::VectorXd eval = eigensolver.eigenvalues();
 
-    string eval_file = _out + ".eigenval";
-    ofstream o_eval(eval_file.c_str());
+    std::string eval_file = _out + ".eigenval";
+    std::ofstream o_eval(eval_file.c_str());
     if (!o_eval) LOGGER.e(0, "cannot open the file [" + eval_file + "] to read.");
-    for (i = n - 1; i >= 0; i--) o_eval << eval(i) << endl;
+    for (i = n - 1; i >= 0; i--) o_eval << eval(i) << std::endl;
     o_eval.close();
-    LOGGER << "Eigenvalues of " << n << " individuals have been saved in [" + eval_file + "]." << endl;
-    string evec_file = _out + ".eigenvec";
-    ofstream o_evec(evec_file.c_str());
+    LOGGER << "Eigenvalues of " << n << " individuals have been saved in [" + eval_file + "]." << std::endl;
+    std::string evec_file = _out + ".eigenvec";
+    std::ofstream o_evec(evec_file.c_str());
     if (!o_evec) LOGGER.e(0, "cannot open the file [" + evec_file + "] to read.");
     if (out_pc_num > n) out_pc_num = n;
     for (i = 0; i < n; i++) {
         o_evec << _fid[_keep[i]] << " " << _pid[_keep[i]];
         for (j = n - 1; j >= (n - out_pc_num); j--) o_evec << " " << evec(i, j);
-        o_evec << endl;
+        o_evec << std::endl;
     }
     o_evec.close();
-    LOGGER << "The first " << out_pc_num << " eigenvectors of " << n << " individuals have been saved in [" + evec_file + "]." << endl;
+    LOGGER << "The first " << out_pc_num << " eigenvectors of " << n << " individuals have been saved in [" + evec_file + "]." << std::endl;
 }
 
-void gcta::snp_pc_loading(string pc_file)
+void gcta::snp_pc_loading(std::string pc_file)
 {
     // read eigenvectors and eigenvalues
-    string eigenval_file = pc_file + ".eigenval";
-    ifstream in_eigenval(eigenval_file.c_str());
+    std::string eigenval_file = pc_file + ".eigenval";
+    std::ifstream in_eigenval(eigenval_file.c_str());
     if (!in_eigenval) LOGGER.e(0, "cannot open the file [" + eigenval_file + "] to read.");
-    string eigenvec_file = pc_file + ".eigenvec";
-    ifstream in_eigenvec(eigenvec_file.c_str());
+    std::string eigenvec_file = pc_file + ".eigenvec";
+    std::ifstream in_eigenvec(eigenvec_file.c_str());
     if (!in_eigenvec) LOGGER.e(0, "cannot open the file [" + eigenvec_file + "] to read.");
   
-    LOGGER << "Reading eigenvectors from [" + eigenvec_file + "]." << endl;
-    vector<string> eigenvec_ID;
-    vector< vector<string> > eigenvec_str;
+    LOGGER << "Reading eigenvectors from [" + eigenvec_file + "]." << std::endl;
+    std::vector<std::string> eigenvec_ID;
+    std::vector< std::vector<std::string> > eigenvec_str;
     int eigenvec_num = read_fac(in_eigenvec, eigenvec_ID, eigenvec_str);
-    LOGGER << eigenvec_num << " eigenvectors of " << eigenvec_ID.size() << " individuals are included from [" + eigenvec_file + "]." << endl;
+    LOGGER << eigenvec_num << " eigenvectors of " << eigenvec_ID.size() << " individuals are included from [" + eigenvec_file + "]." << std::endl;
     update_id_map_kp(eigenvec_ID, _id_map, _keep);
 
-    LOGGER << "\nReading eigenvalues from [" + eigenval_file + "]." << endl;
-    vector<double> eigenval_buf;
+    LOGGER << "\nReading eigenvalues from [" + eigenval_file + "]." << std::endl;
+    std::vector<double> eigenval_buf;
     double d_buf = 0.0;
     int eigenval_num = 0;
     while(in_eigenval && eigenval_num < eigenvec_num){
@@ -730,20 +730,20 @@ void gcta::snp_pc_loading(string pc_file)
         eigenval_num++;
     }
     if(eigenvec_num != eigenval_num) LOGGER.e(0, "inconsistent numbers of eigenvalues and eigenvectors in the files [" + eigenval_file + "] and [" + eigenvec_file + "]");
-    LOGGER << eigenval_num << " eigenvalues are read from [" + eigenval_file + "]" << endl;  
+    LOGGER << eigenval_num << " eigenvalues are read from [" + eigenval_file + "]" << std::endl;  
 
     int i = 0, j = 0;
-    vector<string> uni_id;
-    map<string, int> uni_id_map;
-    map<string, int>::iterator iter;
+    std::vector<std::string> uni_id;
+    std::map<std::string, int> uni_id_map;
+    std::map<std::string, int>::iterator iter;
     for(i=0; i<_keep.size(); i++){
         uni_id.push_back(_fid[_keep[i]]+":"+_pid[_keep[i]]);
-        uni_id_map.insert(pair<string,int>(_fid[_keep[i]]+":"+_pid[_keep[i]], i));
+        uni_id_map.insert(std::pair<std::string,int>(_fid[_keep[i]]+":"+_pid[_keep[i]], i));
     }
     _n = _keep.size();
     int m = _include.size();
     if(_n < 1) LOGGER.e(0, "no individual is in common among the input files.");
-    LOGGER << _n << " individuals in common between the input files are included in the analysis."<<endl;
+    LOGGER << _n << " individuals in common between the input files are included in the analysis."<<std::endl;
     
     eigenMatrix eigenvec(eigenvec_num, _n);
     for(i = 0; i < eigenvec_ID.size(); i++){
@@ -757,7 +757,7 @@ void gcta::snp_pc_loading(string pc_file)
 
     // calculating SNP loading
     if (_mu.empty()) calcu_mu();
-    LOGGER << "\nCalculating PC loadings of SNPs..." << endl;
+    LOGGER << "\nCalculating PC loadings of SNPs..." << std::endl;
     eigenMatrix snp_loading(m, eigenvec_num);
     eigenVector x(_n);
     for(j = 0; j < m ; j++) {
@@ -766,13 +766,13 @@ void gcta::snp_pc_loading(string pc_file)
         snp_loading.row(j) = (eigenvec * x).array() * inv_eigenval.array();
     }
 
-    string filename = _out + ".pcl";
-    LOGGER << "\nSaving the PC loadings of " << m << " SNPs to [" + filename + "] ..." << endl;
-    ofstream ofile(filename.c_str());
+    std::string filename = _out + ".pcl";
+    LOGGER << "\nSaving the PC loadings of " << m << " SNPs to [" + filename + "] ..." << std::endl;
+    std::ofstream ofile(filename.c_str());
     if(!ofile) LOGGER.e(0, "cannot open the file [" + filename + "] to write.");
     ofile << "SNP\tA1\tA2\tmu";
     for(i = 0; i < eigenval_num; i++) ofile << "\tpc" << i+1 << "_loading";
-    ofile << endl;
+    ofile << std::endl;
     for(i = 0; i < m; i++){
         ofile << _snp_name[_include[i]] << "\t" << _ref_A[_include[i]] << "\t" << _other_A[_include[i]] << "\t" <<  _mu[_include[i]];
         for(j = 0; j < eigenvec_num; j++) ofile << "\t" << snp_loading(i, j);
@@ -782,7 +782,7 @@ void gcta::snp_pc_loading(string pc_file)
 }
 
 //This function changes the original _geno, _include, never use genotype variable after it!!
-void gcta::project_loading(string pc_load, int N){
+void gcta::project_loading(std::string pc_load, int N){
 
     #ifdef SINGLE_PRECISION
     typedef float t_val;
@@ -790,23 +790,23 @@ void gcta::project_loading(string pc_load, int N){
     typedef double t_val;
     #endif
 
-    string f_pc_load = pc_load + ".pcl";
-    ifstream h_pc_load(f_pc_load.c_str());
+    std::string f_pc_load = pc_load + ".pcl";
+    std::ifstream h_pc_load(f_pc_load.c_str());
     if (!h_pc_load) LOGGER.e(0, "cannot open the loading file [" + f_pc_load + "] to read.");
     
     // output eigenvec. Moving this up to save the time for user when running in an unwritable directory.
-    string out_filename = _out + ".proj.eigenvec";
-    //LOGGER << "\nOpen the project file [" << out_filename << "] to write."<< endl;
-    ofstream ofile(out_filename.c_str());
+    std::string out_filename = _out + ".proj.eigenvec";
+    //LOGGER << "\nOpen the project file [" << out_filename << "] to write."<< std::endl;
+    std::ofstream ofile(out_filename.c_str());
     if(!ofile) LOGGER.e(0, "failed to open the file [" + out_filename + "] to write.");
 
-    LOGGER << "Reading PC loadings of SNPs from [" + f_pc_load + "]." << endl;
-    string buf;
-    vector<string> vsec_buf;
-    string header;
-    getline(h_pc_load,header);
+    LOGGER << "Reading PC loadings of SNPs from [" + f_pc_load + "]." << std::endl;
+    std::string buf;
+    std::vector<std::string> vsec_buf;
+    std::string header;
+    std::getline(h_pc_load,header);
     size_t N_loading_file = count(header.begin(),header.end(),'p');
-    LOGGER << "Number of PC loading vectors: " << N_loading_file << endl;
+    LOGGER << "Number of PC loading vectors: " << N_loading_file << std::endl;
     while(h_pc_load >> buf){
         vsec_buf.push_back(buf);
     }
@@ -816,19 +816,19 @@ void gcta::project_loading(string pc_load, int N){
 
     int len_col = N_loading_file + 4;
     int num_snp = vsec_buf.size() / len_col;
-    LOGGER << "Number of SNPs in loading array: " << num_snp << "." << endl; 
+    LOGGER << "Number of SNPs in loading array: " << num_snp << "." << std::endl; 
     if(vsec_buf.size() % len_col != 0){
         LOGGER.e(0, "invalid number of columns in the PC loading file. Please check.");
     }
     if(N > N_loading_file){
-        LOGGER.e(0, "only " + to_string(N_loading_file) + " vectors of PC loadings available, thus not able to project onto " + to_string(N) + " PCs.");
+        LOGGER.e(0, "only " + std::to_string(N_loading_file) + " vectors of PC loadings available, thus not able to project onto " + std::to_string(N) + " PCs.");
     }
 
-    vector<string> snps(num_snp);
-    vector<string> A1(num_snp);
-    vector<string> A2(num_snp);
-    vector<t_val> mu(num_snp);
-    vector<t_val> snp_loading (num_snp * N);
+    std::vector<std::string> snps(num_snp);
+    std::vector<std::string> A1(num_snp);
+    std::vector<std::string> A2(num_snp);
+    std::vector<t_val> mu(num_snp);
+    std::vector<t_val> snp_loading (num_snp * N);
     for(int read_snp_index=0; read_snp_index < num_snp; read_snp_index++){
        int base_index = read_snp_index * len_col;
        snps[read_snp_index] = vsec_buf[base_index];
@@ -852,20 +852,20 @@ void gcta::project_loading(string pc_load, int N){
     vsec_buf.clear();
     vsec_buf.shrink_to_fit();
     
-    LOGGER << "Matching alleles..." << endl;
-    vector<int> snp_index_include(snps.size());
+    LOGGER << "Matching alleles..." << std::endl;
+    std::vector<int> snp_index_include(snps.size());
     StrFunc::match(snps,_snp_name,snp_index_include);
     // _include should be fixed here, it cause maf caculation go vain; 
-    unordered_set<int> ori_SNPs(_include.begin(),_include.end());
+    std::unordered_set<int> ori_SNPs(_include.begin(),_include.end());
     _include.clear();
 
-    vector<t_val> filter_snp_loading;
+    std::vector<t_val> filter_snp_loading;
     filter_snp_loading.reserve(num_snp * N);
 
-    LOGGER << "Adjusting A1" << endl;
+    LOGGER << "Adjusting A1" << std::endl;
     bool remove_flag = true;
-    vector<string> missnp_list;
-    vector<t_val> mu_adj;
+    std::vector<std::string> missnp_list;
+    std::vector<t_val> mu_adj;
     for(int snp_index=0; snp_index < snps.size(); snp_index++){
         int cur_snp_index = snp_index_include[snp_index];
         if(cur_snp_index >= 0 && ori_SNPs.find(cur_snp_index) != ori_SNPs.end() ){
@@ -886,30 +886,30 @@ void gcta::project_loading(string pc_load, int N){
     snp_loading.clear();
     snp_loading.shrink_to_fit();
 
-    //Map the vector to Matrix, share the same memory, thus to save the memory.
+    //Map the std::vector to Matrix, share the same memory, thus to save the memory.
     eigenMatrix m_snp_loading = Eigen::Map< Eigen::Matrix<t_val,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor> > (filter_snp_loading.data(), _include.size(), N);
-    LOGGER << " " << m_snp_loading.rows() << " SNPs are included for loading" << endl;
+    LOGGER << " " << m_snp_loading.rows() << " SNPs are included for loading" << std::endl;
 
     if(missnp_list.size() > 0){
-        LOGGER.w(0, to_string(missnp_list.size()) + " SNPs are not found or alleles mismatch in the target genotype"); 
-        string miss_file = _out + ".proj.missnp";
-        LOGGER << " See [" << miss_file << "] for details. If there are many missing SNPs, the projection might be biased." << endl;
-        ofstream h_miss(miss_file);
-        ostream_iterator<string> output_iterator(h_miss,"\n");
+        LOGGER.w(0, std::to_string(missnp_list.size()) + " SNPs are not found or alleles mismatch in the target genotype"); 
+        std::string miss_file = _out + ".proj.missnp";
+        LOGGER << " See [" << miss_file << "] for details. If there are many missing SNPs, the projection might be biased." << std::endl;
+        std::ofstream h_miss(miss_file);
+        std::ostream_iterator<std::string> output_iterator(h_miss,"\n");
         copy(missnp_list.begin(), missnp_list.end(), output_iterator);
     }
     missnp_list.clear();
     missnp_list.shrink_to_fit();
 
     //if(_mu.empty()) calcu_mu();
-    LOGGER << "Standardizing genotypes and projecting PCs..." << endl;
-    LOGGER << "Total number of subjects: " << _keep.size() << "\n" << endl;
-    //ofstream demo(_out + ".proj.matrix");
-    LOGGER << "Processing subject number: " << endl;
+    LOGGER << "Standardizing genotypes and projecting PCs..." << std::endl;
+    LOGGER << "Total number of subjects: " << _keep.size() << "\n" << std::endl;
+    //std::ofstream demo(_out + ".proj.matrix");
+    LOGGER << "Processing subject number: " << std::endl;
     eigenMatrix PCs(_keep.size(),N);
     #pragma omp parallel for ordered schedule(dynamic)
     for(int ind_index=0; ind_index < _keep.size(); ind_index++){
-        LOGGER <<  to_string(ind_index+1) + "\r" << flush;
+        LOGGER <<  std::to_string(ind_index+1) + "\r" << std::flush;
         Eigen::Matrix<t_val,1,Eigen::Dynamic> geno(_include.size());
         for(int snp_index=0; snp_index < _include.size(); snp_index++){
             if (!_snp_1[_include[snp_index]][_keep[ind_index]] || _snp_2[_include[snp_index]][_keep[ind_index]]) {
@@ -923,12 +923,12 @@ void gcta::project_loading(string pc_load, int N){
         PCs.row(ind_index) = geno * m_snp_loading;
         /*
         if(ind_index==0){
-            demo << "geno:" << endl;
-            demo << geno << endl;
-            demo << "m_snp_loading" << endl;
-            demo << m_snp_loading << endl;
-            demo << "PC" << endl;
-            demo << PCs << endl;
+            demo << "geno:" << std::endl;
+            demo << geno << std::endl;
+            demo << "m_snp_loading" << std::endl;
+            demo << m_snp_loading << std::endl;
+            demo << "PC" << std::endl;
+            demo << PCs << std::endl;
             demo.close();
         }
         */
@@ -945,6 +945,6 @@ void gcta::project_loading(string pc_load, int N){
     }
     ofile.close();
     
-    LOGGER << "\nFinished, and the PCs have all been saved to " << out_filename << endl;
+    LOGGER << "\nFinished, and the PCs have all been saved to " << out_filename << std::endl;
 }
 

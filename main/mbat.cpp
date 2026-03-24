@@ -106,7 +106,7 @@ void gcta::svdDecomposition( Eigen::MatrixXf &X,double &prop, int &eigenvalueNum
     cumsumNonNeg.resize(revIdx);
     cumsumNonNeg.setZero(); 
     revIdx = revIdx -1;
-    if(eigenVal(revIdx) < 0) cout << "Error, all eigenvector are negative" << endl;
+    if(eigenVal(revIdx) < 0) std::cout << "Error, all eigenvector are negative" << std::endl;
     cumsumNonNeg(revIdx) = eigenVal(revIdx);
     sumNonNeg = eigenVal(revIdx);
     revIdx = revIdx -1;
@@ -151,7 +151,7 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
     init_massoc(mbat_sAssoc_file, GC, GC_val);
     int snp_num = _include.size();
     // re-calculate chi-square 
-    vector<double> snp_chisq(snp_num);
+    std::vector<double> snp_chisq(snp_num);
     for (i = 0; i < snp_num; i++) snp_chisq[i] = StatFunc::qchisq(_pval[i], 1);
 
     std::map<int, std::string> chr_begin_snp, chr_end_snp;
@@ -220,29 +220,29 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
         }
     }
     if (mapped < 1) LOGGER.e(0, "no gene can be mapped to the SNP data. Please check the input data regarding chromosome and bp.");
-    else LOGGER << mapped << " genes have been mapped to SNP data." << endl;
+    else LOGGER << mapped << " genes have been mapped to SNP data." << std::endl;
 
     /////////////////////////////////////////
     // Step 3. Run gene-based test.
     /////////////////////////////////////////
     if (_mu.empty()) calcu_mu();
-    LOGGER << "\nRunning mBAT-combo analysis for " << mapped << " gene(s) ..." << endl;
+    LOGGER << "\nRunning mBAT-combo analysis for " << mapped << " gene(s) ..." << std::endl;
 
     LOGGER << "For computing fastBAT test statistics, SNPs are pruned with LD rsq cutoff of = " << sbat_ld_cutoff * sbat_ld_cutoff 
-        << " (set by --fastBAT-ld-cutoff 0.9 as default)." << endl;
+        << " (std::set by --fastBAT-ld-cutoff 0.9 as default)." << std::endl;
     LOGGER << "For computing mBAT test statistics, top principal components are selected to explain at least "<< mbat_svd_gamma * 100
-        << "% of variance in LD (set by --mBAT-svd-gamma 0.9 as default)." << endl;
+        << "% of variance in LD (std::set by --mBAT-svd-gamma 0.9 as default)." << std::endl;
     //int mapped = gene_mapped_idx.size();
-    vector<string> min_snp_name(mapped);
-    vector<double> min_snp_pval(mapped);
-    vector<int> snp_num_in_gene(mapped);
-    vector<int> snp_num_in_gene_mBAT(mapped);
-    map<string, int>::iterator iter1, iter2;
-    string rgoodsnpfile = _out + ".gene.snpset.mbat";
-    ofstream rogoodsnp;
+    std::vector<std::string> min_snp_name(mapped);
+    std::vector<double> min_snp_pval(mapped);
+    std::vector<int> snp_num_in_gene(mapped);
+    std::vector<int> snp_num_in_gene_mBAT(mapped);
+    std::map<std::string, int>::iterator iter1, iter2;
+    std::string rgoodsnpfile = _out + ".gene.snpset.mbat";
+    std::ofstream rogoodsnp;
     if (mbat_write_snpset) {
         rogoodsnp.open(rgoodsnpfile.c_str());
-        // rogoodsnp << "gene\tsnp" << endl;
+        // rogoodsnp << "gene\tsnp" << std::endl;
     }
     ////////////////////////////////////////////////////
     Eigen::VectorXd P_mBATcombo, P_mbat_svd_prop, fastbat_gene_pvalue, Chisq_mBAT,chisq_o;
@@ -251,27 +251,27 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
     fastbat_gene_pvalue.resize(mapped);
     Chisq_mBAT.resize(mapped);
     chisq_o.resize(mapped);
-    map<int,int> include_in_gene; 
-    vector<int> eigenvalueNum_mBAT(mapped);
+    std::map<int,int> include_in_gene; 
+    std::vector<int> eigenvalueNum_mBAT(mapped);
     int gene_analyzed=0;
 
     /// save output results
-    string filename = _out + ".gene.assoc.mbat";
-    LOGGER << "Saving the results of the mBAT analysis to [" + filename + "] ..." << endl;
-    ofstream ofile(filename.c_str());
+    std::string filename = _out + ".gene.assoc.mbat";
+    LOGGER << "Saving the results of the mBAT analysis to [" + filename + "] ..." << std::endl;
+    std::ofstream ofile(filename.c_str());
     if (!ofile) LOGGER.e(0, "cannot open the file [" + filename + "] to write.");
     ofile << "Gene\tChr\tStart\tEnd\tNo.SNPs\tSNP_start\tSNP_end\tTopSNP\tTopSNP_Pvalue\tNo.Eigenvalues\tChisq_mBAT\tP_mBATcombo";
     if(mbat_print_all_p){
-        ofile << "\tP_mBAT\tChisq_fastBAT\tP_fastBAT" << endl;
+        ofile << "\tP_mBAT\tChisq_fastBAT\tP_fastBAT" << std::endl;
     } else {
-        ofile << endl;
+        ofile << std::endl;
     }
 
     // Dectecting gene with snp > 10,000
     for (j = 0; j < mapped; j++) {
         include_in_gene.clear();
         int gene_ori_idx = gene_mapped_idx[j];
-        vector<int> snp_indx;
+        std::vector<int> snp_indx;
         iter1 = _snp_name_map.find(gene2snp_1[gene_ori_idx]);
         iter2 = _snp_name_map.find(gene2snp_2[gene_ori_idx]);
         bool skip = false;
@@ -286,15 +286,15 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
         for(int k = idx_include_in_gene; k < snp_num; k ++){
                 if(_include[k] > iter2->second){break;}
                 snp_indx.push_back(_include[k]);
-                include_in_gene.insert(pair<int,int>(_include[k],k));
+                include_in_gene.insert(std::pair<int,int>(_include[k],k));
         }
 
         snp_num_in_gene[j] = snp_indx.size();  // assume snp_name_index is ordered and continuous
         snp_num_in_gene_mBAT[j] = snp_num_in_gene[j];
         if(!skip && snp_num_in_gene[j] > 10000){
-            LOGGER << "The following genes have > 10000 SNPs which may take at least a few minutes for each test. You may consider removing these genes from the input list if it takes too much time." << endl;
+            LOGGER << "The following genes have > 10000 SNPs which may take at least a few minutes for each test. You may consider removing these genes from the input list if it takes too much time." << std::endl;
             // for (int k = 0; k < snp_indx.size(); k++) {
-            LOGGER << gene_name[gene_ori_idx] << endl; // "\t"<< _snp_name[snp_indx[k]]<< endl;
+            LOGGER << gene_name[gene_ori_idx] << std::endl; // "\t"<< _snp_name[snp_indx[k]]<< std::endl;
             // } 
         } 
     }
@@ -304,7 +304,7 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
     for (j = 0; j < mapped; j++) {
         include_in_gene.clear();
         int gene_ori_idx = gene_mapped_idx[j];
-        vector<int> snp_indx;
+        std::vector<int> snp_indx;
         iter1 = _snp_name_map.find(gene2snp_1[gene_ori_idx]);
         iter2 = _snp_name_map.find(gene2snp_2[gene_ori_idx]);
         bool skip = false;
@@ -319,13 +319,13 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
         for(int k = idx_include_in_gene; k < snp_num; k ++){
                 if(_include[k] > iter2->second){break;}
                 snp_indx.push_back(_include[k]);
-                include_in_gene.insert(pair<int,int>(_include[k],k));
+                include_in_gene.insert(std::pair<int,int>(_include[k],k));
         }
 
         snp_num_in_gene[j] = snp_indx.size();  // assume snp_name_index is ordered and continuous
         snp_num_in_gene_mBAT[j] = snp_num_in_gene[j];
         // if(!skip && snp_num_in_gene[j] > 10000){
-        //    LOGGER<<"Warning: Too many SNPs in the gene region [" << gene_name[gene_ori_idx] << "]. Maximum limit is 10000. This gene is ignored in the analysis."<<endl;
+        //    LOGGER<<"Warning: Too many SNPs in the gene region [" << gene_name[gene_ori_idx] << "]. Maximum limit is 10000. This gene is ignored in the analysis."<<std::endl;
            // skip = true;  
         // } 
         if(skip){
@@ -335,19 +335,19 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
         }
      
         if (mbat_write_snpset) {
-            rogoodsnp << gene_name[gene_ori_idx] << endl;
+            rogoodsnp << gene_name[gene_ori_idx] << std::endl;
             for (int k = 0; k < snp_indx.size(); k++) {
-                // rogoodsnp << gene_name[gene_ori_idx] << "\t"<< _snp_name[snp_indx[k]] << endl;
-                rogoodsnp << _snp_name[snp_indx[k]] << endl;
+                // rogoodsnp << gene_name[gene_ori_idx] << "\t"<< _snp_name[snp_indx[k]] << std::endl;
+                rogoodsnp << _snp_name[snp_indx[k]] << std::endl;
             }
-            rogoodsnp << "END" << endl << endl;
+            rogoodsnp << "END" << std::endl << std::endl;
         }
         // Step 3.1 run mBAT analysis
         // calculate LD matrix 
         // Step 3.2 run fastBAT
         // actually both mBAT and fatBAT use LD matrix, it may be possible to use one LD matrix to speed up later.
         int snp_count;
-        vector<int> snp_include_gene;
+        std::vector<int> snp_include_gene;
         if (_mu.empty()) calcu_mu();
         chisq_o[j] = 0;
         for(int k = 0; k < snp_indx.size(); k++) {
@@ -385,7 +385,7 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
         } else {
             snp_count=snp_num_in_gene[j];
             Eigen::VectorXd eigenval;
-            vector<int> sub_indx;
+            std::vector<int> sub_indx;
             Eigen::MatrixXf rval(snp_indx.size(), snp_indx.size());;
             mbat_calcu_lambda(snp_include_gene, rval, eigenval, snp_count, sbat_ld_cutoff, sub_indx);
             ///////////////////////////////////////////////////////////////////////////////
@@ -439,8 +439,8 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
         ofile << min_snp_name[j] << "\t" << min_snp_pval[j] << "\t" << eigenvalueNum_mBAT[j] << "\t" <<  Chisq_mBAT[j] << "\t" << P_mBATcombo[j];
         
         if(mbat_print_all_p){ofile << "\t" << P_mbat_svd_prop[j] << "\t" << chisq_o[j]  << "\t" << fastbat_gene_pvalue[j];}
-        ofile << endl;
-       // LOGGER << "mBAT-combo analysis for " << gene_ori_idx+1 << "/"<< gene_num << "-th gene [" << gene_name[gene_ori_idx] << "] has been completed." << endl;
+        ofile << std::endl;
+       // LOGGER << "mBAT-combo analysis for " << gene_ori_idx+1 << "/"<< gene_num << "-th gene [" << gene_name[gene_ori_idx] << "] has been completed." << std::endl;
     }
     ofile.close();
     rogoodsnp.close();
@@ -450,28 +450,28 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
 void gcta::mbat(std::string mbat_sAssoc_file, std::string snpset_file, double mbat_svd_gamma, double sbat_ld_cutoff, bool mbat_write_snpset, bool GC, double GC_val,bool mbat_print_all_p)
 {
     /////////////////////////////////////////
-    // Step 1. read snp set file and ma file.
+    // Step 1. read snp std::set file and ma file.
     /////////////////////////////////////////
     int i = 0, j = 0;
     int snp_count;
 
-    // read SNP set file
-    vector<string> set_name;
-    vector< vector<string> > snpset;
+    // read SNP std::set file
+    std::vector<std::string> set_name;
+    std::vector< std::vector<std::string> > snpset;
     sbat_read_snpset(snpset_file, set_name, snpset);
     int set_num = set_name.size();
     //cout << "snpset size: " << snpset[0].size();
 
     // read SNP association results
-    vector<string> snp_name;
-    vector<int> snp_chr, snp_bp;
-    vector<double> snp_pval;
-    vector<double> beta;
-    vector<double> beta_se;
+    std::vector<std::string> snp_name;
+    std::vector<int> snp_chr, snp_bp;
+    std::vector<double> snp_pval;
+    std::vector<double> beta;
+    std::vector<double> beta_se;
     init_massoc(mbat_sAssoc_file, GC, GC_val);
     int snp_num = _include.size();
     // re-calculate chi-square 
-    vector<double> snp_chisq(snp_num);
+    std::vector<double> snp_chisq(snp_num);
     snp_pval.resize(snp_num);
     snp_name.resize(snp_num);
     snp_chr.resize(snp_num);
@@ -496,27 +496,27 @@ void gcta::mbat(std::string mbat_sAssoc_file, std::string snpset_file, double mb
     // Step 3. Run gene-based test.
     /////////////////////////////////////////
     if (_mu.empty()) calcu_mu();
-    LOGGER << "\nRunning mBAT-combo analysis for " << set_num << " gene(s) ..." << endl;
+    LOGGER << "\nRunning mBAT-combo analysis for " << set_num << " gene(s) ..." << std::endl;
 
     LOGGER << "For computing fastBAT test statistics, SNPs are pruned with LD rsq cutoff of = " << sbat_ld_cutoff * sbat_ld_cutoff 
-        << " (set by --fastBAT-ld-cutoff 0.9 as default)." << endl;
+        << " (std::set by --fastBAT-ld-cutoff 0.9 as default)." << std::endl;
     LOGGER << "For computing mBAT test statistics, top principal components are selected to explain at least "<< mbat_svd_gamma * 100
-        << "% of variance in LD (set by --mBAT-svd-gamma 0.9 as default)." << endl;
+        << "% of variance in LD (std::set by --mBAT-svd-gamma 0.9 as default)." << std::endl;
     
-    vector<string> min_snp_name(set_num);
-    vector<double> min_snp_pval(set_num);
-    vector<int> snp_num_in_set(set_num); // = snp_num_in_set
-    vector<int> snp_num_in_set_mBAT(set_num); // = snp_num_in_set_mBAT;
-    // map<string, int>::iterator iter1, iter2;
-    map<string, int>::iterator iter;
-    map<string, int> snp_name_map;
-    string rgoodsnpfile = _out + ".set.snpset.mbat";
-    ofstream rogoodsnp;
+    std::vector<std::string> min_snp_name(set_num);
+    std::vector<double> min_snp_pval(set_num);
+    std::vector<int> snp_num_in_set(set_num); // = snp_num_in_set
+    std::vector<int> snp_num_in_set_mBAT(set_num); // = snp_num_in_set_mBAT;
+    // std::map<std::string, int>::iterator iter1, iter2;
+    std::map<std::string, int>::iterator iter;
+    std::map<std::string, int> snp_name_map;
+    std::string rgoodsnpfile = _out + ".std::set.snpset.mbat";
+    std::ofstream rogoodsnp;
     if (mbat_write_snpset) {
         rogoodsnp.open(rgoodsnpfile.c_str());
-        // rogoodsnp << "set\tsnp" << endl;
+        // rogoodsnp << "std::set\tsnp" << std::endl;
     }
-    for (i = 0; i < snp_name.size(); i++) snp_name_map.insert(pair<string,int>(snp_name[i], i));
+    for (i = 0; i < snp_name.size(); i++) snp_name_map.insert(std::pair<std::string,int>(snp_name[i], i));
     ////////////////////////////////////////////////////
     Eigen::VectorXd P_mBATcombo, P_mbat_svd_prop, fastbat_set_pvalue, Chisq_mBAT,chisq_o;
     P_mBATcombo.resize(set_num);
@@ -524,20 +524,20 @@ void gcta::mbat(std::string mbat_sAssoc_file, std::string snpset_file, double mb
     fastbat_set_pvalue.resize(set_num);
     Chisq_mBAT.resize(set_num);
     chisq_o.resize(set_num);
-    map<int,int> include_in_gene; 
-    vector<int> eigenvalueNum_mBAT(set_num);
+    std::map<int,int> include_in_gene; 
+    std::vector<int> eigenvalueNum_mBAT(set_num);
     int gene_analyzed=0;
 
     /// save output results
-    string filename = _out + ".set.assoc.mbat";
-    LOGGER << "Saving the results of the mBAT analysis to [" + filename + "] ..." << endl;
-    ofstream ofile(filename.c_str());
+    std::string filename = _out + ".std::set.assoc.mbat";
+    LOGGER << "Saving the results of the mBAT analysis to [" + filename + "] ..." << std::endl;
+    std::ofstream ofile(filename.c_str());
     if (!ofile) LOGGER.e(0, "cannot open the file [" + filename + "] to write.");
     ofile << "Set\tNo.SNPs\tTopSNP\tTopSNP_Pvalue\tNo.Eigenvalues\tChisq_mBAT\tP_mBATcombo";
     if(mbat_print_all_p){
-        ofile << "\tP_mBAT\tChisq_fastBAT\tP_fastBAT" << endl;
+        ofile << "\tP_mBAT\tChisq_fastBAT\tP_fastBAT" << std::endl;
     } else {
-        ofile << endl;
+        ofile << std::endl;
     }
 
 
@@ -545,7 +545,7 @@ void gcta::mbat(std::string mbat_sAssoc_file, std::string snpset_file, double mb
     for (i = 0; i < set_num; i++) {
         bool skip = false;
         if(snpset[i].size() < 1) skip = true;
-        vector<int> snp_indx;
+        std::vector<int> snp_indx;
         for(j = 0; j < snpset[i].size(); j++){
             iter = snp_name_map.find(snpset[i][j]);
             if(iter!=snp_name_map.end()) snp_indx.push_back(iter->second);
@@ -553,20 +553,20 @@ void gcta::mbat(std::string mbat_sAssoc_file, std::string snpset_file, double mb
         snp_num_in_set[i] = snp_indx.size();
         snp_num_in_set_mBAT[i] = snp_indx.size();
         if(!skip && snp_num_in_set[i] > 10000){
-            LOGGER << "The following sets have > 10000 SNPs which may take at least a few minutes for each test. You may consider removing these genes from the input list if it takes too much time." << endl;
+            LOGGER << "The following sets have > 10000 SNPs which may take at least a few minutes for each test. You may consider removing these genes from the input list if it takes too much time." << std::endl;
             // for (int k = 0; k < snp_indx.size(); k++) {
-            LOGGER << set_name[i]  << endl; // "\t" << snp_name[snp_indx[k]] << endl;
+            LOGGER << set_name[i]  << std::endl; // "\t" << snp_name[snp_indx[k]] << std::endl;
             // }
             // skip = true;  
         } 
     }
 
 
-    // Do mBAT analysis for each set
+    // Do mBAT analysis for each std::set
     for (i = 0; i < set_num; i++) {
         bool skip = false;
         if(snpset[i].size() < 1) skip = true;
-        vector<int> snp_indx;
+        std::vector<int> snp_indx;
         for(j = 0; j < snpset[i].size(); j++){
             iter = snp_name_map.find(snpset[i][j]);
             if(iter!=snp_name_map.end()) snp_indx.push_back(iter->second);
@@ -574,7 +574,7 @@ void gcta::mbat(std::string mbat_sAssoc_file, std::string snpset_file, double mb
         snp_num_in_set[i] = snp_indx.size();
         snp_num_in_set_mBAT[i] = snp_indx.size();
         // if(!skip && snp_num_in_set[i] > 20000){
-        //     LOGGER<<"Warning: Too many SNPs in the set ["<<set_name[i]<<"]. Maximum limit is 20000. This gene is ignored in the analysis."<<endl;
+        //     LOGGER<<"Warning: Too many SNPs in the std::set ["<<set_name[i]<<"]. Maximum limit is 20000. This gene is ignored in the analysis."<<std::endl;
         //     skip = true;  
         // } 
         if(skip){
@@ -627,7 +627,7 @@ void gcta::mbat(std::string mbat_sAssoc_file, std::string snpset_file, double mb
         } else {
             snp_count=snp_num_in_set[i];
             Eigen::VectorXd eigenval;
-            vector<int> sub_indx;
+            std::vector<int> sub_indx;
             Eigen::MatrixXf rval(snp_indx.size(), snp_indx.size());;
             // extract eigenval for fastbat
             mbat_calcu_lambda(snp_indx, rval, eigenval, snp_count, sbat_ld_cutoff, sub_indx);
@@ -668,11 +668,11 @@ void gcta::mbat(std::string mbat_sAssoc_file, std::string snpset_file, double mb
             }
         
             if (mbat_write_snpset) {
-                rogoodsnp << set_name[i] << endl;
+                rogoodsnp << set_name[i] << std::endl;
                 for (int k = 0; k < snp_indx.size(); k++) {
-                    rogoodsnp << snp_name[snp_indx[k]] << endl;
+                    rogoodsnp << snp_name[snp_indx[k]] << std::endl;
                 }
-                rogoodsnp << "END" << endl << endl;
+                rogoodsnp << "END" << std::endl << std::endl;
             }
         }
         // Step 3.3 Combine fastbat and mbat p value to obtain mbat-combo p
@@ -687,8 +687,8 @@ void gcta::mbat(std::string mbat_sAssoc_file, std::string snpset_file, double mb
         ofile << min_snp_name[i] << "\t" << min_snp_pval[i] << "\t" << eigenvalueNum_mBAT[i] << "\t" <<  Chisq_mBAT[i] << "\t" << P_mBATcombo[i];
         
         if(mbat_print_all_p){ofile << "\t" << P_mbat_svd_prop[i] << "\t" << chisq_o[i]  << "\t" << fastbat_set_pvalue[i];}
-        ofile << endl;
-       // LOGGER << "mBAT-combo analysis for " << gene_ori_idx+1 << "/"<< gene_num << "-th gene [" << gene_name[gene_ori_idx] << "] has been completed." << endl;
+        ofile << std::endl;
+       // LOGGER << "mBAT-combo analysis for " << gene_ori_idx+1 << "/"<< gene_num << "-th gene [" << gene_name[gene_ori_idx] << "] has been completed." << std::endl;
     }
     ofile.close();
     rogoodsnp.close();

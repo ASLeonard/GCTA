@@ -104,6 +104,10 @@ void StatFunc::gasdev_seq(int &idum, std::vector<double> &vec, int size, double 
     std::ranges::for_each(vec, [c](double& v) { v *= c; });
 }
 
+static std::random_device ran_device;
+static std::mt19937 gen(ran_device());
+static std::uniform_real_distribution<double> u_dis(0, 1);
+
 double StatFunc::gasdev(int &idum) {
     static int iset = 0;
     static double gset;
@@ -134,16 +138,12 @@ double StatFunc::UniformDev(double a, double b, int &idum) {
     return a + (b - a) * u_dis(gen);
 }
 
-static std::random_device ran_device;
-static std::mt19937 gen(ran_device());
-static std::uniform_real_distribution<double> u_dis(0, 1);
-
 /*
     const int IA = 16807, IM = 2147483647, IQ = 127773, IR = 2836, NTAB = 32;
     const int NDIV = (1 + (IM - 1) / NTAB);
     const double EPS = 3.0e-16, AM = 1.0 / IM, RNMX = (1.0 - EPS);
     static int iy = 0;
-    static vector<int> iv(NTAB);
+    static std::vector<int> iv(NTAB);
     int j, k;
     double temp;
 
@@ -422,56 +422,24 @@ void StatFunc::splint(std::vector<double> &xa, std::vector<double> &ya, std::vec
         ((a * a * a - a) * y2a[klo] + (b * b * b - b) * y2a[khi]) * (h * h) / 6.0;
 }
 
-// Default: upper-tail P(Z > x)
-double StatFunc::pnorm(double x) {
-    return boost::math::cdf(
-        boost::math::complement(boost::math::normal(), x));
-}
+std::vector<double> StatFunc::ControlFDR_BH(std::span<const double> p_value) {
+    const int n = static_cast<int>(p_value.size());
+    std::vector<std::pair<double, int>> pval_buf(n);
+    for (int i = 0; i < n; ++i) pval_buf[i] = std::make_pair(p_value[i], i);
 
-double StatFunc::dnorm(double x) {
-    return boost::math::pdf(boost::math::normal(), x);
-}
-
-// qnorm(p, upper=true): returns Phi^{-1}(p), the lower-tail normal quantile.
-// The "upper" parameter controls how p is interpreted when upper=false:
-//   upper=false: finds x such that P(Z > x) = p  (upper-tail quantile)
-double StatFunc::qnorm(double p, bool upper) {
-    if (upper)
-        return boost::math::quantile(boost::math::normal(), p);
-    return boost::math::quantile(
-        boost::math::complement(boost::math::normal(), p));
-}
-
-
-    int i = 0, n = p_value.size();
-
-    double c = 0.0, min_val = 1.0;
-    vector<double> fdr(n);
-    vector<pair<double, int>> pval_buf(n);
-    vector<pair<int, int>> indx_buf(n);
-
-    for( i = 0; i < n; i++ ) pval_buf[i] = make_pair(p_value[i], i);
-    stable_sort(pval_buf.begin(), pval_buf.end(), [](const pair<double,int> a, const pair<double,int> b) {return a.first > b.first; });
-
-    for( i = 0; i < n; i++ ) {
-        c = (double) n / (double) (n-i) * pval_buf[i].first;
-        if(c < min_val) min_val = c;
-        fdr[pval_buf[i].second] = CommFunc::Min(1.0, min_val);
-    }
-    
     std::ranges::stable_sort(pval_buf, [](const auto& a, const auto& b) {
         return a.first > b.first;
     });
-    
+
     std::vector<double> fdr(n);
     double min_val = 1.0;
-    
+
     for (int i = 0; i < n; ++i) {
         const double c = static_cast<double>(n) / static_cast<double>(n - i) * pval_buf[i].first;
         min_val = std::min(c, min_val);
         fdr[pval_buf[i].second] = std::min(1.0, min_val);
     }
-    
+
     return fdr;
 }
 
@@ -535,9 +503,9 @@ double StatFunc::psadd(double x, Eigen::VectorXd lambda) {
     double v = hatzeta * sqrt(Kpp(hatzeta, lambda));
 
     // debug
-    //LOGGER<<"hatzeta = "<<hatzeta<<endl;
-    //LOGGER<<"w = "<<w<<endl;
-    //LOGGER<<"v = "<<v<<endl;
+    //LOGGER<<"hatzeta = "<<hatzeta<<std::endl;
+    //LOGGER<<"w = "<<w<<std::endl;
+    //LOGGER<<"v = "<<v<<std::endl;
 
     
     if (fabs(hatzeta) < 1e-04) return 2.0;

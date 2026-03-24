@@ -366,7 +366,7 @@ private:
     void GenerCases(std::string bfile, std::string qtl_file, int case_num, int control_num, double hsq, double K, bool curr_popu = false, double gnrt = 100);
 
     // LD
-    void EstLD(std::vector<int> &smpl, double wind_size, std::vector< std::vector<std::string> > &snp, std::vector< std::vector<double> > &r, std::vector<double> &r2, std::vector<double> &md_r2, std::vector<double> &max_r2, std::vector<std::string> &max_r2_snp, std::vector<double> &dL, std::vector<double> &dR, std::vector<int> &K, std:: vector<std::string> &L_SNP, std::vector<std::string> &R_SNP, double alpha, bool IncldQ);
+    void EstLD(std::vector<int> &smpl, double wind_size, std::vector< std::vector<std::string> > &snp, std::vector< std::vector<double> > &r, std::vector<double> &r2, std::vector<double> &md_r2, std::vector<double> &max_r2, std::vector<std::string> &max_r2_snp, std::vector<double> &dL, std::vector<double> &dR, std::vector<int> &K, std::vector<std::string> &L_SNP, std::vector<std::string> &R_SNP, double alpha, bool IncldQ);
     eigenMatrix reg(std::vector<double> &y, std::vector<double> &x, std::vector<double> &rst, bool table = false);
     void rm_cor_snp(int m, int start, float *rsq, double rsq_cutoff, std::vector<int> &rm_snp_ID1);
     void get_ld_blk_pnt(std::vector<int> &brk_pnt1, std::vector<int> &brk_pnt2, std::vector<int> &brk_pnt3, int wind_bp, int wind_snp = 0);
@@ -621,10 +621,10 @@ private:
     double _ncase2;
     std::vector< std::vector<int> > _bivar_pos;
     std::vector< std::vector<int> > _bivar_pos_prev;
-    vector< eigenSparseMat > _Asp;
-    vector< eigenSparseMat > _Asp_prev;
-    vector<eigenMatrix> _A_prev;
-    vector<double> _fixed_rg_val;
+    std::vector< eigenSparseMat > _Asp;
+    std::vector< eigenSparseMat > _Asp_prev;
+    std::vector<eigenMatrix> _A_prev;
+    std::vector<double> _fixed_rg_val;
 
     std::vector<double> _mu;
     std::string _out;
@@ -694,7 +694,7 @@ private:
     std::vector<std::string> _probe_name;
     int _probe_num;
     eigenMatrix _probe_data;
-    vector<int> _e_include;
+    std::vector<int> _e_include;
     eigenVector _ecojo_z;
     eigenVector _ecojo_b;
     eigenVector _ecojo_se;

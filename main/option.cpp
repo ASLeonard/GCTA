@@ -27,29 +27,29 @@ void option(int option_num, char* option_str[]);
 
 int main_v1(int argc, char* argv[])
 {
-    LOGGER << "*******************************************************************" << endl;
-    LOGGER << "* Genome-wide Complex Trait Analysis (GCTA)" << endl;
-    LOGGER << "* version 1.93.3 beta3" << endl;
-    LOGGER << "* (C) 2010-2021, Westlake University" << endl;
-    LOGGER << "* MIT License" << endl;
-    LOGGER << "* Please report bugs to: Jian Yang <jian.yang@westlake.edu.cn>" << endl;
-    LOGGER << "*******************************************************************" << endl;
+    LOGGER << "*******************************************************************" << std::endl;
+    LOGGER << "* Genome-wide Complex Trait Analysis (GCTA)" << std::endl;
+    LOGGER << "* version 1.93.3 beta3" << std::endl;
+    LOGGER << "* (C) 2010-2021, Westlake University" << std::endl;
+    LOGGER << "* MIT License" << std::endl;
+    LOGGER << "* Please report bugs to: Jian Yang <jian.yang@westlake.edu.cn>" << std::endl;
+    LOGGER << "*******************************************************************" << std::endl;
 
     long int time_used = 0, start = time(NULL);
     time_t curr = time(0);
-    LOGGER << "Analysis started: " << ctime(&curr) << endl;
-    LOGGER << "Options:" << endl;
+    LOGGER << "Analysis started: " << ctime(&curr) << std::endl;
+    LOGGER << "Options:" << std::endl;
     try {
         option(argc, argv);
-    } catch (const string &err_msg) {
-        cerr << "\n" << err_msg << endl;
+    } catch (const std::string &err_msg) {
+        std::cerr << "\n" << err_msg << std::endl;
     } catch (const char *err_msg) {
-        cerr << "\n" << err_msg << endl;
+        std::cerr << "\n" << err_msg << std::endl;
     }
     curr = time(0);
     LOGGER << "\nAnalysis finished: " << ctime(&curr);
     time_used = time(NULL) - start;
-    LOGGER << "Computational time: " << time_used / 3600 << ":" << (time_used % 3600) / 60 << ":" << time_used % 60 << endl;
+    LOGGER << "Computational time: " << time_used / 3600 << ":" << (time_used % 3600) / 60 << ":" << time_used % 60 << std::endl;
 
     return 0;
 }
@@ -63,17 +63,17 @@ void option(int option_num, char* option_str[])
     int thread_num = omp_get_max_threads();
 
     // raw genotype data
-    string RG_fname_file = "", RG_summary_file = "";
+    std::string RG_fname_file = "", RG_summary_file = "";
     double GC_cutoff = 0.7;
 
     // data management
-    string bfile = "", bfile2 = "", bfile_list = "", update_sex_file = "", update_freq_file = "", update_refA_file = "", kp_indi_file = "", rm_indi_file = "", extract_snp_file = "", exclude_snp_file = "", extract_snp_name = "", exclude_snp_name = "", out = "gcta";
+    std::string bfile = "", bfile2 = "", bfile_list = "", update_sex_file = "", update_freq_file = "", update_refA_file = "", kp_indi_file = "", rm_indi_file = "", extract_snp_file = "", exclude_snp_file = "", extract_snp_name = "", exclude_snp_name = "", out = "gcta";
     bool SNP_major = false, make_bed_flag = false, dose_mach_flag = false, dose_mach_gz_flag = false, dose_beagle_flag = false, bfile2_flag = false, out_freq_flag = false, out_ssq_flag = false;
     bool ref_A = false, recode = false, recode_nomiss = false, recode_std = false, save_ram = false, autosome_flag = false;
     int bfile_flag = 0, autosome_num = 22, extract_chr_start = 0, extract_chr_end = 0, extract_region_chr = 0, extract_region_bp = 0, extract_region_wind = 0, exclude_region_chr = 0, exclude_region_bp = 0, exclude_region_wind = 0;
-    string dose_file = "", dose_info_file = "", update_impRsq_file = "";
+    std::string dose_file = "", dose_info_file = "", update_impRsq_file = "";
     double maf = 0.0, max_maf = 0.0, dose_Rsq_cutoff = 0.0;
-    vector<string> multi_bfiles;
+    std::vector<std::string> multi_bfiles;
 
     // GRM
     bool ibc = false, ibc_all = false, grm_flag = false, grm_bin_flag = true, m_grm_flag = false, m_grm_bin_flag = true, make_grm_flag = false, make_grm_inbred_flag = false, dominance_flag = false, make_grm_xchar_flag = false, grm_out_bin_flag = true, make_grm_f3_flag = false;
@@ -82,15 +82,15 @@ void option(int option_num, char* option_str[])
     bool project_flag = false;
     double grm_adj_fac = -2.0, grm_cutoff = -2.0, rm_high_ld_cutoff = -1.0, bK_threshold = -10.0;
     int dosage_compen = -2, out_pc_num = 20, make_grm_mtd = 0;
-    string grm_file = "", paa_file = "", pc_file = "";
-    string genetic_model = ""; // genetic model for dosage calculation
+    std::string grm_file = "", paa_file = "", pc_file = "";
+    std::string genetic_model = ""; // genetic model for dosage calculation
     //pca projection
-    string project_file = "";
+    std::string project_file = "";
     int project_N = 0;
 
 
     // LD
-    string LD_file = "", ld_score_multi_file = "";
+    std::string LD_file = "", ld_score_multi_file = "";
     bool LD = false, LD_search = false, LD_i = false, ld_score_flag = false, ld_max_rsq_flag = false, ld_mean_rsq_seg_flag = false, ldscore_adj_flag = false;
     int LD_step = 10;
     double LD_wind = 1e7, LD_sig = 0.05, LD_prune_rsq = -1.0, LD_rsq_cutoff = 0.0, LD_seg = 1e5;
@@ -99,7 +99,7 @@ void option(int option_num, char* option_str[])
     bool simu_qt_flag = false, simu_cc = false, simu_emb_flag = false, simu_output_causal = false;
     int simu_rep = 1, simu_case_num = 0, simu_control_num = 0, simu_eff_mod = 0;
     double simu_h2 = 0.1, simu_K = 0.1, simu_gener = 100, simu_seed = -static_cast<int>(std::random_device{}() & 0x7FFFFFFFu);
-    string simu_causal = "";
+    std::string simu_causal = "";
 
     // simulate unlinked SNPs
     bool simu_unlinked_flag = false;
@@ -108,7 +108,7 @@ void option(int option_num, char* option_str[])
 
     // estimate genetic distance based on hapmap_data
     bool hapmap_genet_dst = false;
-    string hapmap_genet_dst_file = "";
+    std::string hapmap_genet_dst_file = "";
 
     // REML analysis
     bool prevalence_flag = false, reml_force_inv_fac_flag = false, reml_force_converge_flag = false, reml_no_converge_flag = false, reml_fixed_var_flag = false;
@@ -122,14 +122,14 @@ void option(int option_num, char* option_str[])
 
     bool cv_blup = false;
     bool HE_reg_bivar_flag = false;
-    string weight_file = "";
-    string phen_file = "", qcovar_file = "", covar_file = "", qgxe_file = "", gxe_file = "", blup_indi_file = "";
-    vector<double> reml_priors, reml_priors_var, fixed_rg_val;
-    vector<int> reml_drop;
+    std::string weight_file = "";
+    std::string phen_file = "", qcovar_file = "", covar_file = "", qgxe_file = "", gxe_file = "", blup_indi_file = "";
+    std::vector<double> reml_priors, reml_priors_var, fixed_rg_val;
+    std::vector<int> reml_drop;
     reml_drop.push_back(1);
 
     // Joint analysis of GWAS MA
-    string massoc_file = "", massoc_init_snplist = "", massoc_cond_snplist = "";
+    std::string massoc_file = "", massoc_init_snplist = "", massoc_cond_snplist = "";
     int massoc_wind = 1e7, massoc_top_SNPs = -1, massoc_mld_slct_alg = 0;
     double massoc_p = 5e-8, massoc_collinear = 0.9, massoc_sblup_fac = -1, massoc_gc_val = -1;
     bool massoc_slct_flag = false, massoc_joint_flag = false, massoc_sblup_flag = false, massoc_gc_flag = false, massoc_actual_geno_flag = false;
@@ -138,36 +138,36 @@ void option(int option_num, char* option_str[])
     // mixed linear model association 
     bool mlma_flag = false, mlma_loco_flag = false, mlma_no_adj_covar = false;
     bool save_reml_flag = false;
-    string subtract_grm_file = "", save_reml_file = "", load_reml_file = "";
+    std::string subtract_grm_file = "", save_reml_file = "", load_reml_file = "";
 
     // Fst
     bool fst_flag = false;
-    string subpopu_file = "";
+    std::string subpopu_file = "";
 
     // fastBAT gene-based association test
     bool sbat_seg_flag = false;
     double sbat_ld_cutoff = sqrt(0.9); //option to remove overly correlated snps in SBAT test
     bool sbat_write_snpset = false; //write snplist - used in conjunction with sbat_ld_cutoff
-    string sbat_sAssoc_file = "", sbat_gAnno_file = "", sbat_snpset_file = "";
+    std::string sbat_sAssoc_file = "", sbat_gAnno_file = "", sbat_snpset_file = "";
     int sbat_wind = 50000, sbat_seg_size = 1e5;
    
     // mBAT gene-based association test
     // alstep 1 . add flag
     double mbat_svd_gamma = 0.9; //option to remove overly correlated snps in mBAT test
     bool mbat_write_snpset = false; //write snplist _ used in conjunction with mbat_ld_cutoff
-    string mbat_sAssoc_file = "", mbat_gAnno_file = "", mbat_snpset_file = "";
+    std::string mbat_sAssoc_file = "", mbat_gAnno_file = "", mbat_snpset_file = "";
     int mbat_wind = 50000;
     bool mbat_print_all_p = false;
    
     // gene expression data
-    string efile="", eR_file = "", ecojo_ma_file="";
+    std::string efile="", eR_file = "", ecojo_ma_file="";
     int make_erm_mtd = 1;
     double ecojo_p = 5e-6, ecojo_collinear = 0.9, ecojo_lambda = -1;
     bool efile_flag=false, eR_file_flag = false, ecojo_slct_flag = false, ecojo_blup_flag = false, make_erm_flag = false;
 
     // mtCOJO
     char chbuf = '\0';
-    string mtcojolist_file="", mtcojo_bxy_file="", ref_ld_dirt="", w_ld_dirt="";
+    std::string mtcojolist_file="", mtcojo_bxy_file="", ref_ld_dirt="", w_ld_dirt="";
     int nsnp_gsmr=10, nsnp_read = 0;
     double freq_thresh = 0.2, gwas_thresh=5e-8, global_heidi_thresh = 0.01, std_heidi_thresh = 0.01, ld_fdr_thresh=0.05, clump_wind_size=10000, clump_r2_thresh=0.05;
     bool mtcojo_flag=false, ref_ld_flag=false, w_ld_flag=false, global_heidi_flag=false;
@@ -175,302 +175,302 @@ void option(int option_num, char* option_str[])
     // GSMR
     bool gsmr_flag = false, o_snp_instru_flag = false, gsmr_so_flag = false, gsmr_snp_update_flag = false;
     int gsmr_beta_version = 0, gsmr_alg_flag = 0, gsmr_so_alg = -9;
-    string expo_file_list = "", outcome_file_list = "";
+    std::string expo_file_list = "", outcome_file_list = "";
     
     // Adjustment for PC
     bool gwas_data_flag = false, gwas_adj_pc_flag = false;
     int pc_adj_wind_size = 10000;
-    string pcadjust_list_file = "";
+    std::string pcadjust_list_file = "";
 
     int argc = option_num;
-    vector<char *> argv(option_num + 2);
+    std::vector<char *> argv(option_num + 2);
     for (i = 0; i < option_num; i++) argv[i] = option_str[i];
     argv[option_num] = const_cast<char*>("gcta");
     argv[option_num + 1] = const_cast<char*>("gcta");
-    LOGGER << "Accepted options:" << endl;
+    LOGGER << "Accepted options:" << std::endl;
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--thread-num") == 0) {
             thread_num = atoi(argv[++i]);
-            LOGGER << "--thread-num " << thread_num << endl;
+            LOGGER << "--thread-num " << thread_num << std::endl;
             if (thread_num < 1 || thread_num > 1000) LOGGER.e(0, "\n  --thread-num should be from 1 to 1000.\n");
         }
         else if (strcmp(argv[i], "--threads") == 0) {
             thread_num = atoi(argv[++i]);
-            LOGGER << "--threads " << thread_num << endl;
+            LOGGER << "--threads " << thread_num << std::endl;
             if (thread_num < 1 || thread_num > 1000) LOGGER.e(0, "\n  --threads should be from 1 to 1000.\n");
         }// raw genotype data
         else if (strcmp(argv[i], "--raw-files") == 0) {
             RG_fname_file = argv[++i];
-            LOGGER << "--raw-files " << argv[i] << endl;
+            LOGGER << "--raw-files " << argv[i] << std::endl;
         } else if (strcmp(argv[i], "--raw-summary") == 0) {
             RG_summary_file = argv[++i];
-            LOGGER << "--raw-summary " << argv[i] << endl;
+            LOGGER << "--raw-summary " << argv[i] << std::endl;
         } else if (strcmp(argv[i], "--gencall") == 0) {
             GC_cutoff = atof(argv[++i]);
-            LOGGER << "--gencall " << GC_cutoff << endl;
+            LOGGER << "--gencall " << GC_cutoff << std::endl;
             if (GC_cutoff < 0.0 || GC_cutoff > 1.0) LOGGER.e(0, "\n  --gencall should be within the range from 0 to 1.\n");
         }            // data management
         else if (strcmp(argv[i], "--bfile") == 0) {
             bfile_flag = 1;
             bfile = argv[++i];
-            LOGGER << "--bfile " << argv[i] << endl;
+            LOGGER << "--bfile " << argv[i] << std::endl;
         } else if (strcmp(argv[i], "--mbfile") == 0) {
             bfile_flag = 2;
             bfile_list = argv[++i];
-            LOGGER << "--mbfile " << argv[i] << endl;
+            LOGGER << "--mbfile " << argv[i] << std::endl;
         } else if (strcmp(argv[i], "--make-bed") == 0) {
             make_bed_flag = true;
-            LOGGER << "--make-bed " << endl;
+            LOGGER << "--make-bed " << std::endl;
         } else if (strcmp(argv[i], "--bfile2") == 0) {
             bfile2_flag = true;
             bfile2 = argv[++i];
-            LOGGER << "--bfile2 " << argv[i] << endl;
+            LOGGER << "--bfile2 " << argv[i] << std::endl;
         } else if (strcmp(argv[i], "--dosage-mach") == 0) {
             dose_mach_flag = true;
             dose_beagle_flag = false;
             dose_file = argv[++i];
             dose_info_file = argv[++i];
-            LOGGER << "--dosage-mach " << dose_file << " " << dose_info_file << endl;
+            LOGGER << "--dosage-mach " << dose_file << " " << dose_info_file << std::endl;
         } else if (strcmp(argv[i], "--dosage-mach-gz") == 0) {
             dose_mach_gz_flag = true;
             dose_beagle_flag = false;
             dose_file = argv[++i];
             dose_info_file = argv[++i];
-            LOGGER << "--dosage-mach-gz " << dose_file << " " << dose_info_file << endl;
+            LOGGER << "--dosage-mach-gz " << dose_file << " " << dose_info_file << std::endl;
         } else if (strcmp(argv[i], "--dosage-beagle") == 0) {
             dose_beagle_flag = true;
             dose_mach_flag = false;
             dose_mach_gz_flag = false;
             dose_file = argv[++i];
             dose_info_file = argv[++i];
-            LOGGER << "--dosage-beagle " << dose_file << " " << dose_info_file << endl;
+            LOGGER << "--dosage-beagle " << dose_file << " " << dose_info_file << std::endl;
         } else if (strcmp(argv[i], "--imput-rsq") == 0) {
             dose_Rsq_cutoff = atof(argv[++i]);
-            LOGGER << "--imput-rsq " << dose_Rsq_cutoff << endl;
+            LOGGER << "--imput-rsq " << dose_Rsq_cutoff << std::endl;
             if (dose_Rsq_cutoff < 0.0 || dose_Rsq_cutoff > 1.0) LOGGER.e(0, "\n  --imput-rsq should be within the range from 0 to 1.\n");
         } else if (strcmp(argv[i], "--update-imput-rsq") == 0) {
             update_impRsq_file = argv[++i];
-            LOGGER << "--update-imput-rsq " << update_impRsq_file << endl;
+            LOGGER << "--update-imput-rsq " << update_impRsq_file << std::endl;
             if (!std::filesystem::exists(update_impRsq_file)) LOGGER.e(0, "cannot open the file ["+update_impRsq_file+"] to read.");
         } else if (strcmp(argv[i], "--update-freq") == 0) {
             update_freq_file = argv[++i];
-            LOGGER << "--update-freq " << update_freq_file << endl;
+            LOGGER << "--update-freq " << update_freq_file << std::endl;
             if (!std::filesystem::exists(update_freq_file)) LOGGER.e(0, "cannot open the file ["+update_freq_file+"] to read.");
         } else if (strcmp(argv[i], "--update-ref-allele") == 0) {
             update_refA_file = argv[++i];
-            LOGGER << "--update-ref-allele " << update_refA_file << endl;
+            LOGGER << "--update-ref-allele " << update_refA_file << std::endl;
             if (!std::filesystem::exists(update_refA_file)) LOGGER.e(0, "cannot open the file ["+update_refA_file+"] to read.");
         } else if (strcmp(argv[i], "--keep") == 0) {
             kp_indi_file = argv[++i];
-            LOGGER << "--keep " << kp_indi_file << endl;
+            LOGGER << "--keep " << kp_indi_file << std::endl;
             if (!std::filesystem::exists(kp_indi_file)) LOGGER.e(0, "cannot open the file ["+kp_indi_file+"] to read.");
         } else if (strcmp(argv[i], "--remove") == 0) {
             rm_indi_file = argv[++i];
-            LOGGER << "--remove " << rm_indi_file << endl;
+            LOGGER << "--remove " << rm_indi_file << std::endl;
             if (!std::filesystem::exists(rm_indi_file)) LOGGER.e(0, "cannot open the file ["+rm_indi_file+"] to read.");
         } else if (strcmp(argv[i], "--update-sex") == 0) {
             update_sex_file = argv[++i];
-            LOGGER << "--update-sex " << update_sex_file << endl;
+            LOGGER << "--update-sex " << update_sex_file << std::endl;
             if (!std::filesystem::exists(update_sex_file)) LOGGER.e(0, "cannot open the file ["+update_sex_file+"] to read.");
         } else if (strcmp(argv[i], "--chr") == 0) {
             extract_chr_start = extract_chr_end = atoi(argv[++i]);
-            LOGGER << "--chr " << extract_chr_start << endl;
+            LOGGER << "--chr " << extract_chr_start << std::endl;
             if (extract_chr_start < 1 || extract_chr_start > 100) LOGGER.e(0, "\n --chr should be within the range from 1 to 100.\n");
         } else if (strcmp(argv[i], "--autosome-num") == 0) {
             autosome_num = atoi(argv[++i]);
-            LOGGER << "--autosome-num " << autosome_num << endl;
+            LOGGER << "--autosome-num " << autosome_num << std::endl;
             if (autosome_num < 1 || autosome_num > 100) LOGGER.e(0, "\n  invalid number specified after the option --autosome-num.\n");
         } else if (strcmp(argv[i], "--autosome") == 0) {
             autosome_flag = true;
-            LOGGER << "--autosome" << endl;
+            LOGGER << "--autosome" << std::endl;
         } else if (strcmp(argv[i], "--extract") == 0) {
             extract_snp_file = argv[++i];
-            LOGGER << "--extract " << extract_snp_file << endl;
+            LOGGER << "--extract " << extract_snp_file << std::endl;
             if (!std::filesystem::exists(extract_snp_file)) LOGGER.e(0, "cannot open the file ["+extract_snp_file+"] to read.");
         } else if (strcmp(argv[i], "--exclude") == 0) {
             exclude_snp_file = argv[++i];
-            LOGGER << "--exclude " << exclude_snp_file << endl;
+            LOGGER << "--exclude " << exclude_snp_file << std::endl;
             if (!std::filesystem::exists(exclude_snp_file)) LOGGER.e(0, "cannot open the file ["+exclude_snp_file+"] to read.");
         } else if (strcmp(argv[i], "--extract-snp") == 0) {
             extract_snp_name = argv[++i];
-            LOGGER << "--extract-snp " << extract_snp_name << endl;
+            LOGGER << "--extract-snp " << extract_snp_name << std::endl;
         } else if (strcmp(argv[i], "--extract-region-snp") == 0) {
             extract_snp_name = argv[++i];
             extract_region_wind = atoi(argv[++i]);
-            LOGGER << "--extract-region-snp " << extract_snp_name << " " << extract_region_wind << "Kb" << endl;
+            LOGGER << "--extract-region-snp " << extract_snp_name << " " << extract_region_wind << "Kb" << std::endl;
             extract_region_wind *= 1000;
             if(extract_region_wind < 1000 || extract_region_wind > 1e8) LOGGER.e(0, "\n the second parameter of --extract-region is distance in Kb unit. It should take value between 1 and 1e5.");
         } else if (strcmp(argv[i], "--extract-region-bp") == 0) {
             extract_region_chr = atoi(argv[++i]);
             extract_region_bp = atoi(argv[++i]);
             extract_region_wind = atoi(argv[++i]);
-            LOGGER << "--extract-region-bp " << extract_region_chr << " " << extract_region_bp << " " << extract_region_wind << "Kb" << endl;
+            LOGGER << "--extract-region-bp " << extract_region_chr << " " << extract_region_bp << " " << extract_region_wind << "Kb" << std::endl;
             extract_region_wind *= 1000;
             if(extract_region_wind < 1000 || extract_region_wind > 1e8) LOGGER.e(0, "\n the second parameter of --extract-region is distance in Kb unit. It should take value between 1 and 1e5.");
         } else if (strcmp(argv[i], "--exclude-snp") == 0) {
             exclude_snp_name = argv[++i];
-            LOGGER << "--exclude-snp " << exclude_snp_name << endl;
+            LOGGER << "--exclude-snp " << exclude_snp_name << std::endl;
         } else if (strcmp(argv[i], "--exclude-region-snp") == 0) {
             exclude_snp_name = argv[++i];
             exclude_region_wind = atoi(argv[++i]);
-            LOGGER << "--exclude-region-snp " << exclude_snp_name << exclude_region_wind << "Kb" << endl;
+            LOGGER << "--exclude-region-snp " << exclude_snp_name << exclude_region_wind << "Kb" << std::endl;
             exclude_region_wind *= 1000;
             if(exclude_region_wind < 1000 || exclude_region_wind > 1e8) LOGGER.e(0, "\n the second parameter of --exclude-region is distance in Kb unit. It should take value between 1 and 1e5.");
         } else if (strcmp(argv[i], "--exclude-region-bp") == 0) {
             exclude_region_chr = atoi(argv[++i]);
             exclude_region_bp = atoi(argv[++i]);
             exclude_region_wind = atoi(argv[++i]);
-            LOGGER << "--exclude-region-bp " << exclude_region_chr << " " << exclude_region_bp << " " << exclude_region_wind << "Kb" << endl;
+            LOGGER << "--exclude-region-bp " << exclude_region_chr << " " << exclude_region_bp << " " << exclude_region_wind << "Kb" << std::endl;
             exclude_region_wind *= 1000;
             if(exclude_region_wind < 1000 || exclude_region_wind > 1e8) LOGGER.e(0, "\n the second parameter of --exclude-region is distance in Kb unit. It should take value between 1 and 1e5.");
         } else if (strcmp(argv[i], "--maf") == 0) {
             maf = atof(argv[++i]);
-            LOGGER << "--maf " << maf << endl;
+            LOGGER << "--maf " << maf << std::endl;
             if (maf < 0 || maf > 0.5) LOGGER.e(0, "\n  --maf should be within the range from 0 to 0.5.\n");
         } else if (strcmp(argv[i], "--max-maf") == 0) {
             max_maf = atof(argv[++i]);
-            LOGGER << "--max-maf " << max_maf << endl;
+            LOGGER << "--max-maf " << max_maf << std::endl;
             if (max_maf <= 0) LOGGER.e(0, "\n  --max-maf should be > 0.\n");
         } else if (strcmp(argv[i], "--out") == 0) {
             out = argv[++i];
-            LOGGER << "--out " << out << endl;
+            LOGGER << "--out " << out << std::endl;
         } else if (strcmp(argv[i], "--freq-v1") == 0) {
             out_freq_flag = true;
             thread_flag = true;
-            LOGGER << "--freq-v1" << endl;
+            LOGGER << "--freq-v1" << std::endl;
         } else if (strcmp(argv[i], "--freq") == 0) {
             out_freq_flag = true;
             thread_flag = true;
-            LOGGER << "--freq" << endl;
+            LOGGER << "--freq" << std::endl;
         } else if (strcmp(argv[i], "--ssq") == 0) {
             out_ssq_flag = true;
-            LOGGER << "--ssq" << endl;
+            LOGGER << "--ssq" << std::endl;
         } else if (strcmp(argv[i], "--recode") == 0) {
             recode = true;
             thread_flag = true;
-            LOGGER << "--recode" << endl;
+            LOGGER << "--recode" << std::endl;
         } else if (strcmp(argv[i], "--recode-nomiss") == 0) {
             recode_nomiss = true;
             thread_flag = true;
-            LOGGER << "--recode-nomiss" << endl;
+            LOGGER << "--recode-nomiss" << std::endl;
         } else if (strcmp(argv[i], "--recode-std") == 0) {
             recode_std = true;
             thread_flag = true;
-            LOGGER << "--recode-std" << endl;
+            LOGGER << "--recode-std" << std::endl;
         } else if (strcmp(argv[i], "--save-ram") == 0) {
             save_ram = true;
-            LOGGER << "--save-ram" << endl;
+            LOGGER << "--save-ram" << std::endl;
         }// GRM
         else if (strcmp(argv[i], "--paa") == 0) {
             paa_file = argv[++i];
-            LOGGER << "--paa " << paa_file << endl;
+            LOGGER << "--paa " << paa_file << std::endl;
             if (!std::filesystem::exists(paa_file)) LOGGER.e(0, "cannot open the file ["+paa_file+"] to read.");
         } else if (strcmp(argv[i], "--ibc") == 0) {
             ibc = true;
-            LOGGER << "--ibc" << endl;
+            LOGGER << "--ibc" << std::endl;
         } else if (strcmp(argv[i], "--ibc-all") == 0) {
             ibc = ibc_all = true;
-            LOGGER << "--ibc-all" << endl;
+            LOGGER << "--ibc-all" << std::endl;
         } else if (strcmp(argv[i], "--mgrm") == 0 || strcmp(argv[i], "--mgrm-bin") == 0) {
             m_grm_flag = true;
             grm_file = argv[++i];
-            LOGGER << argv[i - 1] << " " << grm_file << endl;
+            LOGGER << argv[i - 1] << " " << grm_file << std::endl;
         } else if (strcmp(argv[i], "--mgrm-gz") == 0) {
             m_grm_flag = true;
             m_grm_bin_flag = false;
             grm_bin_flag = false;
             grm_file = argv[++i];
-            LOGGER << "--mgrm-gz " << grm_file << endl;
+            LOGGER << "--mgrm-gz " << grm_file << std::endl;
         } else if (strcmp(argv[i], "--grm") == 0 || strcmp(argv[i], "--grm-bin") == 0) {
             grm_flag = true;
             grm_file = argv[++i];
-            LOGGER << argv[i - 1] << " " << grm_file << endl;
+            LOGGER << argv[i - 1] << " " << grm_file << std::endl;
         } else if (strcmp(argv[i], "--grm-gz") == 0) {
             grm_flag = true;
             m_grm_bin_flag = false;
             grm_bin_flag = false;
             grm_file = argv[++i];
-            LOGGER << "--grm-gz " << grm_file << endl;
+            LOGGER << "--grm-gz " << grm_file << std::endl;
         } else if (strcmp(argv[i], "--rm-high-ld") == 0) {
             rm_high_ld_cutoff = atof(argv[++i]);
-            LOGGER << "--rm-high-ld " << rm_high_ld_cutoff << endl;
+            LOGGER << "--rm-high-ld " << rm_high_ld_cutoff << std::endl;
             if (rm_high_ld_cutoff <= 0 || rm_high_ld_cutoff >= 1) LOGGER.e(0, "\n the value to be specified after --rm-high-ld should be within the range from 0 to 1.\n");
         } else if (strcmp(argv[i], "--make-grm") == 0 || strcmp(argv[i], "--make-grm-v1") == 0 || strcmp(argv[i], "--make-grm-bin") == 0) {
             make_grm_flag = true;
             thread_flag = true;
-            LOGGER << argv[i] << endl;
+            LOGGER << argv[i] << std::endl;
         } else if (strcmp(argv[i], "--make-grm-gz") == 0) {
             make_grm_flag = true;
             grm_out_bin_flag = false;
             thread_flag = true;
-            LOGGER << "--make-grm-gz" << endl;
+            LOGGER << "--make-grm-gz" << std::endl;
         } else if (strcmp(argv[i], "--make-grm-alg") == 0) {
             make_grm_flag = true;
             make_grm_mtd = atoi(argv[++i]);
             thread_flag = true;
-            LOGGER << "--make-grm-alg " << make_grm_mtd << endl;
+            LOGGER << "--make-grm-alg " << make_grm_mtd << std::endl;
             if (make_grm_mtd < 0 || make_grm_mtd > 1) LOGGER.e(0, "\n --make-grm-alg should be 0 or 1.\n");
         } else if (strcmp(argv[i], "--make-grm-f3") == 0) {
             make_grm_flag = true;
             make_grm_f3_flag = true;
             grm_out_bin_flag = true;
             thread_flag = true;
-            LOGGER << "--make-grm-f3" << endl;
+            LOGGER << "--make-grm-f3" << std::endl;
         } else if (strcmp(argv[i], "--make-grm-d-v1") == 0 || strcmp(argv[i], "--make-grm-d-bin") == 0) {
             make_grm_flag = true;
             dominance_flag = true;
             thread_flag = true;
-            LOGGER << argv[i] << endl;
+            LOGGER << argv[i] << std::endl;
         } else if (strcmp(argv[i], "--make-grm-d-gz") == 0) {
             make_grm_flag = true;
             dominance_flag = true;
             grm_out_bin_flag = false;
             thread_flag = true;
-            LOGGER << "--make-grm-d-gz" << endl;
+            LOGGER << "--make-grm-d-gz" << std::endl;
         } else if (strcmp(argv[i], "--dominance") == 0) {
             dominance_flag = true;
             thread_flag = true;
-            LOGGER <<"--dominance"<< endl;
+            LOGGER <<"--dominance"<< std::endl;
         } else if (strcmp(argv[i], "--model") == 0) {
             genetic_model = argv[++i];
             GeneticModel temp_model;
             if (!stringToGeneticModel(genetic_model, temp_model)) {
                 LOGGER.e(0, "\n  --model should be either 'additive' or 'nonadditive'.\n");
             }
-            LOGGER << "--model " << genetic_model << endl;
+            LOGGER << "--model " << genetic_model << std::endl;
         } else if (strcmp(argv[i], "--make-grm-xchr") == 0 || strcmp(argv[i], "--make-grm-xchr-bin") == 0) {
             make_grm_flag = true;
             make_grm_xchar_flag = true;
             thread_flag = true;
-            LOGGER << argv[i] << endl;
+            LOGGER << argv[i] << std::endl;
         } else if (strcmp(argv[i], "--make-grm-xchr-gz") == 0) {
             make_grm_flag = true;
             make_grm_xchar_flag = true;
             grm_out_bin_flag = false;
             thread_flag = true;
-            LOGGER << "--make-grm-xchr-gz" << endl;
+            LOGGER << "--make-grm-xchr-gz" << std::endl;
         } else if (strcmp(argv[i], "--make-grm-inbred") == 0 || strcmp(argv[i], "--make-grm-inbred-bin") == 0) {
             make_grm_flag = true;
             make_grm_inbred_flag = true;
             thread_flag = true;
-            LOGGER << argv[i] << endl;
+            LOGGER << argv[i] << std::endl;
         } else if (strcmp(argv[i], "--make-grm-inbred-gz") == 0) {
             make_grm_flag = true;
             grm_out_bin_flag = false;
             make_grm_inbred_flag = true;
             thread_flag = true;
-            LOGGER << "--make-grm-inbred-gz" << endl;
+            LOGGER << "--make-grm-inbred-gz" << std::endl;
         } else if (strcmp(argv[i], "--grm-adj") == 0) {
             grm_adj_fac = atof(argv[++i]);
-            LOGGER << "--grm-adj " << grm_adj_fac << endl;
+            LOGGER << "--grm-adj " << grm_adj_fac << std::endl;
             if (grm_adj_fac < 0 || grm_adj_fac > 1) LOGGER.e(0, "\n the value to be specified after --grm-adj should be within the range from 0 to 1.\n");
         } else if (strcmp(argv[i], "--dc") == 0) {
             dosage_compen = atoi(argv[++i]);
-            LOGGER << "--dc " << dosage_compen << endl;
+            LOGGER << "--dc " << dosage_compen << std::endl;
             if (dosage_compen != 0 && dosage_compen != 1) LOGGER.e(0, "\n the value to be specified after --dc should be 0 or 1.\n");
         } else if (strcmp(argv[i], "--grm-cutoff") == 0 || strcmp(argv[i], "--grm-cutoff-v1") == 0) {
             grm_cutoff = atof(argv[++i]);
-            if (grm_cutoff >= -1 && grm_cutoff <= 2) LOGGER << "--grm-cutoff" << grm_cutoff << endl;
+            if (grm_cutoff >= -1 && grm_cutoff <= 2) LOGGER << "--grm-cutoff" << grm_cutoff << std::endl;
             else grm_cutoff = -2;
         } else if (strcmp(argv[i], "--grm-align") == 0) {
             align_grm_flag = true;
@@ -478,7 +478,7 @@ void option(int option_num, char* option_str[])
         } else if (strcmp(argv[i], "--make-bK") == 0) {
             bK_threshold = atof(argv[++i]);
             if (bK_threshold < 0 || bK_threshold > 1) LOGGER.e(0, "\n --make-bK threshold should be range from 0 to 1.\n");
-            else LOGGER << "--make-bK " << bK_threshold << endl;
+            else LOGGER << "--make-bK " << bK_threshold << std::endl;
         } else if (strcmp(argv[i], "--pca") == 0) {
             pca_flag = true;
             thread_flag = true;
@@ -487,80 +487,80 @@ void option(int option_num, char* option_str[])
                 out_pc_num = 20;
                 i--;
             } else out_pc_num = atoi(argv[i]);
-            LOGGER << "--pca " << out_pc_num << endl;
+            LOGGER << "--pca " << out_pc_num << std::endl;
             if (out_pc_num < 1) LOGGER.e(0, "\n the value to be specified after --pca should be positive.\n");
         } else if (strcmp(argv[i], "--pc-loading") == 0) {
             pcl_flag = true;
             thread_flag = true;
             pc_file = argv[++i];
             //pcl_grm_N = atoi(argv[++i]);
-            LOGGER << "--pc-loading " << pc_file <<  endl;
+            LOGGER << "--pc-loading " << pc_file <<  std::endl;
             //if(pcl_grm_N < 1 || pcl_grm_N > 1e20) LOGGER.e(0, "\n invalid number of SNPs used to calculate PCs."); 
         }else if (strcmp(argv[i], "--project-loading") == 0 ){
             project_flag = true;
             thread_flag = true;
             project_file = argv[++i];
             project_N = atoi(argv[++i]);
-            LOGGER << "--project-loading " << project_file << " " << project_N << endl;
+            LOGGER << "--project-loading " << project_file << " " << project_N << std::endl;
             if(project_N < 1 || project_N > 1e3) LOGGER.e(0, "\n invalid number of PCs to output");
         }
         // estimation of LD structure
         else if (strcmp(argv[i], "--ld") == 0) {
             LD = true;
             LD_file = argv[++i];
-            LOGGER << "--ld " << LD_file << endl;
+            LOGGER << "--ld " << LD_file << std::endl;
             if (!std::filesystem::exists(LD_file)) LOGGER.e(0, "cannot open the file ["+LD_file+"] to read.");
         } else if (strcmp(argv[i], "--ld-step") == 0) {
             LD_search = true;
             LD_step = atoi(argv[++i]);
-            LOGGER << "--ld-step " << LD_step << endl;
+            LOGGER << "--ld-step " << LD_step << std::endl;
             if (LD_step < 1 || LD_step > 20) LOGGER.e(0, "\n --ld-step should be within the range from 1 to 20.\n");
         } else if (strcmp(argv[i], "--ld-wind") == 0 || strcmp(argv[i], "--ld-pruning-wind") == 0 || strcmp(argv[i], "--make-grm-wt-wind") == 0) {
             LD_wind = atof(argv[++i]);
-            LOGGER << argv[i - 1] << " " << LD_wind << endl;
+            LOGGER << argv[i - 1] << " " << LD_wind << std::endl;
             LD_wind *= 1000;
             if (LD_wind < 1e3 || LD_wind > 2e7) {
-                stringstream err_msg;
+                std::stringstream err_msg;
                 err_msg << "\n  " << argv[i - 1] << " should be 1Kb or 20Mb.\n";
                 LOGGER.e(0, err_msg.str());
             }
         } else if (strcmp(argv[i], "--ld-sig") == 0) {
             LD_sig = atof(argv[++i]);
-            LOGGER << "--ld-sig " << LD_sig << endl;
+            LOGGER << "--ld-sig " << LD_sig << std::endl;
             if (LD_sig <= 0) LOGGER.e(0, "\n --ld-sig should be > 0.\n");
         } else if (strcmp(argv[i], "--ld-i") == 0) {
             LD_i = true;
-            LOGGER << "--ld-i" << endl;
+            LOGGER << "--ld-i" << std::endl;
         } else if (strcmp(argv[i], "--ld-pruning") == 0) {
             thread_flag = true;
             LD_prune_rsq = atof(argv[++i]);
-            LOGGER << "--ld-pruning " << LD_prune_rsq << endl;
+            LOGGER << "--ld-pruning " << LD_prune_rsq << std::endl;
             if (LD_prune_rsq < 0.0001 || LD_prune_rsq > 0.9999) LOGGER.e(0, "\n --ld-pruning should be within the range from 0.0001 to 0.9999.\n");
         } else if (strcmp(argv[i], "--ld-score") == 0) {
             ld_score_flag = true;
             thread_flag = true;
-            LOGGER << "--ld-score" << endl;
+            LOGGER << "--ld-score" << std::endl;
         } else if (strcmp(argv[i], "--ld-score-adj") == 0) {
             ldscore_adj_flag = true;
-            LOGGER << "--ld-score-adj" << endl;
+            LOGGER << "--ld-score-adj" << std::endl;
         } else if (strcmp(argv[i], "--ld-score-multi") == 0) {
             ld_score_flag = true;
             thread_flag = true;
             ld_score_multi_file = argv[++i];
-            LOGGER << "--ld-score-multi " << ld_score_multi_file << endl;
+            LOGGER << "--ld-score-multi " << ld_score_multi_file << std::endl;
             if (!std::filesystem::exists(ld_score_multi_file)) LOGGER.e(0, "cannot open the file ["+ld_score_multi_file+"] to read.");
         } else if (strcmp(argv[i], "--ld-rsq-cutoff") == 0) {
             LD_rsq_cutoff = atof(argv[++i]);
-            LOGGER << "--ld-rsq-cutoff " << LD_rsq_cutoff << endl;
+            LOGGER << "--ld-rsq-cutoff " << LD_rsq_cutoff << std::endl;
             if (LD_rsq_cutoff < 0.0 || LD_rsq_cutoff > 1.0) {
-                stringstream err_msg;
+                std::stringstream err_msg;
                 err_msg << "\n  " << argv[i - 1] << " should be within the range from 0 to 1.\n";
                 LOGGER.e(0, err_msg.str());
             }
         } else if (strcmp(argv[i], "--ld-max-rsq") == 0) {
             ld_max_rsq_flag = true;
             thread_flag = true;
-            LOGGER << "--ld-max-rsq" << endl;
+            LOGGER << "--ld-max-rsq" << std::endl;
         } else if (strcmp(argv[i], "--ld-score-region") == 0) {
             ld_mean_rsq_seg_flag = true;
             thread_flag = true;
@@ -569,68 +569,68 @@ void option(int option_num, char* option_str[])
                 LD_seg = 200;
                 i--;
             } else LD_seg = atoi(argv[i]);
-            LOGGER << "--ld-score-region" << endl;
+            LOGGER << "--ld-score-region" << std::endl;
             if (LD_seg < 10) LOGGER.e(0, "\n the input value for --ld-score-region needs to be > 10.\n");
             LD_seg *= 1000;
         } else if (strcmp(argv[i], "--ld-file") == 0) {
             LD_file = argv[++i];
-            LOGGER << "--ld-file " << LD_file << endl;
+            LOGGER << "--ld-file " << LD_file << std::endl;
         }
         // simulation based on real genotype data
         else if (strcmp(argv[i], "--simu-qt") == 0) {
             simu_qt_flag = true;
-            LOGGER << "--simu-qt" << endl;
+            LOGGER << "--simu-qt" << std::endl;
         } else if (strcmp(argv[i], "--simu-cc") == 0) {
             simu_cc = true;
             simu_case_num = atoi(argv[++i]);
             simu_control_num = atoi(argv[++i]);
-            LOGGER << "--simu-cc " << simu_case_num << " " << simu_control_num << endl;
+            LOGGER << "--simu-cc " << simu_case_num << " " << simu_control_num << std::endl;
             if (simu_case_num < 10) LOGGER.e(0, "--simu-cc, Invalid number of cases. Minimum number 10.");
             if (simu_control_num < 10) LOGGER.e(0, "--simu-cc, Invalid number of controls. Minimum number 10.");
         } else if (strcmp(argv[i], "--simu-rep") == 0) {
             simu_rep = atoi(argv[++i]);
-            LOGGER << "--simu-rep " << simu_rep << endl;
+            LOGGER << "--simu-rep " << simu_rep << std::endl;
             if (simu_rep < 1 || simu_rep > 10000) LOGGER.e(0, "--simu-rep should be within the range from 1 to 10000.");
         } else if (strcmp(argv[i], "--simu-hsq") == 0) {
             simu_h2 = atof(argv[++i]);
-            LOGGER << "--simu-hsq " << simu_h2 << endl;
+            LOGGER << "--simu-hsq " << simu_h2 << std::endl;
             if (simu_h2 > 1.0 || simu_h2 < 0.0) LOGGER.e(0, "--simu-h2 should be within the range from 0 to 1.");
         } else if (strcmp(argv[i], "--simu-k") == 0) {
             simu_K = atof(argv[++i]);
-            LOGGER << "--simu-k " << simu_K << endl;
+            LOGGER << "--simu-k " << simu_K << std::endl;
             if (simu_K > 0.5 || simu_K < 0.0001) LOGGER.e(0, "--simu-K should be within the range from 0.0001 to 0.5.");
         } else if (strcmp(argv[i], "--simu-causal-loci") == 0) {
             simu_causal = argv[++i];
-            LOGGER << "--simu-causal-loci " << simu_causal << endl;
+            LOGGER << "--simu-causal-loci " << simu_causal << std::endl;
             if (!std::filesystem::exists(simu_causal)) LOGGER.e(0, "cannot open the file ["+simu_causal+"] to read.");
         } else if (strcmp(argv[i], "--simu-embayesb") == 0) { // internal
             simu_emb_flag = true;
-            LOGGER << "--simu-embayesb" << endl;
+            LOGGER << "--simu-embayesb" << std::endl;
         } else if (strcmp(argv[i], "--simu-ouput-causal") == 0) { // internal
             simu_output_causal = true;
-            LOGGER << "--simu-output-causal" << endl;
+            LOGGER << "--simu-output-causal" << std::endl;
         } else if (strcmp(argv[i], "--simu-seed") == 0) {
             simu_seed = atof(argv[++i]);
-            LOGGER << "--simu-seed " << simu_seed << endl;
+            LOGGER << "--simu-seed " << simu_seed << std::endl;
             if (simu_seed <= 100) LOGGER.e(0, "--simu-seed should be >100.");
         } else if (strcmp(argv[i], "--simu-eff-mod") == 0) {
             simu_eff_mod = atoi(argv[++i]);
-            LOGGER << "--simu-eff-mod " << simu_eff_mod << endl;
+            LOGGER << "--simu-eff-mod " << simu_eff_mod << std::endl;
             if (simu_eff_mod != 0 && simu_eff_mod !=1) LOGGER.e(0, "--simu-eff-mod should be 0 or 1.");
         }
         else if (strcmp(argv[i], "--hapmap-genet-dst") == 0) { // calculate genetic dst based on HapMap data
             hapmap_genet_dst = true;
             hapmap_genet_dst_file = argv[++i];
-            LOGGER << "--hapmap-genet-dst " << hapmap_genet_dst_file << endl;
+            LOGGER << "--hapmap-genet-dst " << hapmap_genet_dst_file << std::endl;
         }// estimate variance explained by all SNPs
         else if (strcmp(argv[i], "--HEreg") == 0) {
             HE_reg_flag = true;
             thread_flag = true;
-            LOGGER << "--HEreg" << endl;
+            LOGGER << "--HEreg" << std::endl;
         } else if (strcmp(argv[i], "--HEreg-bivar") == 0) {
             HE_reg_bivar_flag = true;
             thread_flag = true;
-            vector<int> mphen_buf;
+            std::vector<int> mphen_buf;
             while (1) {
                 i++;
                 if (strcmp(argv[i], "gcta") == 0 || strncmp(argv[i], "--", 2) == 0) break;
@@ -646,38 +646,38 @@ void option(int option_num, char* option_str[])
                 mphen2 = mphen_buf[1];
             }
             if (mphen < 1 || mphen2 < 1 || mphen == mphen2) LOGGER.e(0, "\n --HEreg-bivar. Invalid input parameters.");
-            LOGGER << "--HEreg-bivar " << mphen << " " << mphen2 << endl;
+            LOGGER << "--HEreg-bivar " << mphen << " " << mphen2 << std::endl;
         } else if (strcmp(argv[i], "--reml") == 0) {
             reml_flag = true;
             thread_flag = true;
-            LOGGER << "--reml" << endl;
+            LOGGER << "--reml" << std::endl;
             if (m_grm_flag) no_lrt = true;
         } else if (strcmp(argv[i], "--prevalence") == 0) {
             prevalence_flag = true;
             prevalence = atof(argv[++i]);
-            LOGGER << "--prevalence " << prevalence << endl;
+            LOGGER << "--prevalence " << prevalence << std::endl;
             if (prevalence <= 0 || prevalence >= 1) LOGGER.e(0, "\n --prevalence should be between 0 to 1.\n");
         } else if (strcmp(argv[i], "--reml-pred-rand") == 0) {
             pred_rand_eff = true;
-            LOGGER << "--reml-pred-rand" << endl;
+            LOGGER << "--reml-pred-rand" << std::endl;
         } else if(strcmp(argv[i], "--cvblup") == 0){
             cv_blup = true;
-            LOGGER << "--cvblup" << endl;
+            LOGGER << "--cvblup" << std::endl;
         } else if (strcmp(argv[i], "--reml-est-fix") == 0) {
             est_fix_eff = true;
-            LOGGER << "--reml-est-fix" << endl;
+            LOGGER << "--reml-est-fix" << std::endl;
         } else if (strcmp(argv[i], "--reml-est-fix-varcov") == 0) {
             est_fix_eff = true;
             est_fix_eff_var = true;
-            LOGGER << "--reml-est-fix-varcov" << endl;
+            LOGGER << "--reml-est-fix-varcov" << std::endl;
         } else if (strcmp(argv[i], "--reml-alg") == 0) {
             reml_mtd = atoi(argv[++i]);
-            LOGGER << "--reml-alg " << reml_mtd << endl;
+            LOGGER << "--reml-alg " << reml_mtd << std::endl;
             if (reml_mtd < 0 || reml_mtd > 2) LOGGER.e(0, "\n  --reml-alg should be 0, 1 or 2.\n");
         } else if (strcmp(argv[i], "--reml-no-constrain") == 0) {
             reml_flag = true;
             no_constrain = true;
-            LOGGER << "--reml-no-constrain" << endl;
+            LOGGER << "--reml-no-constrain" << std::endl;
         } else if (strcmp(argv[i], "--reml-priors") == 0) {
             while (1) {
                 i++;
@@ -691,10 +691,10 @@ void option(int option_num, char* option_str[])
                 LOGGER << reml_priors[j] << " ";
                 if (reml_priors[j] > 1.0 || reml_priors[j] < -10.0) err_flag = true;
             }
-            LOGGER << endl;
+            LOGGER << std::endl;
             if (err_flag || reml_priors.empty()) LOGGER.e(0, "\n  --reml-priors. Prior values of variance explained should be between 0 and 1.\n");
         } else if (strcmp(argv[i], "--reml-priors-var") == 0  || strcmp(argv[i], "--reml-fixed-var") == 0) {
-            string s_buf = argv[i];
+            std::string s_buf = argv[i];
             if(s_buf == "--reml-fixed-var") reml_fixed_var_flag = true;
             while (1) {
                 i++;
@@ -708,11 +708,11 @@ void option(int option_num, char* option_str[])
                 LOGGER << reml_priors_var[j] << " ";
                 if (reml_priors_var[j] < 0.0) err_flag = true;
             }
-            LOGGER << endl;
+            LOGGER << std::endl;
             if (reml_priors_var.empty()) LOGGER.e(0, "\n  " + s_buf + ". Prior values of variance components are required.\n");
         } else if (strcmp(argv[i], "--reml-no-lrt") == 0) {
             no_lrt = true;
-            LOGGER << "--reml-no-lrt" << endl;
+            LOGGER << "--reml-no-lrt" << std::endl;
         } else if (strcmp(argv[i], "--reml-lrt") == 0) {
             no_lrt = false;
             reml_lrt_flag = true;
@@ -729,80 +729,80 @@ void option(int option_num, char* option_str[])
                 LOGGER << reml_drop[j] << " ";
                 if (reml_drop[j] < 1) err_flag = true;
             }
-            LOGGER << endl;
+            LOGGER << std::endl;
             if (err_flag || reml_drop.empty()) LOGGER.e(0, "\n invalid values specified after --reml-lrt.\n");
         } else if (strcmp(argv[i], "--reml-maxit") == 0) {
             MaxIter = atoi(argv[++i]);
-            LOGGER << "--reml-maxit " << MaxIter << endl;
+            LOGGER << "--reml-maxit " << MaxIter << std::endl;
             if (MaxIter < 1 || MaxIter > 10000) LOGGER.e(0, "\n --reml-maxit should be within the range from 1 to 10000.\n");
         } else if (strcmp(argv[i], "--reml-bendV") == 0) {
             reml_force_inv_fac_flag = true;
-            LOGGER << "--reml-bendV " << endl;
+            LOGGER << "--reml-bendV " << std::endl;
         } else if (strcmp(argv[i], "--reml-force-converge") == 0) {
             reml_force_converge_flag = true;
-            LOGGER << "--reml-force-converge " << endl;
+            LOGGER << "--reml-force-converge " << std::endl;
         } else if (strcmp(argv[i], "--reml-allow-no-converge") == 0) {
             reml_no_converge_flag = true;
-            LOGGER << "--reml-allow-no-converge " << endl;
+            LOGGER << "--reml-allow-no-converge " << std::endl;
         } else if (strcmp(argv[i], "--reml-bending") == 0) {
             reml_bending = true;
-            LOGGER << "--reml-bending " << endl;
+            LOGGER << "--reml-bending " << std::endl;
         }else if (strcmp(argv[i], "--reml-amzvc") == 0){
             reml_allow_constrain_run = true;
-            LOGGER << "--reml-amzvc" << endl;
+            LOGGER << "--reml-amzvc" << std::endl;
         } else if (strcmp(argv[i], "--reml-diag-one") == 0) {
             reml_diag_one = true;
-            LOGGER << "--reml-diag-one " << endl;
+            LOGGER << "--reml-diag-one " << std::endl;
         } else if (strcmp(argv[i], "--reml-diagV-adj") == 0) {
-            reml_diagV_adj = atoi(argv[++i]);
-            LOGGER << "--reml-diagV-adj " << reml_diagV_adj << endl;
+            reml_diagV_adj = std::atoi(argv[++i]);
+            LOGGER << "--reml-diagV-adj " << reml_diagV_adj << std::endl;
         } else if(strcmp(argv[i], "--reml-diag-mul") == 0) {
-            reml_diag_mul = stod(argv[++i]);
-            LOGGER << "--reml-diag-mul " << reml_diag_mul << endl;
+            reml_diag_mul = std::stod(argv[++i]);
+            LOGGER << "--reml-diag-mul " << reml_diag_mul << std::endl;
         } else if(strcmp(argv[i], "--reml-inv-mtd") == 0){
-            reml_inv_method = stoi(argv[++i]);
-            LOGGER << "--reml-inv-mtd " << reml_inv_method << endl;
+            reml_inv_method = std::stoi(argv[++i]);
+            LOGGER << "--reml-inv-mtd " << reml_inv_method << std::endl;
         } else if (strcmp(argv[i], "--pheno") == 0) {
             phen_file = argv[++i];
-            LOGGER << "--pheno " << phen_file << endl;
+            LOGGER << "--pheno " << phen_file << std::endl;
             if (!std::filesystem::exists(phen_file)) LOGGER.e(0, "cannot open the file ["+phen_file+"] to read.");
         } else if (strcmp(argv[i], "--mpheno") == 0) {
-            mphen = atoi(argv[++i]);
-            LOGGER << "--mpheno " << mphen << endl;
+            mphen = std::atoi(argv[++i]);
+            LOGGER << "--mpheno " << mphen << std::endl;
             if (mphen < 1) LOGGER.e(0, "--mpheno should be > 0.");
         } else if (strcmp(argv[i], "--qcovar") == 0) {
             qcovar_file = argv[++i];
-            LOGGER << "--qcovar " << qcovar_file << endl;
+            LOGGER << "--qcovar " << qcovar_file << std::endl;
             if (!std::filesystem::exists(qcovar_file)) LOGGER.e(0, "cannot open the file ["+qcovar_file+"] to read.");
         } else if (strcmp(argv[i], "--covar") == 0) {
             covar_file = argv[++i];
-            LOGGER << "--covar " << covar_file << endl;
+            LOGGER << "--covar " << covar_file << std::endl;
             if (!std::filesystem::exists(covar_file)) LOGGER.e(0, "cannot open the file ["+covar_file+"] to read.");
         } else if (strcmp(argv[i], "--reml-res-diag") == 0){
             weight_file = argv[++i];
-            LOGGER << "--reml-res-diag " << weight_file << endl;
+            LOGGER << "--reml-res-diag " << weight_file << std::endl;
             if (!std::filesystem::exists(weight_file)) LOGGER.e(0, "cannot open the file ["+weight_file+"] to read.");
         } else if (strcmp(argv[i], "--gxqe") == 0) {
             qgxe_file = argv[++i];
-            LOGGER << "--gxqe " << qgxe_file << endl;
+            LOGGER << "--gxqe " << qgxe_file << std::endl;
             if (!std::filesystem::exists(qgxe_file)) LOGGER.e(0, "cannot open the file ["+qgxe_file+"] to read.");
         } else if (strcmp(argv[i], "--gxe") == 0) {
             gxe_file = argv[++i];
-            LOGGER << "--gxe " << gxe_file << endl;
+            LOGGER << "--gxe " << gxe_file << std::endl;
             if (!std::filesystem::exists(gxe_file)) LOGGER.e(0, "cannot open the file ["+gxe_file+"] to read.");
         } else if (strcmp(argv[i], "--blup-snp") == 0) {
             blup_snp_flag = true;
             blup_indi_file = argv[++i];
-            LOGGER << "--blup-snp " << blup_indi_file << endl;
+            LOGGER << "--blup-snp " << blup_indi_file << std::endl;
             if (!std::filesystem::exists(blup_indi_file)) LOGGER.e(0, "cannot open the file ["+blup_indi_file+"] to read.");
         } else if (strcmp(argv[i], "--reml-wfam") == 0) {
             reml_flag = true;
             within_family = true;
-            LOGGER << "--reml-wfam " << endl;
+            LOGGER << "--reml-wfam " << std::endl;
         } else if (strcmp(argv[i], "--reml-bivar") == 0) {
             bivar_reml_flag = true;
             thread_flag = true;
-            vector<int> mphen_buf;
+            std::vector<int> mphen_buf;
             while (1) {
                 i++;
                 if (strcmp(argv[i], "gcta") == 0 || strncmp(argv[i], "--", 2) == 0) break;
@@ -818,9 +818,9 @@ void option(int option_num, char* option_str[])
                 mphen2 = mphen_buf[1];
             }
             if (mphen < 1 || mphen2 < 1 || mphen == mphen2) LOGGER.e(0, "\n --reml-bivar. Invalid input parameters.");
-            LOGGER << "--reml-bivar " << mphen << " " << mphen2 << endl;
+            LOGGER << "--reml-bivar " << mphen << " " << mphen2 << std::endl;
         } else if (strcmp(argv[i], "--reml-bivar-prevalence") == 0) {
-            vector<double> K_buf;
+            std::vector<double> K_buf;
             while (1) {
                 i++;
                 if (strcmp(argv[i], "gcta") == 0 || strncmp(argv[i], "--", 2) == 0) break;
@@ -830,17 +830,17 @@ void option(int option_num, char* option_str[])
             if (K_buf.size() < 1 || K_buf.size() > 2) LOGGER.e(0, "\n  --reml-bivar-prevalence. Please specify the prevalence of the two diseases.");
             if (K_buf.size() == 2) {
                 if (K_buf[0] < 0.0 || K_buf[0] > 1.0 || K_buf[1] < 0.0 || K_buf[1] > 1.0) LOGGER.e(0, "\n  --reml-bivar-prevalence. Disease prevalence should be between 0 and 1.");
-                LOGGER << "--reml-bivar-prevalence " << K_buf[0] << " " << K_buf[1] << endl;
+                LOGGER << "--reml-bivar-prevalence " << K_buf[0] << " " << K_buf[1] << std::endl;
                 prevalence = K_buf[0];
                 prevalence2 = K_buf[1];
             } else {
                 if (K_buf[0] < 0.0 || K_buf[0] > 1.0) LOGGER.e(0, "\n --reml-bivar-prevalence. Disease prevalence should be between 0 and 1.");
-                LOGGER << "--reml-bivar-prevalence " << K_buf[0] << endl;
+                LOGGER << "--reml-bivar-prevalence " << K_buf[0] << std::endl;
                 prevalence = prevalence2 = K_buf[0];
             }
         } else if (strcmp(argv[i], "--reml-bivar-nocove") == 0) {
             ignore_Ce = true;
-            LOGGER << "--reml-bivar-nocove" << endl;
+            LOGGER << "--reml-bivar-nocove" << std::endl;
         } else if (strcmp(argv[i], "--reml-bivar-lrt-rg") == 0) {
             while (1) {
                 i++;
@@ -854,7 +854,7 @@ void option(int option_num, char* option_str[])
                 LOGGER << fixed_rg_val[j] << " ";
                 if (fixed_rg_val[j] > 1.0 || fixed_rg_val[j]<-1.0) err_flag = true;
             }
-            LOGGER << endl;
+            LOGGER << std::endl;
             if (err_flag || fixed_rg_val.empty()) LOGGER.e(0, "\n --reml-bivar-lrt-rg. Any input parameter should be within the range from -1 to 1.\n");
             bool haveZero = false;
             if (CommFunc::FloatEqual(fixed_rg_val[0], 0.0)) haveZero = true;
@@ -863,48 +863,48 @@ void option(int option_num, char* option_str[])
             }
         } else if (strcmp(argv[i], "--reml-bivar-no-constrain") == 0) {
             bivar_no_constrain = true;
-            LOGGER << "--reml-bivar-no-constrain" << endl;
+            LOGGER << "--reml-bivar-no-constrain" << std::endl;
         } else if (strcmp(argv[i], "--cojo-file") == 0) {
             massoc_file = argv[++i];
-            LOGGER << "--cojo-file " << massoc_file << endl;
+            LOGGER << "--cojo-file " << massoc_file << std::endl;
             if (!std::filesystem::exists(massoc_file)) LOGGER.e(0, "cannot open the file ["+massoc_file+"] to read.");
         } else if (strcmp(argv[i], "--cojo-slct") == 0) {
             massoc_slct_flag = true;
             massoc_mld_slct_alg = 0;
-            LOGGER << "--cojo-slct" << endl;
+            LOGGER << "--cojo-slct" << std::endl;
         } else if (strcmp(argv[i], "--cojo-stepwise") == 0) {
             massoc_slct_flag = true;
             massoc_mld_slct_alg = 0;
-            LOGGER << "--cojo-stepwise" << endl;
+            LOGGER << "--cojo-stepwise" << std::endl;
         } else if (strcmp(argv[i], "--cojo-forward") == 0) {
             massoc_slct_flag = true;
             massoc_mld_slct_alg = 1;
-            LOGGER << "--cojo-forward" << endl;
+            LOGGER << "--cojo-forward" << std::endl;
         } else if (strcmp(argv[i], "--cojo-backward") == 0) {
             massoc_slct_flag = true;
             massoc_mld_slct_alg = 2;
-            LOGGER << "--cojo-backward" << endl;
+            LOGGER << "--cojo-backward" << std::endl;
         } else if (strcmp(argv[i], "--cojo-top-SNPs") == 0) {
             massoc_slct_flag = true;
             massoc_top_SNPs = atoi(argv[++i]);
-            LOGGER << "--cojo-top-SNPs " << massoc_top_SNPs << endl;
+            LOGGER << "--cojo-top-SNPs " << massoc_top_SNPs << std::endl;
             if (massoc_top_SNPs < 1 || massoc_top_SNPs > 10000) LOGGER.e(0, "\n --cojo-top-SNPs should be within the range from 1 to 10000.\n");
         } else if (strcmp(argv[i], "--cojo-actual-geno") == 0) {
             massoc_actual_geno_flag = false;
-            LOGGER << "--cojo-actual-geno is deprecated currently." << endl;
+            LOGGER << "--cojo-actual-geno is deprecated currently." << std::endl;
         } else if (strcmp(argv[i], "--cojo-p") == 0) {
             massoc_p = atof(argv[++i]);
-            LOGGER << "--cojo-p " << massoc_p << endl;
+            LOGGER << "--cojo-p " << massoc_p << std::endl;
             if (massoc_p > 0.05 || massoc_p <= 0) LOGGER.e(0, "\n --cojo-p should be within the range from 0 to 0.05.\n");
         } else if (strcmp(argv[i], "--restrict-output-pC") == 0) {
             massoc_out_pC_thresh = strtod(argv[++i], NULL);
         } else if (strcmp(argv[i], "--cojo-collinear") == 0) {
             massoc_collinear = atof(argv[++i]);
-            LOGGER << "--cojo-collinear " << massoc_collinear << endl;
+            LOGGER << "--cojo-collinear " << massoc_collinear << std::endl;
             if (massoc_collinear > 0.99 || massoc_collinear < 0.01) LOGGER.e(0, "\n --cojo-collinear should be within the ragne from 0.01 to 0.99.\n");
         } else if (strcmp(argv[i], "--cojo-wind") == 0) {
             massoc_wind = atoi(argv[++i]);
-            LOGGER << "--cojo-wind " << massoc_wind << endl;
+            LOGGER << "--cojo-wind " << massoc_wind << std::endl;
 
             // debug
             if (massoc_wind > 100000) LOGGER.e(0, "\n invalid value for --cojo-wind. Valid range: 100 ~ 100000\n");
@@ -913,10 +913,10 @@ void option(int option_num, char* option_str[])
             massoc_wind *= 1000;
         } else if (strcmp(argv[i], "--cojo-joint") == 0) {
             massoc_joint_flag = true;
-            LOGGER << "--cojo-joint" << endl;
+            LOGGER << "--cojo-joint" << std::endl;
         } else if (strcmp(argv[i], "--cojo-cond") == 0) {
             massoc_cond_snplist = argv[++i];
-            LOGGER << "--cojo-cond " << massoc_cond_snplist << endl;
+            LOGGER << "--cojo-cond " << massoc_cond_snplist << std::endl;
         } else if (strcmp(argv[i], "--cojo-gc") == 0) {
             massoc_gc_flag = true;
             i++;
@@ -927,68 +927,68 @@ void option(int option_num, char* option_str[])
                 massoc_gc_val = atof(argv[i]);
                 if (massoc_gc_val < 1 || massoc_gc_val > 10) LOGGER.e(0, "\n invalid value specified after --cojo-gc.\n");
             }
-            LOGGER << "--cojo-gc " << ((massoc_gc_val < 0) ? "" : argv[i]) << endl;
+            LOGGER << "--cojo-gc " << ((massoc_gc_val < 0) ? "" : argv[i]) << std::endl;
         } else if (strcmp(argv[i], "--cojo-sblup") == 0) {
             massoc_sblup_flag = true;
             massoc_sblup_fac = atof(argv[++i]);
-            LOGGER << "--cojo-sblup " << massoc_sblup_fac << endl;
+            LOGGER << "--cojo-sblup " << massoc_sblup_fac << std::endl;
             if (massoc_sblup_fac < 0) LOGGER.e(0, "\n invalid value for --cojo-sblup.\n");
         } else if (strcmp(argv[i], "--mlma") == 0) {
             reml_flag = false;
             mlma_flag = true;
             thread_flag = true;
-            LOGGER << "--mlma " << endl;
+            LOGGER << "--mlma " << std::endl;
         } else if (strcmp(argv[i], "--mlma-subtract-grm") == 0) {
             subtract_grm_file = argv[++i];
-            LOGGER << "--mlma-subtract-grm " << subtract_grm_file << endl;
+            LOGGER << "--mlma-subtract-grm " << subtract_grm_file << std::endl;
         } else if (strcmp(argv[i], "--mlma-loco") == 0) {
             reml_flag = false;
             mlma_loco_flag = true;
             thread_flag = true;
-            LOGGER << "--mlma-loco " << endl;
+            LOGGER << "--mlma-loco " << std::endl;
         } else if (strcmp(argv[i], "--mlma-no-adj-covar") == 0) {
             mlma_no_adj_covar = true;
-            LOGGER << "--mlma-no-adj-covar (use --mlma-no-preadj-covar instead)" << endl;
+            LOGGER << "--mlma-no-adj-covar (use --mlma-no-preadj-covar instead)" << std::endl;
         } else if (strcmp(argv[i], "--mlma-no-preadj-covar") == 0) {
             mlma_no_adj_covar = true;	
-            LOGGER << "--mlma-no-preadj-covar" << endl;	
+            LOGGER << "--mlma-no-preadj-covar" << std::endl;	
         } else if (strcmp(argv[i], "--save-reml") == 0) {
             save_reml_flag = true;
-            LOGGER << "--save-reml" << endl;
+            LOGGER << "--save-reml" << std::endl;
         } else if (strcmp(argv[i], "--load-reml") == 0) {
             load_reml_file = argv[++i];
-            LOGGER << "--load-reml " << load_reml_file << endl;
-            CommFunc::FileExist(load_reml_file);
+            LOGGER << "--load-reml " << load_reml_file << std::endl;
+            if (!std::filesystem::exists(load_reml_file)) LOGGER.e(0, "cannot open the file ["+load_reml_file+"] to read.");
         } else if (strcmp(argv[i], "--fst") == 0) {
             fst_flag = true;
-            LOGGER << "--fst " << endl;
+            LOGGER << "--fst " << std::endl;
         } else if (strcmp(argv[i], "--sub-popu") == 0) {
             subpopu_file = argv[++i];
-            LOGGER << "--sub-popu " << subpopu_file << endl;
+            LOGGER << "--sub-popu " << subpopu_file << std::endl;
             if (!std::filesystem::exists(subpopu_file)) LOGGER.e(0, "cannot open the file ["+subpopu_file+"] to read.");
         }
         else if (strcmp(argv[i], "--fastBAT-ld-cutoff") == 0) {
             sbat_ld_cutoff = sqrt(atof(argv[++i]));
-            LOGGER << "--fastBAT-ld-cutoff " << sbat_ld_cutoff * sbat_ld_cutoff << endl;
+            LOGGER << "--fastBAT-ld-cutoff " << sbat_ld_cutoff * sbat_ld_cutoff << std::endl;
             if (sbat_ld_cutoff <= 0.1) LOGGER.e(0, "\n --fastBAT_ld_cutoff should be > 0.1\n");
         } else if (strcmp(argv[i], "--fastBAT-write-snpset") == 0) {
             sbat_write_snpset = true;
-            LOGGER << "--fastBAT-write-snpset" << endl;
+            LOGGER << "--fastBAT-write-snpset" << std::endl;
         } else if (strcmp(argv[i], "--fastBAT") == 0) {
             sbat_sAssoc_file = argv[++i];
-            LOGGER << "--fastBAT " << sbat_sAssoc_file << endl;
+            LOGGER << "--fastBAT " << sbat_sAssoc_file << std::endl;
             if (!std::filesystem::exists(sbat_sAssoc_file)) LOGGER.e(0, "cannot open the file ["+sbat_sAssoc_file+"] to read.");
         } else if (strcmp(argv[i], "--fastBAT-gene-list") == 0) {
             sbat_gAnno_file = argv[++i];
-            LOGGER << "--fastBAT-gene-list " << sbat_gAnno_file << endl;
+            LOGGER << "--fastBAT-gene-list " << sbat_gAnno_file << std::endl;
             if (!std::filesystem::exists(sbat_gAnno_file)) LOGGER.e(0, "cannot open the file ["+sbat_gAnno_file+"] to read.");
-        } else if (strcmp(argv[i], "--fastBAT-set-list") == 0) {
+        } else if (strcmp(argv[i], "--fastBAT-std::set-list") == 0) {
             sbat_snpset_file = argv[++i];
-            LOGGER << "--fastBAT-set-list " << sbat_snpset_file << endl;
+            LOGGER << "--fastBAT-std::set-list " << sbat_snpset_file << std::endl;
             if (!std::filesystem::exists(sbat_snpset_file)) LOGGER.e(0, "cannot open the file ["+sbat_snpset_file+"] to read.");
         } else if (strcmp(argv[i], "--fastBAT-wind") == 0) {
             sbat_wind = atoi(argv[++i]);
-            LOGGER << "--fastBAT-wind " << sbat_wind << endl;
+            LOGGER << "--fastBAT-wind " << sbat_wind << std::endl;
             if (sbat_wind < 0 || sbat_wind > 1000) LOGGER.e(0, "\n invalid value for --fastBAT-wind. Valid range: 0 ~ 1000\n");
             sbat_wind *= 1000;
         } else if (strcmp(argv[i], "--fastBAT-seg") == 0) {
@@ -999,96 +999,96 @@ void option(int option_num, char* option_str[])
                 sbat_seg_size = 100;
                 i--;
             } else sbat_seg_size = atoi(argv[i]);
-            LOGGER << "--fastBAT-seg " << sbat_seg_size << endl;
+            LOGGER << "--fastBAT-seg " << sbat_seg_size << std::endl;
             if (sbat_seg_size < 10 || sbat_seg_size > 10000) LOGGER.e(0, "\n invalid value for --fastBAT-seg. Valid range: 10 ~ 10000\n");
             sbat_seg_size *= 1000;
         }
         else if (strcmp(argv[i], "--mBAT-svd-gamma") == 0) {
             mbat_svd_gamma = atof(argv[++i]);
-            LOGGER << "--mBAT-svd-gamma " << mbat_svd_gamma << endl;
+            LOGGER << "--mBAT-svd-gamma " << mbat_svd_gamma << std::endl;
             if (mbat_svd_gamma <= 0.8) LOGGER.e(0, "\n --mBAT-svd-gamma recommend to be 0.9\n");
         } else if (strcmp(argv[i], "--mBAT-write-snpset") == 0) {
             mbat_write_snpset = true;
-            LOGGER << "--mBAT-write-snpset" << endl;
+            LOGGER << "--mBAT-write-snpset" << std::endl;
         } else if (strcmp(argv[i], "--mBAT-print-all-p") == 0) {
             mbat_print_all_p = true;
-            LOGGER << "--mBAT-print-all-p" << endl;
+            LOGGER << "--mBAT-print-all-p" << std::endl;
         } else if (strcmp(argv[i], "--mBAT-combo") == 0) {
             mbat_sAssoc_file = argv[++i];
-            LOGGER << "--mBAT-combo " << mbat_sAssoc_file << endl;
+            LOGGER << "--mBAT-combo " << mbat_sAssoc_file << std::endl;
             if (!std::filesystem::exists(mbat_sAssoc_file)) LOGGER.e(0, "cannot open the file ["+mbat_sAssoc_file+"] to read.");
         } else if (strcmp(argv[i], "--mBAT-gene-list") == 0) {
             mbat_gAnno_file = argv[++i];
-            LOGGER << "--mBAT-gene-list " << mbat_gAnno_file << endl;
+            LOGGER << "--mBAT-gene-list " << mbat_gAnno_file << std::endl;
             if (!std::filesystem::exists(mbat_gAnno_file)) LOGGER.e(0, "cannot open the file ["+mbat_gAnno_file+"] to read.");
-        } else if (strcmp(argv[i], "--mBAT-set-list") == 0) {
+        } else if (strcmp(argv[i], "--mBAT-std::set-list") == 0) {
             mbat_snpset_file = argv[++i];
-            LOGGER << "--mBAT-set-list " << mbat_snpset_file << endl;
+            LOGGER << "--mBAT-std::set-list " << mbat_snpset_file << std::endl;
             if (!std::filesystem::exists(mbat_snpset_file)) LOGGER.e(0, "cannot open the file ["+mbat_snpset_file+"] to read.");
         } else if (strcmp(argv[i], "--mBAT-wind") == 0) {
             mbat_wind = atoi(argv[++i]);
-            LOGGER << "--mBAT-wind " << mbat_wind << endl;
+            LOGGER << "--mBAT-wind " << mbat_wind << std::endl;
             if (mbat_wind < 0 || mbat_wind > 1000) LOGGER.e(0, "\n invalid value for --mBAT-wind. Valid range: 0 ~ 1000\n");
             mbat_wind *= 1000;
         } 
         else if (strcmp(argv[i], "--efile") == 0) {
             efile = argv[++i];
             efile_flag = true;
-            LOGGER << "--efile " << efile << endl;
+            LOGGER << "--efile " << efile << std::endl;
             if (!std::filesystem::exists(efile)) LOGGER.e(0, "cannot open the file ["+efile+"] to read.");
         } 
         else if (strcmp(argv[i], "--e-cor") == 0) {
             eR_file = argv[++i];
             eR_file_flag = true;
-            LOGGER << "--e-cor " << eR_file << endl;
+            LOGGER << "--e-cor " << eR_file << std::endl;
             if (!std::filesystem::exists(eR_file)) LOGGER.e(0, "cannot open the file ["+eR_file+"] to read.");
         } 
         else if (strcmp(argv[i], "--ecojo") == 0) {
             ecojo_ma_file = argv[++i];
-            LOGGER << "--ecojo " << ecojo_ma_file << endl;
+            LOGGER << "--ecojo " << ecojo_ma_file << std::endl;
             if (!std::filesystem::exists(ecojo_ma_file)) LOGGER.e(0, "cannot open the file ["+ecojo_ma_file+"] to read.");
         } 
         else if (strcmp(argv[i], "--ecojo-slct") == 0) {
             ecojo_slct_flag = true;
-            LOGGER << "--ecojo-slct" << endl;
+            LOGGER << "--ecojo-slct" << std::endl;
         } 
         else if (strcmp(argv[i], "--ecojo-p") == 0) {
             ecojo_p = atof(argv[++i]);
-            LOGGER << "--ecojo-p " << ecojo_p << endl;
+            LOGGER << "--ecojo-p " << ecojo_p << std::endl;
             if (ecojo_p > 0.05 || ecojo_p <= 0) LOGGER.e(0, "\n  --ecojo-p should be within the range from 0 to 0.05.\n");
         } 
         else if (strcmp(argv[i], "--ecojo-collinear") == 0) {
             ecojo_collinear = atof(argv[++i]);
-            LOGGER << "--ecojo-collinear " << ecojo_collinear << endl;
+            LOGGER << "--ecojo-collinear " << ecojo_collinear << std::endl;
             if (ecojo_collinear > 1 || ecojo_collinear < 0.01) LOGGER.e(0, "\n --ecojo-collinear should be within the range from 0.01 to 0.99.\n");
         }
         else if (strcmp(argv[i], "--ecojo-blup") == 0) {
             ecojo_blup_flag = true;
             ecojo_lambda = atof(argv[++i]);
-            LOGGER << "--ecojo-blup " << ecojo_lambda << endl;
+            LOGGER << "--ecojo-blup " << ecojo_lambda << std::endl;
             if (ecojo_lambda < 0.01 || ecojo_lambda > 0.99) LOGGER.e(0, "\n --ecojo-blup should be within the range from 0.01 to 0.99.\n");
         } 
         else if (strcmp(argv[i], "--make-erm") == 0) {
             make_erm_flag = true;
             thread_flag = true;
-            LOGGER << argv[i] << endl;
+            LOGGER << argv[i] << std::endl;
         }
         else if (strcmp(argv[i], "--make-erm-gz") == 0) {
             make_erm_flag = true;
             grm_out_bin_flag = false;
             thread_flag = true;
-            LOGGER << "--make-erm-gz" << endl;
+            LOGGER << "--make-erm-gz" << std::endl;
         }
         else if (strcmp(argv[i], "--make-erm-alg") == 0) {
             make_erm_flag = true;
             make_erm_mtd = atoi(argv[++i]);
             thread_flag = true;
-            LOGGER << "--make-erm-alg " << make_erm_mtd << endl;
+            LOGGER << "--make-erm-alg " << make_erm_mtd << std::endl;
             if (make_erm_mtd < 1 || make_erm_mtd > 3) LOGGER.e(0, "\n --make-erm-alg should be 1, 2 or 3.\n");
         } else if (strcmp(argv[i], "--gsmr-file") == 0 ) {
             gsmr_flag = true;
 
-            vector<string> gsmr_file_list;
+            std::vector<std::string> gsmr_file_list;
             while (1) {
                 i++;
                 if (strcmp(argv[i], "gcta") == 0 || strncmp(argv[i], "--", 2) == 0) break;
@@ -1100,17 +1100,17 @@ void option(int option_num, char* option_str[])
 
             expo_file_list = gsmr_file_list[0];
             outcome_file_list = gsmr_file_list[1];
-            LOGGER << "--gsmr-file " << expo_file_list << " " << outcome_file_list << endl;
+            LOGGER << "--gsmr-file " << expo_file_list << " " << outcome_file_list << std::endl;
             if (!std::filesystem::exists(expo_file_list)) LOGGER.e(0, "cannot open the file ["+expo_file_list+"] to read.");
             if (!std::filesystem::exists(outcome_file_list)) LOGGER.e(0, "cannot open the file ["+outcome_file_list+"] to read.");
         } else if(strcmp(argv[i], "--gsmr2-beta") == 0) {
             gsmr_beta_version = 1;
-            LOGGER << "--gsmr2-beta" << endl;
+            LOGGER << "--gsmr2-beta" << std::endl;
         } else if (strcmp(argv[i], "--gsmr-direction") == 0) {
             gsmr_alg_flag = atoi(argv[++i]);
             if(gsmr_alg_flag < 0 || gsmr_alg_flag > 2) 
                LOGGER.e(0, "--gsmr-direction should be 0 (forward-GSMR), 1 (reverse-GSMR) or 2 (bi-GSMR).");
-            LOGGER << "--gsmr-direction " << gsmr_alg_flag << endl;
+            LOGGER << "--gsmr-direction " << gsmr_alg_flag << std::endl;
         } else if (strcmp(argv[i], "--gsmr-alg") == 0) {
             LOGGER.e(0, "--gsmr-alg has been superseded by --gsmr-direction.");
         } else if (strcmp(argv[i], "--gsmr-so") == 0) {
@@ -1118,18 +1118,18 @@ void option(int option_num, char* option_str[])
             //gsmr_so_alg = atoi(argv[++i]);
             if(gsmr_so_alg < 0 || gsmr_so_alg > 1) 
                 LOGGER.e(0, "--gsmr-so should be 0 (LD score regression) or 1 (correlation of SNP effects).");
-            LOGGER << "--gsmr-so " << gsmr_so_alg << endl;
+            LOGGER << "--gsmr-so " << gsmr_so_alg << std::endl;
         } else if (strcmp(argv[i], "--effect-plot") == 0) {
             o_snp_instru_flag = true;
-            LOGGER << "--effect-plot" << endl;
+            LOGGER << "--effect-plot" << std::endl;
         } else if (strcmp(argv[i], "--mtcojo-file") == 0) {
             mtcojo_flag = true;
             mtcojolist_file = argv[++i];
-            LOGGER << "--mtcojo-file " << mtcojolist_file << endl;
+            LOGGER << "--mtcojo-file " << mtcojolist_file << std::endl;
             if (!std::filesystem::exists(mtcojolist_file)) LOGGER.e(0, "cannot open the file ["+mtcojolist_file+"] to read.");
         } else if (strcmp(argv[i], "--mtcojo-bxy") == 0) {
             mtcojo_bxy_file = argv[++i];
-            LOGGER << "--mtcojo-bxy " << mtcojo_bxy_file << endl;
+            LOGGER << "--mtcojo-bxy " << mtcojo_bxy_file << std::endl;
             if (!std::filesystem::exists(mtcojo_bxy_file)) LOGGER.e(0, "cannot open the file ["+mtcojo_bxy_file+"] to read.");
         } else if (strcmp(argv[i], "--ref-ld-chr") == 0) {
             ref_ld_flag = true;
@@ -1143,7 +1143,7 @@ void option(int option_num, char* option_str[])
 #else
 #error Only Windows, Mac and Linux are supported.
 #endif
-            LOGGER << "--ref-ld-chr " << ref_ld_dirt << endl;
+            LOGGER << "--ref-ld-chr " << ref_ld_dirt << std::endl;
         } else if (strcmp(argv[i], "--w-ld-chr") == 0) {
             w_ld_flag = true;
             w_ld_dirt = argv[++i];
@@ -1156,19 +1156,19 @@ void option(int option_num, char* option_str[])
 #error Only Windows, Mac and Linux are supported.
 #endif
 
-            LOGGER << "--w-ld-chr " << w_ld_dirt << endl;
+            LOGGER << "--w-ld-chr " << w_ld_dirt << std::endl;
         } else if (strcmp(argv[i], "--diff-freq") == 0) {
             freq_thresh = atof(argv[++i]);
             if(freq_thresh <0 || freq_thresh >1)
                 LOGGER.e(0, "--diff-freq, Invalid threshold used to check allele frequency difference.");
-            LOGGER<<"--diff-freq "<<freq_thresh<<endl;
+            LOGGER<<"--diff-freq "<<freq_thresh<<std::endl;
         } else if (strcmp(argv[i], "--gwas-thresh") == 0) {
             gwas_thresh = atof(argv[++i]);
             if(gwas_thresh <0 || gwas_thresh >1)
                 LOGGER.e(0, "--gwas-thresh, Invalid GWAS p-value threshold.");
-            LOGGER<<"--gwas-thresh "<<gwas_thresh<<endl;
+            LOGGER<<"--gwas-thresh "<<gwas_thresh<<std::endl;
         } else if (strcmp(argv[i], "--heidi-thresh") == 0) {
-            vector<string> thresh_list;
+            std::vector<std::string> thresh_list;
             while (1) {
                 i++;
                 if (strcmp(argv[i], "gcta") == 0 || strncmp(argv[i], "--", 2) == 0) break;
@@ -1189,7 +1189,7 @@ void option(int option_num, char* option_str[])
 
             LOGGER<<"--heidi-thresh "<<std_heidi_thresh; 
             if(thresh_list.size() > 1) LOGGER<<" "<<global_heidi_thresh;
-            LOGGER<<endl;
+            LOGGER<<std::endl;
         } else if (strcmp(argv[i], "--heidi-snp") == 0) {
             LOGGER.e(0, "--heidi-snp is discontinued. Please use --gsmr-snp-min to specify minimum number of SNP instruments for the HEIDI-outlier analysis.");
         } else if ((strcmp(argv[i], "--gsmr-snp") == 0) || (strcmp(argv[i], "--gsmr-snp-min") == 0)) {
@@ -1197,36 +1197,36 @@ void option(int option_num, char* option_str[])
             nsnp_gsmr = atoi(argv[++i]);
             if(nsnp_gsmr < 0 || nsnp_gsmr > 1e6)
                 LOGGER.e(0, "--gsmr-snp-min, Invalid SNP number threshold for the GSMR analysis.");
-            LOGGER<<"--gsmr-snp-min "<<nsnp_gsmr<<endl;
+            LOGGER<<"--gsmr-snp-min "<<nsnp_gsmr<<std::endl;
         } else if (strcmp(argv[i], "--gsmr-ld-fdr") == 0) {
             ld_fdr_thresh = atoi(argv[++i]);
             if(ld_fdr_thresh < 0 || ld_fdr_thresh > 1)
                 LOGGER.e(0, "--gsmr-ld-fdr, Invalid FDR threshold for LD correlation matrix.");
-            LOGGER<<"--gsmr-ld-fdr "<<ld_fdr_thresh<<endl;
+            LOGGER<<"--gsmr-ld-fdr "<<ld_fdr_thresh<<std::endl;
         } else if (strcmp(argv[i], "--clump-p1") == 0) {
             LOGGER.e(0, "--clump-p1 is discontinued. Please use --gwas-thresh to specify a p-value threshold for index SNPs.");   
         } else if (strcmp(argv[i], "--clump-kb") == 0) {
             clump_wind_size = atof(argv[++i]);
             if(clump_wind_size <0 || clump_wind_size >1e6)
                 LOGGER.e(0, "--clump-kb, Invalid window size for the clumping analysis.");
-            LOGGER<<"--clump-kb   "<<clump_wind_size<<endl;
+            LOGGER<<"--clump-kb   "<<clump_wind_size<<std::endl;
         } else if (strcmp(argv[i], "--clump-r2") == 0) {
             clump_r2_thresh = atof(argv[++i]);
             if(clump_r2_thresh <0 || clump_r2_thresh >1)
                 LOGGER.e(0, "--clump-r2, Invalid LD r2 threshold for the clumping analysis.");
-            LOGGER<<"--clump-r2 "<<clump_r2_thresh<<endl;
+            LOGGER<<"--clump-r2 "<<clump_r2_thresh<<std::endl;
         } else if (strcmp(argv[i], "--gwas-adj-pc") == 0) {
             gwas_data_flag = true;
             pcadjust_list_file  = argv[++i];
-            LOGGER << "--gwas-adj-pc " << pcadjust_list_file << endl;
+            LOGGER << "--gwas-adj-pc " << pcadjust_list_file << std::endl;
             if (!std::filesystem::exists(pcadjust_list_file)) LOGGER.e(0, "cannot open the file ["+pcadjust_list_file+"] to read.");
         } else if (strcmp(argv[i], "--gwas-adj-pc-wind") == 0) {
             pc_adj_wind_size = atoi(argv[++i]);
-            LOGGER << "--gwas-adj-pc-wind " << pc_adj_wind_size << endl;
+            LOGGER << "--gwas-adj-pc-wind " << pc_adj_wind_size << std::endl;
         } 
         else if (strcmp(argv[i], "gcta") == 0) break;
         else {
-            stringstream errmsg;
+            std::stringstream errmsg;
             errmsg << "\n  invalid option \"" << argv[i] << "\".\n";
             LOGGER.e(0, errmsg.str());
         }
@@ -1234,42 +1234,42 @@ void option(int option_num, char* option_str[])
     if (save_reml_flag) save_reml_file = out + ".reml.bin.gz";
 
     // conflicted options
-    LOGGER << endl;
+    LOGGER << std::endl;
     if (bfile2_flag && !bfile_flag) LOGGER.e(0, "the option --bfile2 should always go with the option --bfile.");
     if(bfile_flag && grm_cutoff>-1.0) LOGGER.e(0, "the --grm-cutoff option is invalid when used in combination with the --bfile option.");
     if (m_grm_flag) {
         if (grm_flag) {
             grm_flag = false;
-            LOGGER << "Warning: --grm option suppressed by the --mgrm option." << endl;
+            LOGGER << "Warning: --grm option suppressed by the --mgrm option." << std::endl;
         }
         if (grm_cutoff>-1.0) {
             grm_cutoff = -2.0;
-            LOGGER << "Warning: --grm-cutoff option suppressed by the --mgrm option." << endl;
+            LOGGER << "Warning: --grm-cutoff option suppressed by the --mgrm option." << std::endl;
         }
     }
     if (pca_flag) {
         if (grm_adj_fac>-1.0) {
             grm_adj_fac = -2.0;
-            LOGGER << "Warning: --grm-adj option suppressed by the --pca option." << endl;
+            LOGGER << "Warning: --grm-adj option suppressed by the --pca option." << std::endl;
         } else if (dosage_compen>-1) {
             grm_adj_fac = -2;
-            LOGGER << "Warning: --dosage-compen option suppressed by the --pca option." << endl;
+            LOGGER << "Warning: --dosage-compen option suppressed by the --pca option." << std::endl;
         }
     }
     if (!gxe_file.empty() && !grm_flag && !m_grm_flag) {
-        LOGGER << "Warning: --gxe option is ignored because there is no --grm or --mgrm option specified." << endl;
+        LOGGER << "Warning: --gxe option is ignored because there is no --grm or --mgrm option specified." << std::endl;
         gxe_file = "";
     }
     if (pred_rand_eff && !grm_flag && !m_grm_flag) {
-        LOGGER << "Warning: --reml-pred-rand option is ignored because there is no --grm or --mgrm option specified." << endl;
+        LOGGER << "Warning: --reml-pred-rand option is ignored because there is no --grm or --mgrm option specified." << std::endl;
         pred_rand_eff = false;
     }
     if (cv_blup && !grm_flag && !m_grm_flag) {
-        LOGGER << "Warning: --cvblup option is ignored because there is no --grm or --mgrm option specified." << endl;
+        LOGGER << "Warning: --cvblup option is ignored because there is no --grm or --mgrm option specified." << std::endl;
         cv_blup = false;
     }
     if(cv_blup && pred_rand_eff){
-        LOGGER << "Warning: --reml-pred-rand options is ignored because --cvblup does more than this option" << endl;
+        LOGGER << "Warning: --reml-pred-rand options is ignored because --cvblup does more than this option" << std::endl;
         pred_rand_eff = false;
     }
 
@@ -1278,15 +1278,15 @@ void option(int option_num, char* option_str[])
     if ((dose_beagle_flag || dose_mach_flag || dose_mach_gz_flag) && dominance_flag) LOGGER.e(0, "unable to calculate the GRM for dominance effect using imputed dosage data.");
     if (make_grm_xchar_flag && dominance_flag) LOGGER.e(0, "unable to calculate the GRM for dominance effect for the X chromosome.");
     if (mlma_flag || mlma_loco_flag) {
-        if (!gxe_file.empty()) LOGGER << "Warning: the option --gxe option is disabled in this analysis." << endl;
-        if (!update_sex_file.empty()) LOGGER << "Warning: the option --update-sex option is disabled in this analysis." << endl;
-        if (grm_adj_fac>-1.0) LOGGER << "Warning: the option --grm-adj option is disabled in this analysis." << endl;
-        if (dosage_compen>-1.0) LOGGER << "Warning: the option --dc option is disabled in this analysis." << endl;
-        if (est_fix_eff) LOGGER << "Warning: the option --reml-est-fix option is disabled in this analysis." << endl;
-        if (est_fix_eff_var) LOGGER << "Warning: the option --reml-est-fix-varcov option is disabled in this analysis." << endl;
-        if (pred_rand_eff) LOGGER << "Warning: the option --reml-pred-rand option is disabled in this analysis." << endl;
-        if(cv_blup) LOGGER << "Warning: the option --cvblup option is disabled in this analysis." << endl;
-        if (reml_lrt_flag) LOGGER << "Warning: the option --reml-lrt option is disabled in this analysis." << endl;
+        if (!gxe_file.empty()) LOGGER << "Warning: the option --gxe option is disabled in this analysis." << std::endl;
+        if (!update_sex_file.empty()) LOGGER << "Warning: the option --update-sex option is disabled in this analysis." << std::endl;
+        if (grm_adj_fac>-1.0) LOGGER << "Warning: the option --grm-adj option is disabled in this analysis." << std::endl;
+        if (dosage_compen>-1.0) LOGGER << "Warning: the option --dc option is disabled in this analysis." << std::endl;
+        if (est_fix_eff) LOGGER << "Warning: the option --reml-est-fix option is disabled in this analysis." << std::endl;
+        if (est_fix_eff_var) LOGGER << "Warning: the option --reml-est-fix-varcov option is disabled in this analysis." << std::endl;
+        if (pred_rand_eff) LOGGER << "Warning: the option --reml-pred-rand option is disabled in this analysis." << std::endl;
+        if(cv_blup) LOGGER << "Warning: the option --cvblup option is disabled in this analysis." << std::endl;
+        if (reml_lrt_flag) LOGGER << "Warning: the option --reml-lrt option is disabled in this analysis." << std::endl;
         if (!save_reml_file.empty() && !load_reml_file.empty()) LOGGER.e(0, "--save-reml and --load-reml cannot be used together.");
         if ((!save_reml_file.empty() || !load_reml_file.empty()) && mlma_loco_flag) LOGGER.e(0, "--save-reml and --load-reml are not supported with --mlma-loco.");
         if (!load_reml_file.empty() && !mlma_flag) LOGGER.e(0, "--load-reml can only be used with --mlma.");
@@ -1305,7 +1305,7 @@ void option(int option_num, char* option_str[])
         // if(!gsmr_so_flag && !ref_ld_flag && !w_ld_flag) LOGGER.w(0, "The GSMR analysis will be performed assuming no sample overlap between the GWAS data for exposure and outcome.");
     }
     if(gsmr_beta_version && !global_heidi_flag) {
-        LOGGER.w(0, "The threshold of multi-SNP-based HEIDI-outlier analysis is not specified. The default value is " + to_string(global_heidi_thresh).substr(0,5) + ".");
+        LOGGER.w(0, "The threshold of multi-SNP-based HEIDI-outlier analysis is not specified. The default value is " + std::to_string(global_heidi_thresh).substr(0,5) + ".");
     }
     if(!gsmr_beta_version && global_heidi_flag) {
         LOGGER.w(0, "--gsmr2-beta is not specified. GCTA will perform single-SNP-based HEIDI-outlier analysis, which was published in Zhu et al. 2018 Nature Communications. The threshold of multi-SNP-based HEIDI-outlier analysis will not be accepted.");
@@ -1315,14 +1315,14 @@ void option(int option_num, char* option_str[])
     }
     // OpenMP
     if (thread_flag) {
-        if (thread_num == 1) LOGGER << "Note: This is a multi-thread program. You could specify the number of threads by the --thread-num option to speed up the computation if there are multiple processors in your machine." << endl;
-        else LOGGER << "Note: the program will be running on " << thread_num << " threads." << endl;
+        if (thread_num == 1) LOGGER << "Note: This is a multi-thread program. You could specify the number of threads by the --thread-num option to speed up the computation if there are multiple processors in your machine." << std::endl;
+        else LOGGER << "Note: the program will be running on " << thread_num << " threads." << std::endl;
     }
 
-    // set autosome
+    // std::set autosome
     if (autosome_flag) {
         if(extract_chr_start == extract_chr_end && extract_chr_start != 0){
-            LOGGER << "Warning: --autosome option omitted. You have specified the chromosome to analysis." << endl;
+            LOGGER << "Warning: --autosome option omitted. You have specified the chromosome to analysis." << std::endl;
         }else{
             extract_chr_start = 1;
             extract_chr_end = autosome_num;
@@ -1331,7 +1331,7 @@ void option(int option_num, char* option_str[])
     if (make_grm_xchar_flag) extract_chr_start = extract_chr_end = (autosome_num + 1);
 
     // Implement
-    LOGGER << endl;
+    LOGGER << std::endl;
     gcta *pter_gcta = new gcta(autosome_num, rm_high_ld_cutoff, out); //, *pter_gcta2=new gcta(autosome_num, rm_high_ld_cutoff, out);
 
     if (!genetic_model.empty()) pter_gcta->set_genetic_model(genetic_model);
@@ -1366,7 +1366,7 @@ void option(int option_num, char* option_str[])
         if (hapmap_genet_dst) pter_gcta->genet_dst(bfile, hapmap_genet_dst_file);
         else {
             if (bfile2_flag) {
-                LOGGER << "There are two datasets specified (in PLINK binary PED format).\nReading dataset 1 ..." << endl;
+                LOGGER << "There are two datasets specified (in PLINK binary PED format).\nReading dataset 1 ..." << std::endl;
                 if (update_freq_file.empty()) LOGGER.e(0, "since there are two datasets, you should update the allele frequencies calculated from the combined dataset.");
             }
             // Read the list, if there are multiple bfiles
@@ -1477,7 +1477,7 @@ void option(int option_num, char* option_str[])
         if (!exclude_snp_file.empty()) pter_gcta->exclude_snp(exclude_snp_file);
         if (!extract_snp_name.empty()) pter_gcta->extract_single_snp(extract_snp_name);
         if (!exclude_snp_name.empty()) pter_gcta->exclude_single_snp(exclude_snp_name);
-        if (extract_chr_start > 0) LOGGER << "Warning: the option --chr, --autosome or --nonautosome is inactive for dosage data." << endl;
+        if (extract_chr_start > 0) LOGGER << "Warning: the option --chr, --autosome or --nonautosome is inactive for dosage data." << std::endl;
         if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
         if (dose_mach_flag) pter_gcta->read_imp_dose_mach(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
         else if (dose_mach_gz_flag) pter_gcta->read_imp_dose_mach_gz(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);

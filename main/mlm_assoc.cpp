@@ -18,7 +18,7 @@
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
 
-void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, string phen_file, string qcovar_file, string covar_file, int mphen, int MaxIter, vector<double> reml_priors, vector<double> reml_priors_var, bool no_constrain, bool within_family, bool inbred, bool no_adj_covar, string weight_file, string save_reml_file, string load_reml_file)
+void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_file, std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool within_family, bool inbred, bool no_adj_covar, std::string weight_file, std::string save_reml_file, std::string load_reml_file)
 {
     _within_family=within_family;
     _reml_max_iter=MaxIter;
@@ -34,9 +34,9 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     
     // Read data
     int qcovar_num=0, covar_num=0;
-    vector<string> phen_ID, qcovar_ID, covar_ID, grm_id;
-    vector< vector<string> > phen_buf, qcovar, covar; // save individuals by column
-    vector<string> grm_files;
+    std::vector<std::string> phen_ID, qcovar_ID, covar_ID, grm_id;
+    std::vector< std::vector<std::string> > phen_buf, qcovar, covar; // save individuals by column
+    std::vector<std::string> grm_files;
     
     if(phen_file.empty()){
         LOGGER.e(0, "no file name in --pheno.");
@@ -58,7 +58,7 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
 
     if (skip_grm_loading) {
         if (!grm_file.empty() || m_grm_flag || subtract_grm_flag) {
-            LOGGER << "Skipping GRM loading because --load-reml is set. Ensure the saved REML state matches the current sample set." << endl;
+            LOGGER << "Skipping GRM loading because --load-reml is std::set. Ensure the saved REML state matches the current sample std::set." << std::endl;
         }
     } else {
         if(subtract_grm_flag){
@@ -90,16 +90,16 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
         }
     }
     
-    vector<string> uni_id;
-	map<string, int> uni_id_map;
-    map<string, int>::iterator iter;
+    std::vector<std::string> uni_id;
+	std::map<std::string, int> uni_id_map;
+    std::map<std::string, int>::iterator iter;
 	for(i=0; i<_keep.size(); i++){
 	    uni_id.push_back(_fid[_keep[i]]+":"+_pid[_keep[i]]);
-	    uni_id_map.insert(pair<string,int>(_fid[_keep[i]]+":"+_pid[_keep[i]], i));
+	    uni_id_map.insert(std::pair<std::string,int>(_fid[_keep[i]]+":"+_pid[_keep[i]], i));
 	}
     _n=_keep.size();
     if(_n<1) LOGGER.e(0, "no individual is in common in the input files.");
-    LOGGER<<_n<<" individuals are in common in these files."<<endl;
+    LOGGER<<_n<<" individuals are in common in these files."<<std::endl;
     
     // construct model terms
     _y.setZero(_n);
@@ -110,13 +110,13 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     }
 
     _r_indx.clear();
-    vector<int> kp;
+    std::vector<int> kp;
     if (!skip_grm_loading) {
         if (subtract_grm_flag) {
             _r_indx = {0, 1};
             _A.resize(_r_indx.size());
 
-            LOGGER << "\nReading the primary GRM from [" << grm_files[1] << "] ..." << endl;
+            LOGGER << "\nReading the primary GRM from [" << grm_files[1] << "] ..." << std::endl;
             read_grm(grm_files[1], grm_id, true, false, false);
 
             StrFunc::match(uni_id, grm_id, kp);
@@ -136,9 +136,9 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
                 }
             }
 
-            LOGGER << "\nReading the secondary GRM from [" << grm_files[0] << "] ..." << endl;
+            LOGGER << "\nReading the secondary GRM from [" << grm_files[0] << "] ..." << std::endl;
             read_grm(grm_files[0], grm_id, true, false, false);
-            LOGGER<<"\nSubtracting [" << grm_files[1] << "] from [" << grm_files[0] << "] ..." << endl;
+            LOGGER<<"\nSubtracting [" << grm_files[1] << "] from [" << grm_files[0] << "] ..." << std::endl;
             StrFunc::match(uni_id, grm_id, kp);
             #pragma omp parallel for private(k)
             for (j = 0; j < _n; j++) {
@@ -164,9 +164,9 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
                 _grm.resize(0,0);
             }
             else if(m_grm_flag){
-                LOGGER << "There are " << grm_files.size() << " GRM file names specified in the file [" + grm_file + "]." << endl;
+                LOGGER << "There are " << grm_files.size() << " GRM file names specified in the file [" + grm_file + "]." << std::endl;
                 for (i = 0; i < grm_files.size(); i++) {
-                    LOGGER << "Reading the GRM from the " << i + 1 << "th file ..." << endl;
+                    LOGGER << "Reading the GRM from the " << i + 1 << "th file ..." << std::endl;
                     read_grm(grm_files[i], grm_id, true, false, true);
                     StrFunc::match(uni_id, grm_id, kp);
                     (_A[i]).resize(_n, _n);
@@ -192,8 +192,8 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
         _A[_r_indx.size()-1]=eigenMatrix::Identity(_n, _n);
         
         if(!weight_file.empty()){
-            vector<string> weight_ID;
-            vector<double> weights;
+            std::vector<std::string> weight_ID;
+            std::vector<double> weights;
 
             read_weight(weight_file, weight_ID, weights);
             update_id_map_kp(weight_ID, _id_map, _keep);
@@ -209,9 +209,9 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
             //v_weight = 1.0 / v_weight.array();
             //v_weight = 1.0 / v_weight.array() - (1.0 / v_weight.array()).mean() + 1;
             /*
-            ofstream o_test("weight_out.txt");
+            std::ofstream o_test("weight_out.txt");
             for(int i = 0; i < v_weight.size(); i++){
-                o_test << v_weight[i] << "\t" << _y[i] << endl;
+                o_test << v_weight[i] << "\t" << _y[i] << std::endl;
             }
             o_test.close();
             */
@@ -221,7 +221,7 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     }
 
     // construct X matrix
-    vector<eigenMatrix> E_float;
+    std::vector<eigenMatrix> E_float;
     eigenMatrix qE_float;
     construct_X(_n, uni_id_map, qcovar_flag, qcovar_num, qcovar_ID, qcovar, covar_flag, covar_num, covar_ID, covar, E_float, qE_float);
 
@@ -229,7 +229,7 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     // names of variance component
     if (!skip_grm_loading) {
         for (size_t i = 0; i < grm_files.size(); ++i) {
-            const string suffix = (grm_files.size() == 1) ? "" : std::to_string(i + 1);
+            const std::string suffix = (grm_files.size() == 1) ? "" : std::to_string(i + 1);
             _var_name.emplace_back("V(G" + suffix + ")");
             _hsq_name.emplace_back("V(G" + suffix + ")/Vp");
         }
@@ -240,12 +240,12 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     }
     
     // run REML algorithm
-    LOGGER << "\nPerforming MLM association analyses" << (subtract_grm_flag?"":" (including the candidate SNP)") << " ..."<<endl;
+    LOGGER << "\nPerforming MLM association analyses" << (subtract_grm_flag?"":" (including the candidate SNP)") << " ..."<<std::endl;
     unsigned long n=_keep.size(), m=_include.size();
 	
     if(!load_reml_file.empty()) {
             // Load REML state from file
-            LOGGER << "Loading REML state from [" << load_reml_file << "] ..." << endl;
+            LOGGER << "Loading REML state from [" << load_reml_file << "] ..." << std::endl;
             load_reml_state(load_reml_file, no_adj_covar);
     } else {
         // Run REML estimation
@@ -253,9 +253,9 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
         
         if(!save_reml_file.empty()) {
             // Save REML state and exit - no need for genotype data beyond this point
-            LOGGER << "Saving REML state to [" << save_reml_file << "] ..." << endl;
+            LOGGER << "Saving REML state to [" << save_reml_file << "] ..." << std::endl;
             save_reml_state(save_reml_file, no_adj_covar);
-            LOGGER << "REML estimation completed. Use --load-reml to perform association tests." << endl;
+            LOGGER << "REML estimation completed. Use --load-reml to perform association tests." << std::endl;
             
             // Clean up matrices that won't be needed
             _P.resize(0,0);
@@ -269,13 +269,13 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     std::vector<float> y(n);
     eigenVector y_buf=_y;
 
-    cout << "\nRegression coefficient(s) (e.g., general mean): " <<_b <<endl;
+    std::cout << "\nRegression coefficient(s) (e.g., general mean): " <<_b <<std::endl;
     
     if(!no_adj_covar) y_buf=_y.array()-(_X*_b).array(); // adjust phenotype for covariates
     for(size_t i = 0; i < n; ++i) y[i] = y_buf[i];
     
 /*    if(grm_flag || m_grm_flag){
-        LOGGER<<endl;
+        LOGGER<<std::endl;
         _geno_mkl=new float[n*m];
         make_XMat_mkl(_geno_mkl, false);
         #pragma omp parallel for private(j, k)
@@ -294,16 +294,16 @@ void gcta::mlma(string grm_file, bool m_grm_flag, string subtract_grm_file, stri
     else mlma_calcu_stat(std::span<const float>(y), std::span<const float>(_geno_mkl, static_cast<size_t>(n) * m), m, beta, se, pval);
     delete[] _geno_mkl;
     
-    const string filename = _out + ".mlma";
-    LOGGER<<"\nSaving the results of the mixed linear model association analyses of "<<m<<" SNPs to ["+filename+"] ..."<<endl;
-    ofstream ofile(filename);
+    const std::string filename = _out + ".mlma";
+    LOGGER<<"\nSaving the results of the mixed linear model association analyses of "<<m<<" SNPs to ["+filename+"] ..."<<std::endl;
+    std::ofstream ofile(filename);
     if(!ofile) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
-    ofile<<"Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\tp"<<endl;
+    ofile<<"Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\tp"<<std::endl;
 	for(size_t i = 0; i < m; ++i){
         const auto j = _include[i];
         ofile<<_chr[j]<<"\t"<<_snp_name[j]<<"\t"<<_bp[j]<<"\t"<<_ref_A[j]<<"\t"<<_other_A[j]<<"\t";
-        if(pval[i]>1.5) ofile<<"NA\tNA\tNA\tNA"<<endl;
-        else ofile<<0.5*_mu[j]<<"\t"<<beta[i]<<"\t"<<se[i]<<"\t"<<pval[i]<<endl;
+        if(pval[i]>1.5) ofile<<"NA\tNA\tNA\tNA"<<std::endl;
+        else ofile<<0.5*_mu[j]<<"\t"<<beta[i]<<"\t"<<se[i]<<"\t"<<pval[i]<<std::endl;
     }
     ofile.close();
 }
@@ -326,10 +326,10 @@ void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<
     beta.resize(m);
     se=eigenVector::Zero(m);
     pval=eigenVector::Constant(m,2);
-    LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<endl;
+    LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<std::endl;
     int new_start = 0, block_size = 0, block_col = 0, k = 0, l = 0;
     Eigen::MatrixXf X_block;
-    vector<int> indx;
+    std::vector<int> indx;
     for(i = 0; i < m; i++, block_col++){
         // get a block of SNPs
         if(i == new_start){
@@ -381,10 +381,10 @@ void gcta::mlma_calcu_stat_covar(std::span<const float> y, [[maybe_unused]] std:
     beta.resize(m);
     se=eigenVector::Zero(m);
     pval=eigenVector::Constant(m,2);
-    LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<endl;
+    LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<std::endl;
     int new_start = 0, block_size = 0, block_col = 0, k = 0, l = 0;
     Eigen::MatrixXf X_block;
-    vector<int> indx;
+    std::vector<int> indx;
     for(i = 0; i < m; i++, block_col++){
         // get a block of SNPs
         if(i == new_start){
@@ -413,7 +413,7 @@ void gcta::mlma_calcu_stat_covar(std::span<const float> y, [[maybe_unused]] std:
     }
 }
 
-void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, int mphen, int MaxIter, vector<double> reml_priors, vector<double> reml_priors_var, bool no_constrain, bool inbred, bool no_adj_covar)
+void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool inbred, bool no_adj_covar)
 {
     unsigned long i=0, j=0, k=0, c1=0, c2=0, n=0;
     _reml_max_iter=MaxIter;
@@ -423,8 +423,8 @@ void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, in
     
     // Read data
     int qcovar_num=0, covar_num=0;
-    vector<string> phen_ID, qcovar_ID, covar_ID, grm_id;
-    vector< vector<string> > phen_buf, qcovar, covar; // save individuals by column
+    std::vector<std::string> phen_ID, qcovar_ID, covar_ID, grm_id;
+    std::vector< std::vector<std::string> > phen_buf, qcovar, covar; // save individuals by column
 
     if(phen_file.empty()){
         LOGGER.e(0, "no file name in --pheno.");
@@ -443,9 +443,9 @@ void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, in
     n=_keep.size();
     _n=_keep.size();
     if(_n<1) LOGGER.e(0, "no individual is in common among the input files.");
-    LOGGER<<_n<<" individuals are in common in these files."<<endl;
+    LOGGER<<_n<<" individuals are in common in these files."<<std::endl;
     
-    vector<int> chrs, vi_buf(_chr);
+    std::vector<int> chrs, vi_buf(_chr);
     std::ranges::sort(vi_buf);
     auto unique_range = std::ranges::unique(vi_buf);
     vi_buf.erase(unique_range.begin(), vi_buf.end());
@@ -453,17 +453,17 @@ void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, in
     for(i=0; i<vi_buf.size(); i++){
         if(vi_buf[i]<=_autosome_num) chrs.push_back(vi_buf[i]);
     }
-    vector<int> include_o(_include);
-    map<string, int> snp_name_map_o(_snp_name_map);
-    vector<float> m_chrs_f(chrs.size());
-    vector<float *> grm_chrs(chrs.size());
-    vector<float *> geno_chrs(chrs.size());
-    vector< vector<int> > icld_chrs(chrs.size());
-    LOGGER<<endl;
+    std::vector<int> include_o(_include);
+    std::map<std::string, int> snp_name_map_o(_snp_name_map);
+    std::vector<float> m_chrs_f(chrs.size());
+    std::vector<float *> grm_chrs(chrs.size());
+    std::vector<float *> geno_chrs(chrs.size());
+    std::vector< std::vector<int> > icld_chrs(chrs.size());
+    LOGGER<<std::endl;
     if(_mu.empty()) calcu_mu();
-    LOGGER<<"\nCalculating the genetic relationship matrix for each of the "<<chrs.size()<<" chromosomes ... "<<endl;
+    LOGGER<<"\nCalculating the genetic relationship matrix for each of the "<<chrs.size()<<" chromosomes ... "<<std::endl;
     for(c1=0; c1<chrs.size(); c1++){
-        LOGGER<<"Chr "<<chrs[c1]<<":"<<endl;
+        LOGGER<<"Chr "<<chrs[c1]<<":"<<std::endl;
         extract_chr(chrs[c1], chrs[c1]);
         make_grm_mkl(false, false, inbred, true, 0, true);
         
@@ -479,12 +479,12 @@ void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, in
     }
     for(i=0; i<_keep.size(); i++) grm_id.push_back(_fid[_keep[i]]+":"+_pid[_keep[i]]);
     
-    vector<string> uni_id;
-	map<string, int> uni_id_map;
-    map<string, int>::iterator iter;
+    std::vector<std::string> uni_id;
+	std::map<std::string, int> uni_id_map;
+    std::map<std::string, int>::iterator iter;
 	for(i=0; i<_keep.size(); i++){
 	    uni_id.push_back(_fid[_keep[i]]+":"+_pid[_keep[i]]);
-	    uni_id_map.insert(pair<string,int>(_fid[_keep[i]]+":"+_pid[_keep[i]], i));
+	    uni_id_map.insert(std::pair<std::string,int>(_fid[_keep[i]]+":"+_pid[_keep[i]], i));
 	}
     
     // construct model terms
@@ -496,7 +496,7 @@ void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, in
     }
     
     // construct X matrix
-    vector<eigenMatrix> E_float;
+    std::vector<eigenMatrix> E_float;
     eigenMatrix qE_float;
     construct_X(_n, uni_id_map, qcovar_flag, qcovar_num, qcovar_ID, qcovar, covar_flag, covar_num, covar_ID, covar, E_float, qE_float);
     
@@ -506,9 +506,9 @@ void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, in
     _var_name.push_back("V(e)");
     
     // MLM association
-    LOGGER<<"\nPerforming MLM association analyses (leave-one-chromosome-out) ..."<<endl;
+    LOGGER<<"\nPerforming MLM association analyses (leave-one-chromosome-out) ..."<<std::endl;
     
-    vector<int> kp;
+    std::vector<int> kp;
     StrFunc::match(uni_id, grm_id, kp);
     _r_indx.resize(2);
     for(i=0; i<2; i++) _r_indx[i]=i;
@@ -517,9 +517,9 @@ void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, in
     
     eigenVector y_buf=_y;
     std::vector<float> y(_n);
-    vector<eigenVector> beta(chrs.size()), se(chrs.size()), pval(chrs.size());
+    std::vector<eigenVector> beta(chrs.size()), se(chrs.size()), pval(chrs.size());
     for(c1=0; c1<chrs.size(); c1++){
-        LOGGER<<"\n-----------------------------------\n#Chr "<<chrs[c1]<<":"<<endl;
+        LOGGER<<"\n-----------------------------------\n#Chr "<<chrs[c1]<<":"<<std::endl;
         extract_chr(chrs[c1], chrs[c1]);
         
         _A[0]=eigenMatrix::Zero(_n, _n);
@@ -557,7 +557,7 @@ void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, in
         
         _include=include_o;
         _snp_name_map=snp_name_map_o;
-        LOGGER<<"-----------------------------------"<<endl;
+        LOGGER<<"-----------------------------------"<<std::endl;
     }
     
     for(c1=0; c1<chrs.size(); c1++){
@@ -565,17 +565,17 @@ void gcta::mlma_loco(string phen_file, string qcovar_file, string covar_file, in
         delete[] (geno_chrs[c1]);
     }
     
-    string filename=_out+".loco.mlma";
-    LOGGER<<"\nSaving the results of the mixed linear model association analyses of "<<_include.size()<<" SNPs to ["+filename+"] ..."<<endl;
-    ofstream ofile(filename.c_str());
+    std::string filename=_out+".loco.mlma";
+    LOGGER<<"\nSaving the results of the mixed linear model association analyses of "<<_include.size()<<" SNPs to ["+filename+"] ..."<<std::endl;
+    std::ofstream ofile(filename.c_str());
     if(!ofile) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
-    ofile<<"Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\tp"<<endl;
+    ofile<<"Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\tp"<<std::endl;
     for(c1=0; c1<chrs.size(); c1++){
         for(i=0; i<icld_chrs[c1].size(); i++){
             j=icld_chrs[c1][i];
             ofile<<_chr[j]<<"\t"<<_snp_name[j]<<"\t"<<_bp[j]<<"\t"<<_ref_A[j]<<"\t"<<_other_A[j]<<"\t";
-            if(pval[c1][i]>1.5) ofile<<"NA\tNA\tNA\tNA"<<endl;
-            else ofile<<0.5*_mu[j]<<"\t"<<beta[c1][i]<<"\t"<<se[c1][i]<<"\t"<<pval[c1][i]<<endl;
+            if(pval[c1][i]>1.5) ofile<<"NA\tNA\tNA\tNA"<<std::endl;
+            else ofile<<0.5*_mu[j]<<"\t"<<beta[c1][i]<<"\t"<<se[c1][i]<<"\t"<<pval[c1][i]<<std::endl;
         }
     }
     ofile.close();
@@ -596,7 +596,7 @@ void gcta::grm_minus_grm(float *grm, float *sub_grm)
 }
 
 
-void gcta::save_reml_state(string filename, bool no_adj_covar)
+void gcta::save_reml_state(std::string filename, bool no_adj_covar)
 {
     std::ofstream raw_file(filename, std::ios::binary);
     if(!raw_file.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to write. (Use --save-reml to generate this file.)");
@@ -628,7 +628,7 @@ void gcta::save_reml_state(string filename, bool no_adj_covar)
         }
     }
     
-    // Write _b vector (fixed effects) if covariates are adjusted
+    // Write _b std::vector (fixed effects) if covariates are adjusted
     if(!no_adj_covar) {
         for(int i = 0; i < x_c; i++) {
             f_buf = (float)_b(i);
@@ -636,13 +636,13 @@ void gcta::save_reml_state(string filename, bool no_adj_covar)
         }
     }
     
-    // Write _varcmp vector (variance components)
+    // Write _varcmp std::vector (variance components)
     for(int i = 0; i < num_varcmp; i++) {
         f_buf = (float)_varcmp[i];
         outfile.write((char*)&f_buf, sizeof(float));
     }
     
-    // Write _r_indx vector
+    // Write _r_indx std::vector
     for(int i = 0; i < num_r_indx; i++) {
         int idx = _r_indx[i];
         outfile.write((char*)&idx, sizeof(int));
@@ -650,10 +650,10 @@ void gcta::save_reml_state(string filename, bool no_adj_covar)
     
     outfile.reset();
     raw_file.close();
-    LOGGER << "Saved REML state (n=" << n << ", covariates=" << x_c << ", variance components=" << num_varcmp << ") to [" << filename << "]." << endl;
+    LOGGER << "Saved REML state (n=" << n << ", covariates=" << x_c << ", variance components=" << num_varcmp << ") to [" << filename << "]." << std::endl;
 }
 
-void gcta::load_reml_state(string filename, bool no_adj_covar)
+void gcta::load_reml_state(std::string filename, bool no_adj_covar)
 {
     std::ifstream raw_file(filename, std::ios::binary);
     if(!raw_file.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to read. Make sure you have run --mlma --save-reml first with matching --out prefix.");
@@ -675,10 +675,10 @@ void gcta::load_reml_state(string filename, bool no_adj_covar)
     
     // Validate dimensions match current dataset
     if(n != _n) {
-        LOGGER.e(0, "sample size mismatch: REML state has n=" + to_string(n) + " but current dataset has n=" + to_string(_n));
+        LOGGER.e(0, "sample size mismatch: REML state has n=" + std::to_string(n) + " but current dataset has n=" + std::to_string(_n));
     }
     if(x_c != _X_c) {
-        LOGGER.e(0, "number of covariates mismatch: REML state has " + to_string(x_c) + " covariates but current dataset has " + to_string(_X_c));
+        LOGGER.e(0, "number of covariates mismatch: REML state has " + std::to_string(x_c) + " covariates but current dataset has " + std::to_string(_X_c));
     }
     
     // Read _Vi matrix (row-major)
@@ -691,7 +691,7 @@ void gcta::load_reml_state(string filename, bool no_adj_covar)
         }
     }
     
-    // Read _b vector (fixed effects) if covariates are adjusted
+    // Read _b std::vector (fixed effects) if covariates are adjusted
     if(!no_adj_covar) {
         _b.resize(x_c);
         for(int i = 0; i < x_c; i++) {
@@ -700,14 +700,14 @@ void gcta::load_reml_state(string filename, bool no_adj_covar)
         }
     }
     
-    // Read _varcmp vector (variance components)
+    // Read _varcmp std::vector (variance components)
     _varcmp.resize(num_varcmp);
     for(int i = 0; i < num_varcmp; i++) {
         infile.read((char*)&f_buf, sizeof(float));
         _varcmp[i] = f_buf;
     }
     
-    // Read _r_indx vector
+    // Read _r_indx std::vector
     _r_indx.resize(num_r_indx);
     for(int i = 0; i < num_r_indx; i++) {
         int idx = 0;
@@ -718,5 +718,5 @@ void gcta::load_reml_state(string filename, bool no_adj_covar)
     infile.reset();
     raw_file.close();
     
-    LOGGER << "Loaded REML state from [" << filename << "]: n=" << n << ", covariates=" << x_c << ", variance components=" << num_varcmp << endl;
+    LOGGER << "Loaded REML state from [" << filename << "]: n=" << n << ", covariates=" << x_c << ", variance components=" << num_varcmp << std::endl;
 }

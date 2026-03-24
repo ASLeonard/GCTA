@@ -12,16 +12,16 @@
 
 #include "gcta.h"
 
-void gcta::read_efile(string efile)
+void gcta::read_efile(std::string efile)
 {
-    ifstream einf;
+    std::ifstream einf;
     einf.open(efile.c_str());
     if (!einf.is_open()) LOGGER.e(0, "cannot open the file [" + efile + "] to read.");
-    LOGGER << "Reading gene expression / methylation data from [" + efile + "] ..." << endl;
+    LOGGER << "Reading gene expression / methylation data from [" + efile + "] ..." << std::endl;
     
-    string str_buf="";
-    vector<string> vs_buf;
-    getline(einf, str_buf); // reading the header
+    std::string str_buf="";
+    std::vector<std::string> vs_buf;
+    std::getline(einf, str_buf); // reading the header
     int col_num = StrFunc::split_string(str_buf, vs_buf, " \t\n");
     if(col_num < 3) LOGGER.e(0, "there needs to be at least 3 columns in the file [" + efile + "].");
     _probe_num = col_num - 2;
@@ -29,20 +29,20 @@ void gcta::read_efile(string efile)
     int i=0;
     for(i=0; i<_probe_num; i++) _probe_name[i]=vs_buf[i+2];
     _indi_num = 0;
-    while(getline(einf,str_buf)) _indi_num++;
+    while(std::getline(einf,str_buf)) _indi_num++;
     einf.close();
 
     einf.open(efile.c_str());
-    getline(einf, str_buf);
+    std::getline(einf, str_buf);
     i=0;
     int j=0;
-    stringstream errmsg;
+    std::stringstream errmsg;
     _fid.resize(_indi_num);
     _pid.resize(_indi_num);
     _probe_data.resize(_indi_num, _probe_num);
-    string id_buf="";
-    while (getline(einf, str_buf)) {
-        stringstream ss(str_buf);
+    std::string id_buf="";
+    while (std::getline(einf, str_buf)) {
+        std::stringstream ss(str_buf);
         if (!(ss >> id_buf)){ errmsg<<"in line "<<i+2<<"."; LOGGER.e(0, errmsg.str()); }
         _fid[i]=id_buf;
         if (!(ss >> id_buf)){ errmsg<<"in line "<<i+2<<"."; LOGGER.e(0, errmsg.str()); }
@@ -55,7 +55,7 @@ void gcta::read_efile(string efile)
         i++;
     }
     einf.close();
-    LOGGER<<"Expression data for "<<_probe_num<<" probes of "<<_indi_num<<" individuals have been included from the file [" + efile + "]."<<endl; 
+    LOGGER<<"Expression data for "<<_probe_num<<" probes of "<<_indi_num<<" individuals have been included from the file [" + efile + "]."<<std::endl; 
 
     // Initialize _keep and _e_include
     init_keep();
@@ -69,13 +69,13 @@ void gcta::init_e_include() {
     int i = 0, size = 0;
     for (i = 0; i < _probe_num; i++) {
         _e_include[i] = i;
-        _probe_name_map.insert(pair<string, int>(_probe_name[i], i));
+        _probe_name_map.insert(std::pair<std::string, int>(_probe_name[i], i));
         if (size == _probe_name_map.size()) LOGGER.e(0, "duplicated probe names found: \"" + _probe_name[i] + "\".");
         size = _probe_name_map.size();
     }
 }
 
-void gcta::std_probe(vector< vector<bool> > &X_bool, bool divid_by_std)
+void gcta::std_probe(std::vector< std::vector<bool> > &X_bool, bool divid_by_std)
 {
     eigenMatrix X(_probe_data);
     _probe_data.resize(_keep.size(), _e_include.size());
@@ -126,7 +126,7 @@ void gcta::std_probe(vector< vector<bool> > &X_bool, bool divid_by_std)
     }
 }
 
-void gcta::std_probe_ind(vector< vector<bool> > &X_bool, bool divid_by_std)
+void gcta::std_probe_ind(std::vector< std::vector<bool> > &X_bool, bool divid_by_std)
 {
      int i = 0, j = 0, n = _keep.size(), m = _e_include.size();
     eigenMatrix X(_probe_data);
@@ -183,9 +183,9 @@ void gcta::make_erm(int erm_mtd, bool output_bin)
 {
     int i = 0, j = 0, k = 0, n = _keep.size(), m = _e_include.size();
     
-    LOGGER << "Recoding gene expression / methylation data ..." << endl;
+    LOGGER << "Recoding gene expression / methylation data ..." << std::endl;
     bool divid_by_std = false;
-    vector< vector<bool> > X_bool;
+    std::vector< std::vector<bool> > X_bool;
     if(erm_mtd < 2){
         if(erm_mtd == 0) divid_by_std = true;
         else if(erm_mtd == 1) divid_by_std = false;
@@ -193,10 +193,10 @@ void gcta::make_erm(int erm_mtd, bool output_bin)
     }
     else std_probe_ind(X_bool, false);
 
-    LOGGER << "\nCalculating expression relationship matrix (ERM) ... " << endl;
+    LOGGER << "\nCalculating expression relationship matrix (ERM) ... " << std::endl;
 
     // count the number of missing genotypes
-    vector< vector<int> > miss_pos(n);
+    std::vector< std::vector<int> > miss_pos(n);
     for (i = 0; i < n; i++) {
         for (j = 0; j < m; j++) {
             if (X_bool[i][j] == false) miss_pos[i].push_back(j);
@@ -281,7 +281,7 @@ void gcta::make_erm(int erm_mtd, bool output_bin)
     _grm = _grm.array() / _grm.diagonal().mean();
 
     // Output A_N and A
-    string out_buf = _out;
+    std::string out_buf = _out;
     _out += ".E";
     output_grm(output_bin);
     _out = out_buf;
