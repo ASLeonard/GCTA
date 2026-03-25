@@ -1,4 +1,4 @@
-CMAKE_MINIMUM_REQUIRED(VERSION 3.16)
+CMAKE_MINIMUM_REQUIRED(VERSION 4.0)
 
 project(GCTA2 LANGUAGES C CXX)
 
@@ -129,9 +129,38 @@ target_include_directories(sqlite3 PUBLIC ${sqlite_SOURCE_DIR})
 
 find_package(Threads REQUIRED)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(HTSLIB REQUIRED IMPORTED_TARGET htslib)
-message(STATUS "htslib found: ${HTSLIB_VERSION}")
+# htslib uses autotools, not CMake — build it with ExternalProject.
+include(ExternalProject)
+set(HTSLIB_INSTALL_DIR "${CMAKE_BINARY_DIR}/htslib-install")
+file(MAKE_DIRECTORY "${HTSLIB_INSTALL_DIR}/include")
+ExternalProject_Add(
+    htslib_build
+    URL "https://github.com/samtools/htslib/releases/download/1.23.1/htslib-1.23.1.tar.bz2"
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_DIR  "${CMAKE_BINARY_DIR}/htslib-src"
+    BINARY_DIR  "${CMAKE_BINARY_DIR}/htslib-build"
+    INSTALL_DIR "${HTSLIB_INSTALL_DIR}"
+    CONFIGURE_COMMAND
+        "${CMAKE_BINARY_DIR}/htslib-src/configure"
+        "--prefix=${HTSLIB_INSTALL_DIR}"
+        "--enable-static"
+        "--disable-shared"
+        "--disable-libcurl"
+        "CC=${CMAKE_C_COMPILER}"
+    BUILD_COMMAND   $(MAKE) lib-static
+    INSTALL_COMMAND $(MAKE) install
+    BUILD_IN_SOURCE FALSE
+    BUILD_BYPRODUCTS "${HTSLIB_INSTALL_DIR}/lib/libhts.a"
+    LOG_CONFIGURE TRUE
+    LOG_BUILD     TRUE
+    LOG_INSTALL   TRUE)
+
+add_library(htslib STATIC IMPORTED GLOBAL)
+add_dependencies(htslib htslib_build)
+set_target_properties(htslib PROPERTIES
+    IMPORTED_LOCATION             "${HTSLIB_INSTALL_DIR}/lib/libhts.a"
+    INTERFACE_INCLUDE_DIRECTORIES "${HTSLIB_INSTALL_DIR}/include")
+message(STATUS "htslib will be built from source")
 
 if(NOT WIN32)
     # NOTE: Install gsl with your system package manager
@@ -224,9 +253,22 @@ message(STATUS "BLAS/LAPACK provider: ${GCTA_BLAS_PROVIDER}")
 set(COMMON_INCLUDES ${CMAKE_SOURCE_DIR}/include)
 set(MAIN_SOURCE "${CMAKE_SOURCE_DIR}/src/main.cpp")
 
-file(GLOB SRCS "${CMAKE_SOURCE_DIR}/src/*.cpp")
-list(REMOVE_ITEM SRCS "${MAIN_SOURCE}")
-list(APPEND SRCS "${CMAKE_SOURCE_DIR}/src/acat.c")
+set(SRCS
+    ${CMAKE_SOURCE_DIR}/src/Covar.cpp
+    ${CMAKE_SOURCE_DIR}/src/FastFAM.cpp
+    ${CMAKE_SOURCE_DIR}/src/GRM.cpp
+    ${CMAKE_SOURCE_DIR}/src/Geno.cpp
+    ${CMAKE_SOURCE_DIR}/src/LD.cpp
+    ${CMAKE_SOURCE_DIR}/src/Logger.cpp
+    ${CMAKE_SOURCE_DIR}/src/Marker.cpp
+    ${CMAKE_SOURCE_DIR}/src/OptionIO.cpp
+    ${CMAKE_SOURCE_DIR}/src/Pheno.cpp
+    ${CMAKE_SOURCE_DIR}/src/StatLib.cpp
+    ${CMAKE_SOURCE_DIR}/src/ThreadPool.cpp
+    ${CMAKE_SOURCE_DIR}/src/mem.cpp
+    ${CMAKE_SOURCE_DIR}/src/tables.cpp
+    ${CMAKE_SOURCE_DIR}/src/utils.cpp
+    ${CMAKE_SOURCE_DIR}/src/acat.c)
 
 set(GCTA_LIBS "")
 foreach(lib_src ${SRCS})
@@ -252,9 +294,34 @@ endforeach(lib_src)
 
 add_executable(gcta64 ${MAIN_SOURCE})
 
-add_subdirectory(main)
+add_library(mainV1
+    main/CommFunc.cpp
+    main/StatFunc.cpp
+    main/StrFunc.cpp
+    main/bivar_reml.cpp
+    main/data.cpp
+    main/edata.cpp
+    main/eigen_func.cpp
+    main/ejma.cpp
+    main/est_hsq.cpp
+    main/gbat.cpp
+    main/grm.cpp
+    main/gsmr.cpp
+    main/gwas_simu.cpp
+    main/joint_meta.cpp
+    main/ld.cpp
+    main/mbat.cpp
+    main/mkl.cpp
+    main/mlm_assoc.cpp
+    main/mtcojo.cpp
+    main/option.cpp
+    main/pc_adjust.cpp
+    main/popu_genet.cpp
+    main/raw_geno.cpp
+    main/reml_within_family.cpp
+    main/sbat.cpp)
 target_include_directories(mainV1 PUBLIC ${COMMON_INCLUDES} ${GCTA_BLAS_INCLUDE_DIRS})
-target_link_libraries(mainV1 Eigen3::Eigen Boost::math Boost::iostreams PkgConfig::HTSLIB)
+target_link_libraries(mainV1 Eigen3::Eigen Boost::math Boost::iostreams htslib)
 
 set(GCTA_TARGETS gcta64 mainV1 ${GCTA_LIBS})
 
@@ -296,7 +363,29 @@ foreach(target IN LISTS GCTA_TARGETS)
     target_link_libraries(${target} OpenMP::OpenMP_CXX)
 endforeach()
 
-add_subdirectory(third_party)
+add_library(Pgenlib
+    third_party/Pgenlib/PgenReader.cpp
+    third_party/plink-ng/2.0/include/pgenlib_ffi_support.cc
+    third_party/plink-ng/2.0/include/pgenlib_misc.cc
+    third_party/plink-ng/2.0/include/pgenlib_read.cc
+    third_party/plink-ng/2.0/include/pgenlib_write.cc
+    third_party/plink-ng/2.0/include/plink2_base.cc
+    third_party/plink-ng/2.0/include/plink2_bgzf.cc
+    third_party/plink-ng/2.0/include/plink2_bitmap.cc
+    third_party/plink-ng/2.0/include/plink2_bits.cc
+    third_party/plink-ng/2.0/include/plink2_fmath.cc
+    third_party/plink-ng/2.0/include/plink2_htable.cc
+    third_party/plink-ng/2.0/include/plink2_memory.cc
+    third_party/plink-ng/2.0/include/plink2_stats.cc
+    third_party/plink-ng/2.0/include/plink2_string.cc
+    third_party/plink-ng/2.0/include/plink2_text.cc
+    third_party/plink-ng/2.0/include/plink2_thread.cc
+    third_party/plink-ng/2.0/include/plink2_zstfile.cc
+    third_party/plink-ng/2.0/include/pvar_ffi_support.cc)
+target_include_directories(Pgenlib PUBLIC "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include")
+if(NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    target_compile_options(Pgenlib PRIVATE -mavx2 -mbmi -mbmi2 -mlzcnt)
+endif()
 
 target_include_directories(gcta64 PRIVATE
     ${COMMON_INCLUDES}
@@ -398,3 +487,8 @@ if(NOT WIN32)
 endif()
 message(STATUS "==========================================")
 message(STATUS "")
+
+set_property(DIRECTORY PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/src"
+    "${CMAKE_SOURCE_DIR}/main"
+    "${CMAKE_SOURCE_DIR}/third_party/Pgenlib")
