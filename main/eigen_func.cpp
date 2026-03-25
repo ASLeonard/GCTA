@@ -17,11 +17,10 @@ void eigen_func::rank(Eigen::VectorXf &x, Eigen::VectorXf &rank)
 
     int i = 0;
     rank.resize(size);
-    std::vector<float> x_sort(size);
-    for(i = 0; i < size; i++) x_sort[i] = x[i];
+    std::vector<float> x_sort(x.begin(), x.end());
     std::stable_sort(x_sort.begin(), x_sort.end());
     std::map<double, int> value_indx;
-    for(i = 0; i < size; i++) value_indx.insert(std::pair<double,int>(x_sort[i], i+1));
+    for(i = 0; i < size; i++) value_indx.emplace(x_sort[i], i+1);
     for(i = 0; i < size; i++){
         auto iter = value_indx.find(x[i]);
         rank[i] = iter->second;
