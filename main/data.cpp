@@ -15,6 +15,8 @@
 #include <set>
 #include <fstream>
 #include <limits>
+#include <htslib/vcf.h>
+#include <htslib/hts.h>
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
 #include "gcta.h"
@@ -2401,4 +2403,375 @@ bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bo
     }
 
     return true;
+}
+
+// ─── VCF/BCF helper ───────────────────────────────────────────────────────────
+// Convert a VCF chromosome name (e.g. "chr1", "X") to an integer as used in
+// GCTA's _chr vector.  Returns 0 for unrecognised strings.
+static int vcf_chr_to_int(const char* chrom) {
+    if (strncmp(chrom, "chr", 3) == 0) chrom += 3;
+    if (strcmp(chrom, "X")  == 0) return 23;
+    if (strcmp(chrom, "Y")  == 0) return 24;
+    if (strcmp(chrom, "XY") == 0) return 25;
+    if (strcmp(chrom, "MT") == 0 || strcmp(chrom, "M") == 0) return 26;
+    int v = std::atoi(chrom);
+    return (v > 0) ? v : 0;
+}
+
+// ─── read_vcf_file ────────────────────────────────────────────────────────────
+// Reads a VCF/BCF file (optionally restricted to a region) and populates the
+// _snp_1 / _snp_2 bit-packed genotype arrays used by the analysis functions.
+//
+// Genotype encoding (matches read_bedfile / makex conventions):
+//   HomREF  : snp_2=true,  snp_1=true   → allele count = 2
+//   Het     : snp_2=true,  snp_1=false  → allele count = 1
+//   HomALT  : snp_2=false, snp_1=false  → allele count = 0
+//   Missing : snp_2=false, snp_1=true   → imputed from _mu by downstream code
+//
+// Prerequisites: none (samples and variants are inferred from the VCF header
+// and records; no prior read_famfile / read_bimfile needed).
+//
+// If region is non-empty the file must be indexed (.csi or .tbi); an absent
+// index is a hard error.
+void gcta::read_vcf_file(std::string vcffile, std::string region)
+{
+    int i = 0, j = 0;
+    LOGGER << "Reading VCF/BCF file from [" + vcffile + "] ..." << std::endl;
+
+    // ── Open file and read header ─────────────────────────────────────────────
+    htsFile*   fp  = bcf_open(vcffile.c_str(), "r");
+    if (!fp) LOGGER.e(0, "cannot open the file [" + vcffile + "] to read.");
+    bcf_hdr_t* hdr = bcf_hdr_read(fp);
+    if (!hdr) { bcf_close(fp); LOGGER.e(0, "cannot read VCF/BCF header from [" + vcffile + "]."); }
+
+    // ── Populate sample information from VCF header ───────────────────────────
+    int nsamples = bcf_hdr_nsamples(hdr);
+    _indi_num = nsamples;
+    _fid.assign(nsamples, "");
+    _pid.assign(nsamples, "");
+    _fa_id.assign(nsamples, "0");
+    _mo_id.assign(nsamples, "0");
+    _sex.assign(nsamples, 0);
+    _pheno.assign(nsamples, -9.0);
+    for (i = 0; i < nsamples; i++) {
+        _fid[i] = hdr->samples[i];
+        _pid[i] = hdr->samples[i];
+    }
+    LOGGER << nsamples << " samples found in VCF/BCF header." << std::endl;
+    init_keep();
+
+    // ── Load index if a region was requested ──────────────────────────────────
+    hts_idx_t* idx = nullptr;
+    if (!region.empty()) {
+        idx = bcf_index_load(vcffile.c_str());
+        if (!idx) {
+            bcf_hdr_destroy(hdr);
+            bcf_close(fp);
+            LOGGER.e(0, "--vcf-region requires an index (.csi or .tbi) for [" + vcffile +
+                     "]. Create one with: bcftools index " + vcffile);
+        }
+    }
+
+    // ── Pass 1: iterate records and build the SNP list ────────────────────────
+    _chr.clear(); _snp_name.clear(); _genet_dst.clear();
+    _bp.clear();  _allele1.clear();  _allele2.clear();
+    int n_multiallelic = 0;
+    bcf1_t* rec = bcf_init();
+
+    {
+        hts_itr_t* itr = nullptr;
+        if (idx) {
+            itr = bcf_itr_querys(idx, hdr, region.c_str());
+            if (!itr) {
+                bcf_destroy(rec);
+                hts_idx_destroy(idx);
+                bcf_hdr_destroy(hdr);
+                bcf_close(fp);
+                LOGGER.e(0, "failed to query region [" + region + "] in [" + vcffile +
+                         "]. Check that the region string matches the chromosome naming in the file.");
+            }
+        }
+        while (itr ? (bcf_itr_next(fp, itr, rec) >= 0) : (bcf_read(fp, hdr, rec) >= 0)) {
+            bcf_unpack(rec, BCF_UN_STR);
+            if (rec->n_allele != 2) { ++n_multiallelic; continue; }
+            const char* chrom = bcf_hdr_id2name(hdr, rec->rid);
+            _chr.push_back(vcf_chr_to_int(chrom));
+            std::string snpid;
+            if (rec->d.id && strcmp(rec->d.id, ".") != 0)
+                snpid = rec->d.id;
+            else
+                snpid = std::string(chrom) + ":" + std::to_string(rec->pos + 1) +
+                        ":" + rec->d.allele[0] + ":" + rec->d.allele[1];
+            _snp_name.push_back(snpid);
+            _genet_dst.push_back(0.0);
+            _bp.push_back(rec->pos + 1);
+            _allele1.push_back(rec->d.allele[0]);
+            _allele2.push_back(rec->d.allele[1]);
+        }
+        if (itr) hts_itr_destroy(itr);
+    }
+
+    if (n_multiallelic > 0)
+        LOGGER << "Warning: " << n_multiallelic
+               << " multiallelic variant(s) skipped (only biallelic sites supported)." << std::endl;
+
+    _snp_num = static_cast<int>(_chr.size());
+    _ref_A   = _allele1;
+    _other_A = _allele2;
+    LOGGER << _snp_num << " biallelic SNPs found in [" + vcffile + "]." << std::endl;
+    init_include();
+
+    // ── Initialise genotype storage (all samples × all SNPs) ─────────────────
+    _snp_1.assign(_snp_num, std::vector<bool>(nsamples, false));
+    _snp_2.assign(_snp_num, std::vector<bool>(nsamples, false));
+
+    // ── Pass 2: reopen file and fill genotype arrays ──────────────────────────
+    bcf_hdr_destroy(hdr);
+    bcf_close(fp);
+    fp = bcf_open(vcffile.c_str(), "r");
+    if (!fp) {
+        bcf_destroy(rec);
+        if (idx) hts_idx_destroy(idx);
+        LOGGER.e(0, "cannot reopen [" + vcffile + "] for genotype pass.");
+    }
+    hdr = bcf_hdr_read(fp);
+
+    int32_t* gt_arr   = nullptr;
+    int      n_gt_arr = 0;
+    int      snp_indx = 0;
+    {
+        hts_itr_t* itr = nullptr;
+        if (idx) itr = bcf_itr_querys(idx, hdr, region.c_str());
+        while (itr ? (bcf_itr_next(fp, itr, rec) >= 0) : (bcf_read(fp, hdr, rec) >= 0)) {
+            bcf_unpack(rec, BCF_UN_STR);
+            if (rec->n_allele != 2) continue; // skip same multiallelic sites as pass 1
+            int ret = bcf_get_genotypes(hdr, rec, &gt_arr, &n_gt_arr);
+            if (ret <= 0) { snp_indx++; continue; } // no GT field
+            int ploidy = ret / nsamples;
+            for (i = 0; i < nsamples; i++) {
+                bool is_missing = false;
+                int  ref_count  = 0;
+                for (int p = 0; p < ploidy; p++) {
+                    int32_t g = gt_arr[i * ploidy + p];
+                    if (bcf_gt_is_missing(g) || g == bcf_int32_vector_end) {
+                        is_missing = true; break;
+                    }
+                    if (bcf_gt_allele(g) == 0) ref_count++;
+                }
+                // Encoding: HomREF=(1,1) Het=(1,0) HomALT=(0,0) Missing=(0,1)
+                _snp_2[snp_indx][i] = !is_missing && (ref_count >= 1);
+                _snp_1[snp_indx][i] = is_missing  || (ref_count == ploidy);
+            }
+            snp_indx++;
+        }
+        if (itr) hts_itr_destroy(itr);
+    }
+
+    if (gt_arr) free(gt_arr);
+    bcf_destroy(rec);
+    bcf_hdr_destroy(hdr);
+    bcf_close(fp);
+    if (idx) hts_idx_destroy(idx);
+
+    LOGGER << "Genotype data for " << nsamples << " individuals and " << _snp_num
+           << " SNPs loaded from [" + vcffile + "]." << std::endl;
+}
+
+// ─── read_vcf_dosage ──────────────────────────────────────────────────────────
+// Reads a VCF/BCF file (optionally restricted to a region) and populates the
+// _geno_dose matrix with dosage values, following the same conventions as
+// read_bed_dosage.  Sets _dosage_flag = true.
+//
+// Dosage calculation depends on _genetic_model:
+//   Additive    : HomREF=0, Het=1, HomALT=2
+//   Nonadditive : HomREF=0, Het=2p, HomALT=4p-2  (p = ref allele frequency)
+// Missing genotypes are set to DOSAGE_NA (infinity).
+void gcta::read_vcf_dosage(std::string vcffile, std::string region)
+{
+    int i = 0, j = 0;
+    LOGGER << "Reading VCF/BCF file (dosage mode) from [" + vcffile + "] ..." << std::endl;
+
+    // ── Open file and read header ─────────────────────────────────────────────
+    htsFile*   fp  = bcf_open(vcffile.c_str(), "r");
+    if (!fp) LOGGER.e(0, "cannot open the file [" + vcffile + "] to read.");
+    bcf_hdr_t* hdr = bcf_hdr_read(fp);
+    if (!hdr) { bcf_close(fp); LOGGER.e(0, "cannot read VCF/BCF header from [" + vcffile + "]."); }
+
+    // ── Populate sample information from VCF header ───────────────────────────
+    int nsamples = bcf_hdr_nsamples(hdr);
+    _indi_num = nsamples;
+    _fid.assign(nsamples, "");
+    _pid.assign(nsamples, "");
+    _fa_id.assign(nsamples, "0");
+    _mo_id.assign(nsamples, "0");
+    _sex.assign(nsamples, 0);
+    _pheno.assign(nsamples, -9.0);
+    for (i = 0; i < nsamples; i++) {
+        _fid[i] = hdr->samples[i];
+        _pid[i] = hdr->samples[i];
+    }
+    LOGGER << nsamples << " samples found in VCF/BCF header." << std::endl;
+    init_keep();
+    _dosage_flag = true;
+
+    // ── Load index if a region was requested ──────────────────────────────────
+    hts_idx_t* idx = nullptr;
+    if (!region.empty()) {
+        idx = bcf_index_load(vcffile.c_str());
+        if (!idx) {
+            bcf_hdr_destroy(hdr);
+            bcf_close(fp);
+            LOGGER.e(0, "--vcf-region requires an index (.csi or .tbi) for [" + vcffile +
+                     "]. Create one with: bcftools index " + vcffile);
+        }
+    }
+
+    // ── Pass 1: build SNP list and compute allele frequencies ─────────────────
+    _chr.clear(); _snp_name.clear(); _genet_dst.clear();
+    _bp.clear();  _allele1.clear();  _allele2.clear();
+    int n_multiallelic = 0;
+    bcf1_t* rec = bcf_init();
+
+    // _mu is sized to _snp_num and indexed by raw SNP index (like read_bed_dosage)
+    std::vector<double> mu_buf; // temporary, moved to _mu after pass 1
+
+    {
+        int32_t* gt_arr   = nullptr;
+        int      n_gt_arr = 0;
+        hts_itr_t* itr = nullptr;
+        if (idx) {
+            itr = bcf_itr_querys(idx, hdr, region.c_str());
+            if (!itr) {
+                if (gt_arr) free(gt_arr);
+                bcf_destroy(rec);
+                hts_idx_destroy(idx);
+                bcf_hdr_destroy(hdr);
+                bcf_close(fp);
+                LOGGER.e(0, "failed to query region [" + region + "] in [" + vcffile + "].");
+            }
+        }
+        while (itr ? (bcf_itr_next(fp, itr, rec) >= 0) : (bcf_read(fp, hdr, rec) >= 0)) {
+            bcf_unpack(rec, BCF_UN_STR);
+            if (rec->n_allele != 2) { ++n_multiallelic; continue; }
+            const char* chrom = bcf_hdr_id2name(hdr, rec->rid);
+            _chr.push_back(vcf_chr_to_int(chrom));
+            std::string snpid;
+            if (rec->d.id && strcmp(rec->d.id, ".") != 0)
+                snpid = rec->d.id;
+            else
+                snpid = std::string(chrom) + ":" + std::to_string(rec->pos + 1) +
+                        ":" + rec->d.allele[0] + ":" + rec->d.allele[1];
+            _snp_name.push_back(snpid);
+            _genet_dst.push_back(0.0);
+            _bp.push_back(rec->pos + 1);
+            _allele1.push_back(rec->d.allele[0]);
+            _allele2.push_back(rec->d.allele[1]);
+
+            // Compute mean ref allele count for this SNP
+            int ret = bcf_get_genotypes(hdr, rec, &gt_arr, &n_gt_arr);
+            double allele_count = 0.0;
+            int    valid_count  = 0;
+            if (ret > 0) {
+                int ploidy = ret / nsamples;
+                for (i = 0; i < nsamples; i++) {
+                    bool missing = false;
+                    int  rcnt    = 0;
+                    for (int p = 0; p < ploidy; p++) {
+                        int32_t g = gt_arr[i * ploidy + p];
+                        if (bcf_gt_is_missing(g) || g == bcf_int32_vector_end) { missing = true; break; }
+                        if (bcf_gt_allele(g) == 0) rcnt++;
+                    }
+                    if (!missing) { allele_count += rcnt; valid_count++; }
+                }
+            }
+            mu_buf.push_back(valid_count > 0 ? allele_count / valid_count : 0.0);
+        }
+        if (itr) hts_itr_destroy(itr);
+        if (gt_arr) free(gt_arr);
+    }
+
+    if (n_multiallelic > 0)
+        LOGGER << "Warning: " << n_multiallelic
+               << " multiallelic variant(s) skipped (only biallelic sites supported)." << std::endl;
+
+    _snp_num = static_cast<int>(_chr.size());
+    _ref_A   = _allele1;
+    _other_A = _allele2;
+    LOGGER << _snp_num << " biallelic SNPs found in [" + vcffile + "]." << std::endl;
+    init_include();
+
+    _mu.resize(_snp_num);
+    for (j = 0; j < _snp_num; j++) _mu[j] = mu_buf[j];
+    LOGGER << "Allele frequencies calculated from genotype data." << std::endl;
+
+    // ── Initialise dosage matrix (all samples × all SNPs) ─────────────────────
+    _geno_dose.resize(nsamples);
+    for (i = 0; i < nsamples; i++) _geno_dose[i].resize(_snp_num);
+
+    // ── Pass 2: reopen file and fill dosage matrix ────────────────────────────
+    bcf_hdr_destroy(hdr);
+    bcf_close(fp);
+    fp = bcf_open(vcffile.c_str(), "r");
+    if (!fp) {
+        bcf_destroy(rec);
+        if (idx) hts_idx_destroy(idx);
+        LOGGER.e(0, "cannot reopen [" + vcffile + "] for dosage pass.");
+    }
+    hdr = bcf_hdr_read(fp);
+
+    int32_t* gt_arr   = nullptr;
+    int      n_gt_arr = 0;
+    int      snp_indx = 0;
+    {
+        hts_itr_t* itr = nullptr;
+        if (idx) itr = bcf_itr_querys(idx, hdr, region.c_str());
+        while (itr ? (bcf_itr_next(fp, itr, rec) >= 0) : (bcf_read(fp, hdr, rec) >= 0)) {
+            bcf_unpack(rec, BCF_UN_STR);
+            if (rec->n_allele != 2) continue;
+            double p = _mu[snp_indx] / 2.0; // ref allele frequency
+            int ret = bcf_get_genotypes(hdr, rec, &gt_arr, &n_gt_arr);
+            if (ret <= 0) {
+                for (i = 0; i < nsamples; i++) _geno_dose[i][snp_indx] = DOSAGE_NA;
+                snp_indx++; continue;
+            }
+            int ploidy = ret / nsamples;
+            for (i = 0; i < nsamples; i++) {
+                bool is_missing = false;
+                int  ref_count  = 0;
+                for (int pp = 0; pp < ploidy; pp++) {
+                    int32_t g = gt_arr[i * ploidy + pp];
+                    if (bcf_gt_is_missing(g) || g == bcf_int32_vector_end) { is_missing = true; break; }
+                    if (bcf_gt_allele(g) == 0) ref_count++;
+                }
+                if (is_missing) {
+                    _geno_dose[i][snp_indx] = DOSAGE_NA;
+                    continue;
+                }
+                float dosage = 0.0f;
+                switch (_genetic_model) {
+                    case GeneticModel::ADDITIVE:
+                        dosage = static_cast<float>(ref_count);
+                        break;
+                    case GeneticModel::NONADDITIVE:
+                        if      (ref_count == ploidy) dosage = 0.0f;
+                        else if (ref_count == 0)      dosage = static_cast<float>(4.0 * p - 2.0);
+                        else                          dosage = static_cast<float>(2.0 * p);
+                        break;
+                }
+                _geno_dose[i][snp_indx] = dosage;
+            }
+            snp_indx++;
+        }
+        if (itr) hts_itr_destroy(itr);
+    }
+
+    if (gt_arr) free(gt_arr);
+    bcf_destroy(rec);
+    bcf_hdr_destroy(hdr);
+    bcf_close(fp);
+    if (idx) hts_idx_destroy(idx);
+
+    LOGGER << "Dosage data for " << nsamples << " individuals and " << _snp_num
+           << " SNPs loaded from [" + vcffile + "] using "
+           << geneticModelToString(_genetic_model) << " model." << std::endl;
 }

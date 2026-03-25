@@ -129,6 +129,10 @@ target_include_directories(sqlite3 PUBLIC ${sqlite_SOURCE_DIR})
 
 find_package(Threads REQUIRED)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(HTSLIB REQUIRED IMPORTED_TARGET htslib)
+message(STATUS "htslib found: ${HTSLIB_VERSION}")
+
 if(NOT WIN32)
     # NOTE: Install gsl with your system package manager
     find_package(GSL REQUIRED)
@@ -250,7 +254,7 @@ add_executable(gcta64 ${MAIN_SOURCE})
 
 add_subdirectory(main)
 target_include_directories(mainV1 PUBLIC ${COMMON_INCLUDES} ${GCTA_BLAS_INCLUDE_DIRS})
-target_link_libraries(mainV1 Eigen3::Eigen Boost::math Boost::iostreams)
+target_link_libraries(mainV1 Eigen3::Eigen Boost::math Boost::iostreams PkgConfig::HTSLIB)
 
 set(GCTA_TARGETS gcta64 mainV1 ${GCTA_LIBS})
 

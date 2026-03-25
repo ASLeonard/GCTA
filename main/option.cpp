@@ -72,6 +72,10 @@ void option(int option_num, char* option_str[])
 
     // data management
     std::string bfile = "", bfile2 = "", bfile_list = "", update_sex_file = "", update_freq_file = "", update_refA_file = "", kp_indi_file = "", rm_indi_file = "", extract_snp_file = "", exclude_snp_file = "", extract_snp_name = "", exclude_snp_name = "", out = "gcta";
+    // VCF/BCF input
+    std::string vcf_file = "";
+    bool vcf_flag = false;
+    std::string vcf_region = ""; // htslib region string, e.g. "chr1:1000000-2000000"
     bool SNP_major = false, make_bed_flag = false, dose_mach_flag = false, dose_mach_gz_flag = false, dose_beagle_flag = false, bfile2_flag = false, out_freq_flag = false, out_ssq_flag = false;
     bool ref_A = false, recode = false, recode_nomiss = false, recode_std = false, save_ram = false, autosome_flag = false;
     int bfile_flag = 0, autosome_num = 22, extract_chr_start = 0, extract_chr_end = 0, extract_region_chr = 0, extract_region_bp = 0, extract_region_wind = 0, exclude_region_chr = 0, exclude_region_bp = 0, exclude_region_wind = 0;
@@ -275,6 +279,13 @@ void option(int option_num, char* option_str[])
         } else if (flag == "--make-bed") {
             make_bed_flag = true;
             LOGGER << "--make-bed " << endl;
+        } else if (flag == "--vcf-file") {
+            vcf_flag = true;
+            vcf_file = argv[++i];
+            LOGGER << "--vcf-file " << argv[i] << std::endl;
+        } else if (flag == "--vcf-region") {
+            vcf_region = argv[++i];
+            LOGGER << "--vcf-region " << argv[i] << std::endl;
         } else if (flag == "--bfile2") {
             bfile2_flag = true;
             bfile2 = argv[++i];
@@ -1268,6 +1279,8 @@ void option(int option_num, char* option_str[])
 
     // conflicted options
     LOGGER << std::endl;
+    if (!vcf_region.empty() && !vcf_flag) LOGGER.e(0, "--vcf-region requires --vcf-file.");
+    if (vcf_flag && bfile_flag) LOGGER.e(0, "--vcf-file and --bfile cannot be used together.");
     if (bfile2_flag && !bfile_flag) LOGGER.e(0, "the option --bfile2 should always go with the option --bfile.");
     if(bfile_flag && grm_cutoff>-1.0) LOGGER.e(0, "the --grm-cutoff option is invalid when used in combination with the --bfile option.");
     if (m_grm_flag) {
@@ -1395,6 +1408,42 @@ void option(int option_num, char* option_str[])
     else if(eR_file_flag){
         pter_gcta->read_eR(eR_file);
         pter_gcta->run_ecojo_blup_eR(ecojo_ma_file, ecojo_lambda);
+    }
+    else if (vcf_flag) {
+        // Read VCF/BCF: samples and variants are inferred from the file itself.
+        // Genotype storage and SNP filters are applied after loading.
+        if (!genetic_model.empty())
+            pter_gcta->read_vcf_dosage(vcf_file, vcf_region);
+        else
+            pter_gcta->read_vcf_file(vcf_file, vcf_region);
+        if (!kp_indi_file.empty()) pter_gcta->keep_indi(kp_indi_file);
+        if (!rm_indi_file.empty()) pter_gcta->remove_indi(rm_indi_file);
+        if (!update_sex_file.empty()) pter_gcta->update_sex(update_sex_file);
+        if (!extract_snp_file.empty()) pter_gcta->extract_snp(extract_snp_file);
+        if (extract_chr_start > 0) pter_gcta->extract_chr(extract_chr_start, extract_chr_end);
+        if (extract_region_chr > 0) pter_gcta->extract_region_bp(extract_region_chr, extract_region_bp, extract_region_wind);
+        if (!extract_snp_name.empty()) {
+            if (extract_region_wind > 0) pter_gcta->extract_region_snp(extract_snp_name, extract_region_wind);
+            else pter_gcta->extract_single_snp(extract_snp_name);
+        }
+        if (!exclude_snp_file.empty()) pter_gcta->exclude_snp(exclude_snp_file);
+        if (exclude_region_chr > 0) pter_gcta->exclude_region_bp(exclude_region_chr, exclude_region_bp, exclude_region_wind);
+        if (!exclude_snp_name.empty()) {
+            if (exclude_region_wind > 0) pter_gcta->exclude_region_snp(exclude_snp_name, exclude_region_wind);
+            else pter_gcta->exclude_single_snp(exclude_snp_name);
+        }
+        if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
+        if (maf > 0) pter_gcta->filter_snp_maf(maf);
+        if (max_maf > 0.0) pter_gcta->filter_snp_max_maf(max_maf);
+        if (out_freq_flag) pter_gcta->save_freq(out_ssq_flag);
+        else if (make_grm_flag) pter_gcta->make_grm(dominance_flag, make_grm_xchar_flag, make_grm_inbred_flag, grm_out_bin_flag, make_grm_mtd, false, make_grm_f3_flag, subpopu_file);
+        else if (recode || recode_nomiss || recode_std) pter_gcta->save_XMat(recode_nomiss, recode_std);
+        else if (blup_snp_flag) {
+            if (!genetic_model.empty()) pter_gcta->blup_snp_dosage();
+            else pter_gcta->blup_snp_geno();
+        }
+        else if (mlma_flag) pter_gcta->mlma(grm_file, m_grm_flag, subtract_grm_file, phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, within_family, make_grm_inbred_flag, mlma_no_adj_covar, weight_file, save_reml_file, load_reml_file);
+        else if (mlma_loco_flag) pter_gcta->mlma_loco(phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, make_grm_inbred_flag, mlma_no_adj_covar);
     }
     else if (bfile_flag) {
         if (hapmap_genet_dst) pter_gcta->genet_dst(bfile, hapmap_genet_dst_file);

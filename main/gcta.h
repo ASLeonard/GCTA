@@ -97,6 +97,8 @@ public:
     void read_multi_famfiles(std::vector<std::string> multi_bfiles);
     void read_multi_bimfiles(std::vector<std::string> multi_bfiles);
     void read_multi_bedfiles(std::vector<std::string> multi_bfiles);
+    void read_vcf_file(std::string vcffile, std::string region = "");   // Read VCF/BCF into _snp_1/_snp_2
+    void read_vcf_dosage(std::string vcffile, std::string region = ""); // Read VCF/BCF into _geno_dose
     void read_imp_info_mach_gz(std::string zinfofile);
     void read_imp_info_mach(std::string infofile);
     void read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file, std::string rm_indi_file, std::string blup_indi_file);
