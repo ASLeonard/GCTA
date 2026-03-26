@@ -1104,8 +1104,6 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
             LOGGER << std::endl;
         }
         //LOGGER << "Iter " << iter << std::endl;
-        float time_vi = 0;
-        LOGGER.ts("DBGtime");
         if (_bivar_reml) calcu_Vi_bivar(_Vi, prev_varcmp, logdet, iter); // Calculate Vi, bivariate analysis //very slow
         else if (_within_family) calcu_Vi_within_family(_Vi, prev_varcmp, logdet, iter); // within-family REML
         else {
@@ -1118,19 +1116,10 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
                 break;
             }
         }
-        time_vi = LOGGER.tp("DBGtime");
-        //LOGGER << "calcu_vi_bivar returned" << std::endl;
-        float time_p = 0;
-        LOGGER.ts("DBGtime");
-        logdet_Xt_Vi_X = calcu_P(_Vi, Vi_X, Xt_Vi_X_i, _P); // Calculate P  //quick
-        time_p = LOGGER.tp("DBGtime");
-        
-        float time_reml = 0;
-        LOGGER.ts("DBGtime");
+        logdet_Xt_Vi_X = calcu_P(_Vi, Vi_X, Xt_Vi_X_i, _P); // Calculate P
         if (_reml_mtd == 0) ai_reml(_P, Hi, Py, prev_varcmp, varcmp, dlogL);
         else if (_reml_mtd == 1) reml_equation(_P, Hi, Py, varcmp);
         else if (_reml_mtd == 2) em_reml(_P, Py, prev_varcmp, varcmp);  //slow ++
-        time_reml = LOGGER.tp("DBGtime");
         lgL = -0.5 * (logdet_Xt_Vi_X + logdet + (_y.transpose() * Py)(0, 0));
 
         if(_reml_force_converge && _reml_AI_not_invertible) break;
@@ -1154,7 +1143,7 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
         if (iter > 0) {
             LOGGER << iter << "\t" << std::fixed << LOGGER.setprecision(2) << lgL << "\t";
             for (i = 0; i < _r_indx.size(); i++) LOGGER << LOGGER.setprecision(5) << varcmp[i] << "\t";
-            //LOGGER << time_vi << "\t" << time_p << "\t" << time_reml << "\t";
+
             if (constrain_num > 0) LOGGER << "(" << constrain_num << " component(s) constrained)" << std::endl;
             else LOGGER << std::endl;
         } else {
@@ -1284,31 +1273,32 @@ void gcta::calcu_sum_hsq(double Vp, double VarVp, double &sum_hsq, double &var_s
 
 bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, int &iter)
 {
-    int i = 0, j = 0, k = 0;
-    std::string errmsg = "\n  the V (variance-covariance) matrix is not invertible.";
-
-    Vi = eigenMatrix::Zero(_n, _n);
+    Vi.resize(_n, _n);
     if (_r_indx.size() == 1) {
         Vi.diagonal() = eigenVector::Constant(_n, 1.0 / prev_varcmp[0]);
         logdet = _n * log(prev_varcmp[0]);
     } 
     else {
-        bool use_lu = false;
-        for (i = 0; i < _r_indx.size(); i++){
-            Vi += (_A[_r_indx[i]]) * prev_varcmp[i];
-            /*
-            if(prev_varcmp[i] < 0){
-                use_lu = true;
+
+        // Accumulate only the lower triangle of V = sum_i A_i * sigma_i^2.
+        // dpotrf reads only the lower triangle, so the upper never needs to be
+        // written during assembly.  Fusing all components into a single pass
+        // over each (j,k) pair halves memory traffic vs repeated full-matrix +=.
+        const int num_comp = _r_indx.size();
+
+        #pragma omp parallel for collapse(2) schedule(static)
+        for (int j = 0; j < _n; j++) {
+            for (int k = 0; k <= j; k++) {
+                double val = 0.0;
+                for (int ci = 0; ci < num_comp; ci++)
+                    val += (_A[_r_indx[ci]])(j, k) * prev_varcmp[ci];
+                Vi(j, k) = val;
+                Vi(k, j) = val;
             }
-            */
         }
 
-        INVmethod method_try;
-        if(_reml_inv_mtd == 0){
-            method_try = use_lu? INV_LU : INV_LLT;
-        }else{
-            method_try = static_cast<INVmethod>(_reml_inv_mtd);
-        }
+        constexpr bool use_lu = false;
+        INVmethod method_try = _reml_inv_mtd ? static_cast<INVmethod>(_reml_inv_mtd) : (use_lu ? INV_LU : INV_LLT);
             
         /*
         for(int i = 0; i < _r_indx.size(); i++){ 
@@ -1328,7 +1318,7 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
             if(_reml_diagV_adj == 1){
                 LOGGER<<"A small positive value is added to the diagonals. The results might not be reliable!"<<std::endl;
                 double d_buf = Vi.diagonal().mean() * _reml_diag_mul;
-                for(j = 0; j < _n ; j++) Vi(j,j) += d_buf;
+                for(int j = 0; j < _n ; j++) Vi(j,j) += d_buf;
                 if(!SquareMatrixInverse(Vi, logdet, rank, method_try)){
                     LOGGER << "Still can't be inverted. Try --reml-alg-inv 2 " << std::endl;
                     ret = false;  
@@ -1530,13 +1520,38 @@ bool gcta::inverse_H(eigenMatrix &H)
 
 double gcta::calcu_P(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatrix &P)
 {
-    Vi_X = Vi*_X;
-    Xt_Vi_X_i = _X.transpose() * Vi_X;
+    // Vi is symmetric; selfadjointView<Lower> routes to BLAS dsymm which reads only the
+    // lower triangle of the n×n matrix — halves memory bandwidth vs a general dgemm.
+    Vi_X.noalias() = Vi.selfadjointView<Eigen::Lower>() * _X;
+    Xt_Vi_X_i.noalias() = _X.transpose() * Vi_X;
+
     double logdet_Xt_Vi_X = 0.0;
-    int rank = 0; 
+    int rank = 0;
     INVmethod method = (_reml_inv_mtd == 0) ? INV_LLT : static_cast<INVmethod>(_reml_inv_mtd);
     if(!SquareMatrixInverse(Xt_Vi_X_i, logdet_Xt_Vi_X, rank, method)) LOGGER.e(0, "\n  the X^t * V^-1 * X matrix is not invertible. Please check the covariate(s) and/or the environmental factor(s).");
-    P = Vi - Vi_X * Xt_Vi_X_i * Vi_X.transpose();
+
+    // The correction Vi_X * Xt_Vi_X_i * Vi_X^T is symmetric PSD.
+    // Factor Xt_Vi_X_i = L L^T (c×c Cholesky, negligible cost since c is tiny).
+    // Then Vi_X * Xt_Vi_X_i * Vi_X^T = Z * Z^T where Z = Vi_X * L (n×c).
+    // selfadjointView::rankUpdate maps to BLAS dsyrk, computing only the lower
+    // triangle of the n×n update — halves flops vs a general dgemm.
+    Eigen::LLT<eigenMatrix> llt(Xt_Vi_X_i);
+    if(llt.info() == Eigen::Success) {
+        eigenMatrix Z;
+        Z.noalias() = Vi_X * llt.matrixL();
+        P.resize(_n, _n);
+        P.triangularView<Eigen::Lower>() = Vi.triangularView<Eigen::Lower>();
+        P.selfadjointView<Eigen::Lower>().rankUpdate(Z, static_cast<eigenMatrix::Scalar>(-1));
+        P.triangularView<Eigen::Upper>() = P.transpose();
+    } else {
+        // Rare fallback: Xt_Vi_X_i lost positive-definiteness after inversion (numerical
+        // edge case). Use general n×n products; noalias() avoids a defensive copy.
+        eigenMatrix W;
+        W.noalias() = Vi_X * Xt_Vi_X_i;
+        P = Vi;
+        P.noalias() -= W * Vi_X.transpose();
+    }
+
     return logdet_Xt_Vi_X;
 }
 
@@ -1690,8 +1705,6 @@ void gcta::calcu_tr_PA(eigenMatrix &P, eigenVector &tr_PA) {
 
     // Calculate trace(PA)
     tr_PA.resize(_r_indx.size());
-    //double d_bufs[_n];
-    double *d_bufs = new double[_n];
     for (int i = 0; i < _r_indx.size(); i++) {
         //LOGGER << "calcu_tr_PA " << i << std::endl;
         if (_bivar_reml || _within_family){
@@ -1714,20 +1727,16 @@ void gcta::calcu_tr_PA(eigenMatrix &P, eigenVector &tr_PA) {
             //temp.resize(0,0);
         }
         else {
-            double d_buf = 0.0;
-            memset(d_bufs, 0, _n * sizeof(double));
-            #pragma omp parallel for
-            for (int k = 0; k < _n; k++) {
-                for (int l = 0; l < _n; l++) d_bufs[k] += P(k, l)*(_A[_r_indx[i]])(k, l);
-            }
-            for(int k = 0; k < _n; k++){
-                d_buf += d_bufs[k];
-            }
-            tr_PA(i) = d_buf;
+            // tr(P * A) = sum of element-wise product P ⊙ A (both symmetric).
+            // Expressed as a flat dot product, which BLAS executes with SIMD.
+            int nn = _n * _n;
+#ifdef SINGLE_PRECISION
+            tr_PA(i) = cblas_sdot(nn, P.data(), 1, _A[_r_indx[i]].data(), 1);
+#else
+            tr_PA(i) = cblas_ddot(nn, P.data(), 1, _A[_r_indx[i]].data(), 1);
+#endif
         }
     }
-    delete[] d_bufs;
-
 }
 
 // blue estimate of SNP effect
