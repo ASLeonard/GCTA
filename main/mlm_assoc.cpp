@@ -309,45 +309,70 @@ void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<
     const auto n = static_cast<unsigned long>(y.size());
     constexpr int max_block_size = 10000;
     unsigned long i = 0, j = 0;
-    double Xt_Vi_X=0.0, chisq=0.0;
-    std::vector<float> X(n);
-    std::vector<float> Vi_X(n);
     std::vector<float> Vi(static_cast<size_t>(n) * n);
     #pragma omp parallel for private(j)
     for(i=0; i<n; i++){
         for(j=0; j<n; j++) Vi[i*n+j]=_Vi(i,j);
     }
     _Vi.resize(0,0);
-    
+
     beta.resize(m);
     se=eigenVector::Zero(m);
     pval=eigenVector::Constant(m,2);
     LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<std::endl;
-    int new_start = 0, block_size = 0, block_col = 0, k = 0, l = 0;
+
+    int k = 0, l = 0;
     Eigen::MatrixXf X_block;
     std::vector<int> indx;
-    for(i = 0; i < m; i++, block_col++){
-        // get a block of SNPs
-        if(i == new_start){
-            block_col = 0;
-            new_start = i + max_block_size;
-            block_size = max_block_size;
-            if(new_start > m) block_size = m - i;
-            indx.resize(block_size);
-            for(k = i, l = 0; l < block_size; k++, l++) indx[l] = k;
-            make_XMat_subset(X_block, indx, false);
+    // Vi_X_block: row-major n × bs result of Vi * X_block
+    std::vector<float> Vi_X_block, Xt_Vi_X_block, Xt_Vi_y_block;
+
+    for(i = 0; i < m; ){
+        int bs = (int)std::min((unsigned long)max_block_size, m - i);
+        indx.resize(bs);
+        for(k = 0; k < bs; k++) indx[k] = i + k;
+        make_XMat_subset(X_block, indx, false);
+
+        Vi_X_block.resize(n * bs);
+        Xt_Vi_X_block.resize(bs);
+        Xt_Vi_y_block.resize(bs);
+
+        // Vi (row-major n×n) * X_block (col-major n×bs == row-major bs×n with Trans)
+        // → Vi_X_block (row-major n×bs)
+        // Reading Vi once for bs SNPs is the key Level-3 vs Level-2 gain.
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                    n, bs, n,
+                    1.0f, Vi.data(), n,
+                    X_block.data(), n,
+                    0.0f, Vi_X_block.data(), bs);
+
+        // Diagonal of X_block^T * Vi_X_block: dot(col l of X_block, col l of Vi_X_block)
+        // X_block col l: col-major → data + l*n, stride 1
+        // Vi_X_block col l: row-major n×bs → start at l, stride bs
+        for(l = 0; l < bs; l++){
+            Xt_Vi_X_block[l] = cblas_sdot(n, X_block.data() + (size_t)l * n, 1,
+                                           Vi_X_block.data() + l, bs);
         }
 
-        for(j = 0; j < n; j++) X[j] = X_block(j, block_col);
-        cblas_sgemv(CblasRowMajor, CblasNoTrans, n, n, 1.0, Vi.data(), n, X.data(), 1, 0.0, Vi_X.data(), 1);
-        Xt_Vi_X=cblas_sdot(n, X.data(), 1, Vi_X.data(), 1);
-        se[i]=1.0/Xt_Vi_X;
-        beta[i]=se[i]*cblas_sdot(n, y.data(), 1, Vi_X.data(), 1);
-        if(se[i]>1.0e-30){
-            se[i]=sqrt(se[i]);
-            chisq=beta[i]/se[i];
-            pval[i]=StatFunc::pchisq(chisq*chisq, 1, _log_pval);
+        // y^T * Vi_X_block: one sgemv for the whole block
+        cblas_sgemv(CblasRowMajor, CblasTrans,
+                    n, bs,
+                    1.0f, Vi_X_block.data(), bs,
+                    y.data(), 1,
+                    0.0f, Xt_Vi_y_block.data(), 1);
+
+        for(l = 0; l < bs; l++){
+            float inv_xvx = 1.0f / Xt_Vi_X_block[l];
+            se[i + l] = inv_xvx;
+            beta[i + l] = inv_xvx * Xt_Vi_y_block[l];
+            if(inv_xvx > 1.0e-30f){
+                se[i + l] = std::sqrt(inv_xvx);
+                float chisq = beta[i + l] / se[i + l];
+                pval[i + l] = StatFunc::pchisq(chisq * chisq, 1, _log_pval);
+            }
         }
+
+        i += bs;
     }
 }
 
