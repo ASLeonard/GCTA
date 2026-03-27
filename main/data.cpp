@@ -2558,9 +2558,10 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
                     }
                     if (bcf_gt_allele(g) == 0) ref_count++;
                 }
-                // Encoding: HomREF=(1,1) Het=(1,0) HomALT=(0,0) Missing=(0,1)
-                _snp_2[snp_indx][i] = !is_missing && (ref_count >= 1);
+                // Encoding matches PLINK BED convention:
+                // HomREF=(1,1), Het=(0,1), HomALT=(0,0), Missing=(1,0)
                 _snp_1[snp_indx][i] = is_missing  || (ref_count == ploidy);
+                _snp_2[snp_indx][i] = !is_missing && (ref_count >= 1);
             }
             snp_indx++;
         }
@@ -2568,6 +2569,36 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
     }
 
     if (gt_arr) free(gt_arr);
+
+    // ── Enforce minor-allele convention: swap A1/A2 where REF is the major allele ─
+    // Compute per-SNP REF allele frequency from stored genotype bits and swap
+    // _allele1/_allele2 (and flip hom bits) for any SNP where AF_REF > 0.5.
+    for (int jj = 0; jj < _snp_num; jj++) {
+        int allele_sum = 0, allele_total = 0;
+        for (int ii = 0; ii < nsamples; ii++) {
+            bool s1 = _snp_1[jj][ii], s2 = _snp_2[jj][ii];
+            if (s1 && !s2) continue; // missing: (1,0) in BED convention
+            allele_sum   += (s1 ? 1 : 0) + (s2 ? 1 : 0); // HomREF=2, Het=1, HomALT=0
+            allele_total += 2;
+        }
+        if (allele_total == 0) continue;
+        double af = static_cast<double>(allele_sum) / allele_total;
+        if (af > 0.5) {
+            // REF is the major allele — ALT becomes A1 (minor)
+            std::swap(_allele1[jj], _allele2[jj]);
+            // Flip genotype bits: HomREF(1,1)<->HomALT(0,0); Het and Missing unchanged
+            for (int ii = 0; ii < nsamples; ii++) {
+                if (_snp_1[jj][ii] == _snp_2[jj][ii]) { // homozygous: (0,0) or (1,1)
+                    _snp_1[jj][ii] = !_snp_1[jj][ii];
+                    _snp_2[jj][ii] = !_snp_2[jj][ii];
+                }
+            }
+        }
+    }
+    // Keep _ref_A/_other_A aligned with the final A1/A2 assignment
+    _ref_A   = _allele1;
+    _other_A = _allele2;
+
     bcf_destroy(rec);
     bcf_hdr_destroy(hdr);
     bcf_close(fp);
@@ -2583,8 +2614,8 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
 // read_bed_dosage.  Sets _dosage_flag = true.
 //
 // Dosage calculation depends on _genetic_model:
-//   Additive    : HomREF=0, Het=1, HomALT=2
-//   Nonadditive : HomREF=0, Het=2p, HomALT=4p-2  (p = ref allele frequency)
+//   Additive    : HomA1A1=0, Het=1, HomA2A2=2  (counts copies of A1 = minor allele)
+//   Nonadditive : HomA1A1=0, Het=2p, HomA2A2=4p-2  (p = A1/minor allele frequency)
 // Missing genotypes are set to DOSAGE_NA (infinity).
 void gcta::read_vcf_dosage(std::string vcffile, std::string region)
 {
@@ -2695,10 +2726,21 @@ void gcta::read_vcf_dosage(std::string vcffile, std::string region)
                << " multiallelic variant(s) skipped (only biallelic sites supported)." << std::endl;
 
     _snp_num = static_cast<int>(_chr.size());
-    _ref_A   = _allele1;
-    _other_A = _allele2;
     LOGGER << _snp_num << " biallelic SNPs found in [" + vcffile + "]." << std::endl;
     init_include();
+
+    // Record the original VCF REF allele BEFORE any A1/A2 swaps so that
+    // pass-2 can determine dosage direction via (_allele1 == _ref_A).
+    _ref_A   = _allele1;  // VCF REF (allele[0]) for every SNP
+    _other_A = _allele2;  // VCF ALT (allele[1]) for every SNP
+
+    // ── Enforce minor-allele convention: swap A1/A2 where REF is the major allele ─
+    for (j = 0; j < _snp_num; j++) {
+        if (mu_buf[j] / 2.0 > 0.5) {
+            std::swap(_allele1[j], _allele2[j]);
+            mu_buf[j] = 2.0 - mu_buf[j]; // reflect minor-allele mean count
+        }
+    }
 
     _mu.resize(_snp_num);
     for (j = 0; j < _snp_num; j++) _mu[j] = mu_buf[j];
@@ -2728,7 +2770,10 @@ void gcta::read_vcf_dosage(std::string vcffile, std::string region)
         while (itr ? (bcf_itr_next(fp, itr, rec) >= 0) : (bcf_read(fp, hdr, rec) >= 0)) {
             bcf_unpack(rec, BCF_UN_STR);
             if (rec->n_allele != 2) continue;
-            double p = _mu[snp_indx] / 2.0; // ref allele frequency
+            double p = _mu[snp_indx] / 2.0; // A1 (minor) allele frequency
+            // Determine whether A1 is REF (allele[0]) or ALT (allele[1]).
+            // After the pass-1 swap, _allele1[snp_indx] == _ref_A[snp_indx] iff no swap occurred.
+            bool a1_is_ref = (_allele1[snp_indx] == _ref_A[snp_indx]);
             int ret = bcf_get_genotypes(hdr, rec, &gt_arr, &n_gt_arr);
             if (ret <= 0) {
                 for (i = 0; i < nsamples; i++) _geno_dose[i][snp_indx] = DOSAGE_NA;
@@ -2747,15 +2792,18 @@ void gcta::read_vcf_dosage(std::string vcffile, std::string region)
                     _geno_dose[i][snp_indx] = DOSAGE_NA;
                     continue;
                 }
+                // Convert REF allele count to A1 (minor) allele count
+                int a1_count = a1_is_ref ? ref_count : (ploidy - ref_count);
                 float dosage = 0.0f;
                 switch (_genetic_model) {
                     case GeneticModel::ADDITIVE:
-                        dosage = static_cast<float>(ref_count);
+                        dosage = static_cast<float>(a1_count);
                         break;
                     case GeneticModel::NONADDITIVE:
-                        if      (ref_count == ploidy) dosage = 0.0f;
-                        else if (ref_count == 0)      dosage = static_cast<float>(4.0 * p - 2.0);
-                        else                          dosage = static_cast<float>(2.0 * p);
+                        // 0 for HomA1A1 (minor hom), 2p for het, 4p-2 for HomA2A2 (major hom)
+                        if      (a1_count == ploidy) dosage = 0.0f;
+                        else if (a1_count == 0)      dosage = static_cast<float>(4.0 * p - 2.0);
+                        else                         dosage = static_cast<float>(2.0 * p);
                         break;
                 }
                 _geno_dose[i][snp_indx] = dosage;
