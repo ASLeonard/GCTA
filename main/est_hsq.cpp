@@ -961,7 +961,9 @@ void gcta::reml(bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, std:
         eigenVector y_fix_eff_loo = (y_fix_eff - diag_Xproj.cwiseProduct(_y)).array() / (1.0 - diag_Xproj.array()).array();
         eigenVector y_tilde = _y - y_fix_eff_loo;
         eigenVector y_tilde_centered = y_tilde.array() - y_tilde.mean();
-        eigenVector bBlup_base = (_Vi * y_tilde_centered);
+        // _Vi stores only the lower triangle; selfadjointView routes to dsymv.
+        eigenVector bBlup_base(_n);
+        bBlup_base.noalias() = _Vi.selfadjointView<Eigen::Lower>() * y_tilde_centered;
 
         int col_num = _r_indx.size();
         eigenMatrix bBlups(bBlup_base.size(),  col_num);
@@ -978,7 +980,15 @@ void gcta::reml(bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, std:
             int _y_size = _y.size();
             eigenVector diag_H(_y_size);
             for(int j = 0; j < _y_size; j++){
-                diag_H[j] = (_A[_r_indx[i]].col(j).array() * _Vi.col(j).array()).sum() * varcmp[i];
+                // _Vi stores only the lower triangle.  Vi.col(j) decomposes as:
+                //   rows k > j : lower triangle, contiguous in column-major
+                //   rows k < j : upper triangle -> use Vi(j,k) by symmetry (row access)
+                double s = _Vi(j, j) * _A[_r_indx[i]](j, j);
+                if (j > 0)
+                    s += _Vi.row(j).head(j).dot(_A[_r_indx[i]].row(j).head(j));
+                if (j + 1 < _y_size)
+                    s += _Vi.col(j).tail(_y_size - j - 1).dot(_A[_r_indx[i]].col(j).tail(_y_size - j - 1));
+                diag_H[j] = s * varcmp[i];
             }
             cvBlups.col(i) = (gBlup_fix_eff_loo.array() - diag_H.array() * y_tilde_centered.array()).array() / (1.0 - diag_H.array()).array();
         }
@@ -1281,11 +1291,13 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
     else {
 
         // Accumulate only the lower triangle of V = sum_i A_i * sigma_i^2.
-        // dpotrf reads only the lower triangle, so the upper never needs to be
-        // written during assembly.  Fusing all components into a single pass
-        // over each (j,k) pair halves memory traffic vs repeated full-matrix +=.
+        // dpotrf reads only the lower triangle, and _LLT symmetrises from lower
+        // after dpotri, so the upper never needs to be filled during assembly.
         const int num_comp = _r_indx.size();
 
+        // Only the lower triangle is written: dpotrf reads only lower, and _LLT
+        // symmetrises from lower afterward.  Writing the upper triangle here was
+        // redundant (it gets overwritten by dpotri/symmetrize anyway).
         #pragma omp parallel for collapse(2) schedule(static)
         for (int j = 0; j < _n; j++) {
             for (int k = 0; k <= j; k++) {
@@ -1293,7 +1305,6 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
                 for (int ci = 0; ci < num_comp; ci++)
                     val += (_A[_r_indx[ci]])(j, k) * prev_varcmp[ci];
                 Vi(j, k) = val;
-                Vi(k, j) = val;
             }
         }
 
@@ -1608,7 +1619,8 @@ void gcta::reml_equation(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigen
     if(_reml_AI_not_invertible) return;
 
     // Calculate R
-    Py = P*_y;
+    // P is symmetric; selfadjointView routes to BLAS dsymv (lower tri only).
+    Py.noalias() = P.selfadjointView<Eigen::Lower>() * _y;
     eigenVector R(_r_indx.size());
     for (int i = 0; i < _r_indx.size(); i++) {
         if (_bivar_reml || _within_family) R(i) = (Py.transpose()*(_Asp[_r_indx[i]]) * Py)(0, 0);
@@ -1625,7 +1637,8 @@ void gcta::reml_equation(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigen
 
 void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector &prev_varcmp, eigenVector &varcmp, double dlogL)
 {
-    Py = P*_y;
+    // P is symmetric; selfadjointView routes to BLAS dsymv (lower tri only).
+    Py.noalias() = P.selfadjointView<Eigen::Lower>() * _y;
     //eigenVector cvec(_n);
     eigenMatrix APy(_n, _r_indx.size());
     //LOGGER << "AI reml 1 start" << std::endl;
@@ -1641,7 +1654,7 @@ void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector
     #pragma omp parallel for
     for (int i = 0; i < _r_indx.size(); i++) {
         R(i) = (Py.transpose()*(APy.col(i)))(0, 0);
-        eigenVector cvec = P * (APy.col(i));
+        eigenVector cvec = P.selfadjointView<Eigen::Lower>() * APy.col(i);
         Hi(i, i) = ((APy.col(i)).transpose() * cvec)(0, 0);
         for (int j = 0; j < i; j++) Hi(j, i) = Hi(i, j) = ((APy.col(j)).transpose() * cvec)(0, 0);
     }
@@ -1679,7 +1692,9 @@ void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, ei
     calcu_tr_PA(P, tr_PA);  // extremely slow
     //LOGGER << "calcu_tr_PA returned" << std::endl;
     // Calculate R
-    Py = P*_y;
+    // P is symmetric; selfadjointView routes to BLAS dsymv, reading only the
+    // lower triangle — halves memory bandwidth vs a general dgemv.
+    Py.noalias() = P.selfadjointView<Eigen::Lower>() * _y;
     eigenVector R(_r_indx.size());
 
     #pragma omp parallel for
@@ -1727,14 +1742,20 @@ void gcta::calcu_tr_PA(eigenMatrix &P, eigenVector &tr_PA) {
             //temp.resize(0,0);
         }
         else {
-            // tr(P * A) = sum of element-wise product P ⊙ A (both symmetric).
-            // Expressed as a flat dot product, which BLAS executes with SIMD.
-            int nn = _n * _n;
-#ifdef SINGLE_PRECISION
-            tr_PA(i) = cblas_sdot(nn, P.data(), 1, _A[_r_indx[i]].data(), 1);
-#else
-            tr_PA(i) = cblas_ddot(nn, P.data(), 1, _A[_r_indx[i]].data(), 1);
-#endif
+            // tr(P * A) = P ⊙ A elementwise summed. Both P and A are symmetric,
+            // so only the lower triangle is needed: diagonal contributes weight 1,
+            // off-diagonal weight 2. Column-major loop order (col outer, row inner)
+            // keeps both P and A accesses sequential in memory, halving bandwidth
+            // vs reading all n² elements with a full ddot.
+            const auto &Ai = _A[_r_indx[i]];
+            double s = 0.0;
+            #pragma omp parallel for reduction(+:s) schedule(static)
+            for (int col = 0; col < _n; col++) {
+                s += P(col, col) * Ai(col, col);
+                for (int row = col + 1; row < _n; row++)
+                    s += 2.0 * P(row, col) * Ai(row, col);
+            }
+            tr_PA(i) = s;
         }
     }
 }
