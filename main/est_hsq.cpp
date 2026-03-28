@@ -329,9 +329,9 @@ void gcta::fit_reml(std::string grm_file, std::string phen_file, std::string qco
     if (_flag_CC) {
         //if(mlmassoc) LOGGER.e(0, "the option --mlm-assoc is valid for quantitative traits only.");
         if (!_bivar_reml) {
-            if (!mlmassoc && prevalence<-1) LOGGER << "Note: you can specify the disease prevalence by the option --prevalence so that GCTA can transform the variance explained to the underlying liability scale." << std::endl;
+            if (!mlmassoc && prevalence<-1) LOGGER.i(0, "you can specify the disease prevalence by the option --prevalence so that GCTA can transform the variance explained to the underlying liability scale.", "Note:");
         } else {
-            LOGGER << "Note: you can specify the prevalences of the two diseases by the option --reml-bivar-prevalence so that GCTA can transform the estimates of variance explained to the underlying liability scale." << std::endl;
+            LOGGER.i(0, "you can specify the prevalences of the two diseases by the option --reml-bivar-prevalence so that GCTA can transform the estimates of variance explained to the underlying liability scale.", "Note:");
         }
     }
 
@@ -1198,11 +1198,11 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
         prev_lgL = lgL;
     }
     
-    if(_reml_fixed_var) LOGGER << "Warning: the model is evaluated at fixed variance components. The (log-)likelihood might not be maximised." <<std::endl;
+    if(_reml_fixed_var) LOGGER.w(0, "the model is evaluated at fixed variance components. The (log-)likelihood might not be maximised.");
     else {
         if(converged_flag) LOGGER << "Log-likelihood ratio converged." << std::endl;
         else {
-            if(_reml_force_converge || _reml_no_converge) LOGGER << "Warning: Log-likelihood not converged. Results are not reliable." <<std::endl;
+            if(_reml_force_converge || _reml_no_converge) LOGGER.w(0, "Log-likelihood not converged. Results are not reliable.");
             else if(iter == _reml_max_iter){
                 std::stringstream errmsg;
                 errmsg << "Log-likelihood not converged (stop after " << _reml_max_iter << " iteractions). \nYou can specify the option --reml-maxit to allow for more iterations." << std::endl;
@@ -1575,7 +1575,7 @@ void gcta::calcu_Hi(eigenMatrix &P, eigenMatrix &Hi)
 
     if (!inverse_H(Hi)){
         if(_reml_force_converge){
-            LOGGER << "Warning: the information matrix is not invertible." << std::endl;
+            LOGGER.w(0, "the information matrix is not invertible.");
             _reml_AI_not_invertible = true;
         }
         else LOGGER.e(0, "the information matrix is not invertible.");
@@ -1641,7 +1641,7 @@ void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector
     // Calculate variance component
     if (!inverse_H(Hi)){
         if(_reml_force_converge){
-            LOGGER << "Warning: the information matrix is not invertible." << std::endl;
+            LOGGER.w(0, "the information matrix is not invertible.");
             _reml_AI_not_invertible = true;
             return;
         }

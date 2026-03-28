@@ -121,10 +121,10 @@ void gcta::fit_bivar_reml(std::string grm_file, std::string phen_file, std::stri
     if (!ignore_Ce) {
         if (two_tr_comm == 0) {
             ignore_Ce = true;
-            LOGGER << "Note: the residual covariance component is ignored because no individuals were measured for both traits." << std::endl;
+            LOGGER.i(0, "the residual covariance component is ignored because no individuals were measured for both traits.", "Note:");
         } else if ((double) two_tr_comm / (double) _keep.size() < 0.1) {
             ignore_Ce = true;
-            LOGGER << "Note: the residual covariance component is ignored because < 10% of individuals were measured for both traits." << std::endl;
+            LOGGER.i(0, "the residual covariance component is ignored because < 10% of individuals were measured for both traits.", "Note:");
         }
     }
 
@@ -138,7 +138,7 @@ void gcta::fit_bivar_reml(std::string grm_file, std::string phen_file, std::stri
     if (_flag_CC2) LOGGER << "for trait #2" << std::endl;
     else prevalence2 = -1.0;
     //if(flag_CC2!=_flag_CC) LOGGER.e(0, "for a bivariate analysis, the two traits should be both quantitative or both binary.");
-    if ((_flag_CC && prevalence<-1) || (_flag_CC2 && prevalence2<-1)) LOGGER << "Note: we can specify the disease prevalence by the option --reml-bivar-prevalence so that GCTA can transform the variance explained to the underlying liability scale." << std::endl;
+    if ((_flag_CC && prevalence<-1) || (_flag_CC2 && prevalence2<-1)) LOGGER.i(0, "we can specify the disease prevalence by the option --reml-bivar-prevalence so that GCTA can transform the variance explained to the underlying liability scale.", "Note:");
 
     int pos = 0;
     _r_indx.clear();
@@ -388,7 +388,7 @@ void gcta::constrain_rg(eigenVector &varcmp) {
         eigenVector eval = eigensolver.eigenvalues();
         if (eval.minCoeff() <= 0.0) {
             if (count == 0) {
-                LOGGER << "Note: to constrain the correlation being from -1 to 1, a genetic (or residual) variance-covariance matrix is bended to be positive definite. In this case, the SE is unreliable." << std::endl;
+                LOGGER.i(0, "to constrain the correlation being from -1 to 1, a genetic (or residual) variance-covariance matrix is bended to be positive definite. In this case, the SE is unreliable.", "Note:");
                 count++;
             }
             bending_eigenval(eval);
