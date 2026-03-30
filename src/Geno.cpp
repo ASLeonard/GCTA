@@ -1516,7 +1516,7 @@ void Geno::loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf, bo
        if(isEOF){
            LOGGER.e(0, "the reading process reached to the end of the genotype file but couldn't finish.");
        }
-        
+
        int nMarker = numMarkersReadBlocks[curBufferIndex];
        uint32_t endIndex = nFinishedMarker + nMarker;
        endIndex = endIndex > nTMarker ? nTMarker : endIndex;
@@ -2422,9 +2422,9 @@ void Geno::freq64_bed(uint64_t *buf, const vector<uint32_t> &markerIndex, GenoBu
         for(int index = 0; index < bedGenoBuf1Size ; index++){
             uint64_t g_buf = p_buf[index];
             uint64_t g_buf_h = MASK & (g_buf >> 1);
-            odd_ct += popcount(g_buf & MASK);
-            even_ct += popcount(g_buf_h);
-            both_ct += popcount(g_buf & g_buf_h);
+            odd_ct += std::popcount(g_buf & MASK);
+            even_ct += std::popcount(g_buf_h);
+            both_ct += std::popcount(g_buf & g_buf_h);
         }
 
         //curA1A1 = num_keep_sample + both_ct - even_ct - odd_ct;
@@ -2465,12 +2465,12 @@ void Geno::freq64_bedX(uint64_t *buf, const vector<uint32_t> &markerIndex, GenoB
             uint64_t g_buf_h = MASK & (g_buf >> 1);
             uint64_t g_buf_l = g_buf & MASK;
             uint64_t g_buf_b = g_buf & g_buf_h;
-            odd_ct += popcount(g_buf_l);
-            even_ct += popcount(g_buf_h);
-            both_ct += popcount(g_buf_b);
+            odd_ct += std::popcount(g_buf_l);
+            even_ct += std::popcount(g_buf_h);
+            both_ct += std::popcount(g_buf_b);
 
-            odd_ct_m += popcount(g_buf_l & mask_gender);
-            both_ct_m += popcount(g_buf_b & mask_gender);
+            odd_ct_m += std::popcount(g_buf_l & mask_gender);
+            both_ct_m += std::popcount(g_buf_b & mask_gender);
         }
 
         uint32_t cur_total_markers = totalMakers - odd_ct_m - odd_ct + both_ct_m + both_ct;
@@ -2614,17 +2614,17 @@ void Geno::freq2(uint8_t *buf, int num_marker) {
         for(; index < num_trunk ; index++){
             uint64_t g_buf = p_buf[index];
             uint64_t g_buf_h = MASK & (g_buf >> 1);
-            odd_ct += popcount(g_buf & MASK);
-            even_ct += popcount(g_buf_h);
-            both_ct += popcount(g_buf & g_buf_h);
+            odd_ct += std::popcount(g_buf & MASK);
+            even_ct += std::popcount(g_buf_h);
+            both_ct += std::popcount(g_buf & g_buf_h);
         }
         if(remain_bit){
             uint64_t g_buf = p_buf[index];
             g_buf = (g_buf << move_bit) >> move_bit;
             uint64_t g_buf_h = MASK & (g_buf >> 1);
-            odd_ct += popcount(g_buf & MASK);
-            even_ct += popcount(g_buf_h);
-            both_ct += popcount(g_buf & g_buf_h);
+            odd_ct += std::popcount(g_buf & MASK);
+            even_ct += std::popcount(g_buf_h);
+            both_ct += std::popcount(g_buf & g_buf_h);
         }
 
         curA1A1 = pheno_count + both_ct - even_ct - odd_ct;
@@ -2675,13 +2675,13 @@ void Geno::sum_geno_x(uint64_t *buf, int num_marker) {
             uint64_t g_buf_h = MASK & (g_buf >> 1);
             uint64_t g_buf_l = g_buf & MASK;
             uint64_t g_buf_b = g_buf & g_buf_h;
-            odd_ct += popcount(g_buf_l);
-            even_ct += popcount(g_buf_h);
-            both_ct += popcount(g_buf_b);
+            odd_ct += std::popcount(g_buf_l);
+            even_ct += std::popcount(g_buf_h);
+            both_ct += std::popcount(g_buf_b);
 
-            even_ct_m += popcount(g_buf_h & mask_gender);
-            odd_ct_m += popcount(g_buf_l & mask_gender);
-            both_ct_m += popcount(g_buf_b & mask_gender);
+            even_ct_m += std::popcount(g_buf_h & mask_gender);
+            odd_ct_m += std::popcount(g_buf_l & mask_gender);
+            both_ct_m += std::popcount(g_buf_b & mask_gender);
         }
 
         int all_BB = both_ct;
@@ -2730,12 +2730,12 @@ void Geno::freq64_x(uint64_t *buf, int num_marker) {
             uint64_t g_buf_h = MASK & (g_buf >> 1);
             uint64_t g_buf_l = g_buf & MASK;
             uint64_t g_buf_b = g_buf & g_buf_h;
-            odd_ct += popcount(g_buf_l);
-            even_ct += popcount(g_buf_h);
-            both_ct += popcount(g_buf_b);
+            odd_ct += std::popcount(g_buf_l);
+            even_ct += std::popcount(g_buf_h);
+            both_ct += std::popcount(g_buf_b);
 
-            odd_ct_m += popcount(g_buf_l & mask_gender);
-            both_ct_m += popcount(g_buf_b & mask_gender);
+            odd_ct_m += std::popcount(g_buf_l & mask_gender);
+            both_ct_m += std::popcount(g_buf_b & mask_gender);
         }
 
         int raw_index_marker = num_marker_freq + cur_marker_index;
@@ -3041,9 +3041,9 @@ void Geno::freq64(uint64_t *buf, int num_marker) {
         for(int index = 0; index < num_item_1geno ; index++){
             uint64_t g_buf = p_buf[index];
             uint64_t g_buf_h = MASK & (g_buf >> 1);
-            odd_ct += popcount(g_buf & MASK);
-            even_ct += popcount(g_buf_h);
-            both_ct += popcount(g_buf & g_buf_h);
+            odd_ct += std::popcount(g_buf & MASK);
+            even_ct += std::popcount(g_buf_h);
+            both_ct += std::popcount(g_buf & g_buf_h);
         }
 
         //curA1A1 = num_keep_sample + both_ct - even_ct - odd_ct;
