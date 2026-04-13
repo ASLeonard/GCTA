@@ -141,6 +141,7 @@ void Marker::matchSNPListFile(string filename, int num_min_fields, const vector<
         num_line++;
         vector<string> line_elements;
         uint16_t num_elements;
+        //BOTTLENECK:
         boost::split(line_elements, line, boost::is_any_of("\t "));
         num_elements = line_elements.size();
         boost::replace_all(line_elements[num_elements - 1], "\r", "");

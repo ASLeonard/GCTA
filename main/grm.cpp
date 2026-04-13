@@ -676,9 +676,10 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
 {
     manipulate_grm(grm_file, keep_indi_file, remove_indi_file, "", grm_cutoff, -2.0, -2, merge_grm_flag, true);
     _grm_N.resize(0, 0);
-    int i = 0, j = 0, n = _keep.size();
-    LOGGER << "\nPerforming principal component analysis ..." << std::endl;
+    int n = _keep.size();
+    LOGGER << "\nPerforming principal component analysis ..." << _grm.rows() << "x" << _grm.cols() << std::endl;
 
+    //BOTTLENECK
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(_grm.cast<double>());
     Eigen::MatrixXd evec = (eigensolver.eigenvectors());
     Eigen::VectorXd eval = eigensolver.eigenvalues();
@@ -686,16 +687,16 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
     std::string eval_file = _out + ".eigenval";
     std::ofstream o_eval(eval_file.c_str());
     if (!o_eval) LOGGER.e(0, "cannot open the file [" + eval_file + "] to read.");
-    for (i = n - 1; i >= 0; i--) o_eval << eval(i) << std::endl;
+    for (int i = n - 1; i >= 0; i--) o_eval << eval(i) << std::endl;
     o_eval.close();
     LOGGER << "Eigenvalues of " << n << " individuals have been saved in [" + eval_file + "]." << std::endl;
     std::string evec_file = _out + ".eigenvec";
     std::ofstream o_evec(evec_file.c_str());
     if (!o_evec) LOGGER.e(0, "cannot open the file [" + evec_file + "] to read.");
     if (out_pc_num > n) out_pc_num = n;
-    for (i = 0; i < n; i++) {
+    for (int i = 0; i < n; i++) {
         o_evec << _fid[_keep[i]] << " " << _pid[_keep[i]];
-        for (j = n - 1; j >= (n - out_pc_num); j--) o_evec << " " << evec(i, j);
+        for (int j = n - 1; j >= (n - out_pc_num); j--) o_evec << " " << evec(i, j);
         o_evec << std::endl;
     }
     o_evec.close();

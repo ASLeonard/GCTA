@@ -259,6 +259,7 @@ void gcta::read_bedfile(std::string bedfile)
             continue;
         }
         for (i = 0, indi_indx = 0; i < _indi_num;) {
+            //BOTTLENECK
             BIT.read(ch, 1);
             if (!BIT) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
             b = ch[0];
@@ -266,6 +267,7 @@ void gcta::read_bedfile(std::string bedfile)
             while (k < 7 && i < _indi_num) { // change code: 11 for AA; 00 for BB;
                 if (!rindi[i]) k += 2;
                 else {
+                    //BOTTLENECK
                     _snp_2[snp_indx][indi_indx] = (!b[k++]);
                     _snp_1[snp_indx][indi_indx] = (!b[k++]);
                     indi_indx++;
@@ -1891,6 +1893,8 @@ void gcta::calcu_maf()
     }
 }
 
+//TODO: better name?
+//BOTTLENECK
 void gcta::mu_func(int j, std::vector<double> &fac) {
     int i = 0;
     double fcount = 0.0, f_buf = 0.0;
@@ -2342,6 +2346,7 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
             for (j = 0; j < m; j++) {
                 k = _include[snp_indx[j]];
                 if (!_snp_1[k][_keep[i]] || _snp_2[k][_keep[i]]) {
+                    //BOTTLENECK
                     if (_allele1[k] == _ref_A[k]) X(i,j) = _snp_1[k][_keep[i]] + _snp_2[k][_keep[i]];
                     else X(i,j) = 2.0 - (_snp_1[k][_keep[i]] + _snp_2[k][_keep[i]]);
                     X(i,j) -= _mu[k];

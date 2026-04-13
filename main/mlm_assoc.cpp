@@ -355,6 +355,7 @@ void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<
         }
 
         // y^T * Vi_X_block: one sgemv for the whole block
+        //BOTTLENECK
         cblas_sgemv(CblasRowMajor, CblasTrans,
                     n, bs,
                     1.0f, Vi_X_block.data(), bs,

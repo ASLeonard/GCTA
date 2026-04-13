@@ -39,7 +39,6 @@ public:
         posix_mem_free(N);
         posix_mem_free(cmask_buf);
         if(lookup_GRM_table) delete[] lookup_GRM_table;
-        if(sub_miss) delete[] sub_miss;
         if(geno_buf) posix_mem_free(geno_buf);
         if(mask_buf) posix_mem_free(mask_buf);
         //if(stdGeno) posix_mem_free(stdGeno);
@@ -71,17 +70,17 @@ private:
     Pheno *pheno = NULL;
     Marker *marker = NULL;
     Geno *geno = NULL;
-    vector<uint32_t> index_keep;
+    std::vector<uint32_t> index_keep;
     uint32_t part;
     uint32_t num_parts;
     uint32_t num_individual;
     uint64_t num_grm;
-    pair<uint32_t, uint32_t> part_keep_indices; //the index in pheno keep index;
-    vector<pair<int, int>> index_grm_pairs;
+    std::pair<uint32_t, uint32_t> part_keep_indices; //the index in pheno keep index;
+    std::vector<std::pair<int, int>> index_grm_pairs;
 
     double *grm = NULL;
     uint32_t *N = NULL;
-    uint32_t *sub_miss = NULL; // sample miss in all markers
+    std::vector<uint32_t> sub_miss; // sample miss in all markers
 
     //========
     // for byte style calculation
@@ -100,7 +99,7 @@ private:
     //double lookup_GRM_table[Constants::NUM_MARKER_READ / num_marker_block][num_lookup_table];
     double (*lookup_GRM_table)[num_lookup_table] = NULL;
 
-    vector<uint16_t> elements = {0, 2, 3, 4, 5, 6, 7};
+    std::vector<uint16_t> elements = {0, 2, 3, 4, 5, 6, 7};
     uint64_t num_byte_geno;
     uint64_t num_byte_cmask;
     int reg_bit_width;
@@ -121,21 +120,21 @@ private:
     static map<string, string> options;
     static map<string, double> options_d;
     static map<string, bool> options_b;
-    static vector<string> processFunctions;
+    static std::vector<string> processFunctions;
 
     string grm_file;
     int num_byte_buffer;
     uint64_t num_subjects;
-    vector<string> grm_ids;
+    std::vector<string> grm_ids;
     const int num_byte_GRM_read = 100 * 1024 * 1024;
-    vector<uint64_t> byte_part_grms;
+    std::vector<uint64_t> byte_part_grms;
 
     void outBinFile(FILE *sFile, FILE *dFile);
 
     bool isDominance = false;
     bool isMtd = false;
     int nMarkerBlock = 128;
-    vector<double> sd;
+    std::vector<double> sd;
     uint32_t numValidMarkers = 0;
 
     GenoBufItem *gbufitems = NULL;

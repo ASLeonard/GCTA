@@ -802,7 +802,7 @@ GRM::GRM(Pheno* pheno, Marker* marker) {
     }
     memset(N, 0, fill_N * sizeof(uint32_t));
 
-    std::vector<uint32_t> sub_miss(index_keep.size() + 64);
+    sub_miss.assign(index_keep.size() + 64, 0);
 
     //calculate each index in pair thread;
     int num_thread = omp_get_max_threads();
@@ -957,6 +957,7 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
     static char uplo='L';
    // A * At 
     if(part_keep_indices.first == 0){
+        //BOTTLENECK
         cblas_dsyrk(CblasColMajor, CblasLower, CblasNoTrans, n, curNumValidMarkers, alpha, stdGeno, n_sample, beta, grm, m);
     }else{
         //dgemm(&notrans, &trans, &m, &n, &num_marker, &alpha, stdGeno + part_keep_indices.first, &n_sample, stdGeno, &n_sample, &beta, grm, &m);
@@ -993,12 +994,13 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
             flip64(&sample_miss[baseMissIndex]);
 
             for(int k = baseMissIndex; k < baseMissIndex + markerPerN; k++){
-                sub_miss[k] += popcounts(sample_miss[k]); // give sub_miss a little more avoid overflow
+                sub_miss[k] += popcount(sample_miss[k]); // give sub_miss a little more avoid overflow
             }
         }
         #pragma omp parallel for
         for(int index = 0; index < index_grm_pairs.size(); index++){
             auto index_pair = index_grm_pairs[index];
+            //BOTTLENECK
             N_thread(index_pair.first, index_pair.second, sample_miss.data());
         }
     }
@@ -1498,6 +1500,7 @@ void GRM::N_thread(int grm_index_from, int grm_index_to, const uintptr_t* cur_cm
     //uint64_t *cur_cmask = cmask_buf + cur_block * index_keep.size();
     uint32_t *po_N = po_N_start;
     const uintptr_t *p_cmask1 = cur_cmask + grm_index_from;
+    //BOTTLENECK
     for(int index_pair1 = grm_index_from; index_pair1 != grm_index_to + 1; index_pair1++){
         const uintptr_t *p_cmask2 = cur_cmask;
         uintptr_t cmask1 = *p_cmask1++;
