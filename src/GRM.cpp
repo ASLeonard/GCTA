@@ -1505,19 +1505,29 @@ void GRM::N_thread(int grm_index_from, int grm_index_to, const uintptr_t* cur_cm
     //uint64_t *cur_cmask = cmask_buf + cur_block * index_keep.size();
     uint32_t *po_N = po_N_start;
     const uintptr_t *p_cmask1 = cur_cmask + grm_index_from;
-    //BOTTLENECK
     for(int index_pair1 = grm_index_from; index_pair1 != grm_index_to + 1; index_pair1++){
         const uintptr_t *p_cmask2 = cur_cmask;
         uintptr_t cmask1 = *p_cmask1++;
         if(cmask1){
-            for(int index_pair2 = 0; index_pair2 != index_pair1 + 1; index_pair2++){
-                uintptr_t cmask2 = *p_cmask2++;
-                if(cmask2){
-                    uintptr_t cmask = cmask1 & cmask2;
-                    if(cmask){
-                        *po_N += std::popcount(cmask);
-                    }
-                }
+            int count = index_pair1 + 1;
+            int index_pair2 = 0;
+            // Unrolled: process 4 pairs per iteration
+            for(; index_pair2 + 3 < count; index_pair2 += 4){
+                uintptr_t c0 = p_cmask2[0];
+                uintptr_t c1 = p_cmask2[1];
+                uintptr_t c2 = p_cmask2[2];
+                uintptr_t c3 = p_cmask2[3];
+                po_N[0] += std::popcount(cmask1 & c0);
+                po_N[1] += std::popcount(cmask1 & c1);
+                po_N[2] += std::popcount(cmask1 & c2);
+                po_N[3] += std::popcount(cmask1 & c3);
+                p_cmask2 += 4;
+                po_N += 4;
+            }
+            // Remainder
+            for(; index_pair2 < count; index_pair2++){
+                uintptr_t cmask = cmask1 & (*p_cmask2++);
+                if(cmask) *po_N += std::popcount(cmask);
                 po_N++;
             }
         }else{
