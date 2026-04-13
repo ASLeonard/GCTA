@@ -145,7 +145,7 @@ void gcta::read_metafile(std::string metafile, bool GC, double GC_val) {
         obadsnp << "SNP\tA1\tA2\tRefA" << std::endl;
         for (i = 0; i < bad_snp.size(); i++) obadsnp << bad_snp[i] << "\t" << bad_A1[i] << "\t" << bad_A2[i] << "\t" << bad_refA[i] << std::endl;
         obadsnp.close();
-        LOGGER << "Warning: can't match the reference alleles of " << bad_snp.size() << " SNPs to those in the genotype data. These SNPs have been saved in [" + badsnpfile + "]." << std::endl;
+        LOGGER.w(0, "can't match the reference alleles of " + std::to_string(bad_snp.size()) + " SNPs to those in the genotype data. These SNPs have been saved in [" + badsnpfile + "].");
     }
     if(!bad_snp_freq.empty()){
         std::string badsnpfile = _out + ".freq.badsnps";

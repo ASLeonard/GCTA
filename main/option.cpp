@@ -1273,36 +1273,36 @@ void option(int option_num, char* option_str[])
     if (m_grm_flag) {
         if (grm_flag) {
             grm_flag = false;
-            LOGGER << "Warning: --grm option suppressed by the --mgrm option." << std::endl;
+            LOGGER.w(0, "--grm option suppressed by the --mgrm option.");
         }
         if (grm_cutoff>-1.0) {
             grm_cutoff = -2.0;
-            LOGGER << "Warning: --grm-cutoff option suppressed by the --mgrm option." << std::endl;
+            LOGGER.w(0, "--grm-cutoff option suppressed by the --mgrm option.");
         }
     }
     if (pca_flag) {
         if (grm_adj_fac>-1.0) {
             grm_adj_fac = -2.0;
-            LOGGER << "Warning: --grm-adj option suppressed by the --pca option." << std::endl;
+            LOGGER.w(0, "--grm-adj option suppressed by the --pca option.");
         } else if (dosage_compen>-1) {
             grm_adj_fac = -2;
-            LOGGER << "Warning: --dosage-compen option suppressed by the --pca option." << std::endl;
+            LOGGER.w(0, "--dosage-compen option suppressed by the --pca option.");
         }
     }
     if (!gxe_file.empty() && !grm_flag && !m_grm_flag) {
-        LOGGER << "Warning: --gxe option is ignored because there is no --grm or --mgrm option specified." << std::endl;
+        LOGGER.w(0, "--gxe option is ignored because there is no --grm or --mgrm option specified.");
         gxe_file = "";
     }
     if (pred_rand_eff && !grm_flag && !m_grm_flag) {
-        LOGGER << "Warning: --reml-pred-rand option is ignored because there is no --grm or --mgrm option specified." << std::endl;
+        LOGGER.w(0, "--reml-pred-rand option is ignored because there is no --grm or --mgrm option specified.");
         pred_rand_eff = false;
     }
     if (cv_blup && !grm_flag && !m_grm_flag) {
-        LOGGER << "Warning: --cvblup option is ignored because there is no --grm or --mgrm option specified." << std::endl;
+        LOGGER.w(0, "--cvblup option is ignored because there is no --grm or --mgrm option specified.");
         cv_blup = false;
     }
     if(cv_blup && pred_rand_eff){
-        LOGGER << "Warning: --reml-pred-rand options is ignored because --cvblup does more than this option" << std::endl;
+        LOGGER.w(0, "--reml-pred-rand options is ignored because --cvblup does more than this option");
         pred_rand_eff = false;
     }
 
@@ -1311,15 +1311,15 @@ void option(int option_num, char* option_str[])
     if ((dose_beagle_flag || dose_mach_flag || dose_mach_gz_flag) && dominance_flag) LOGGER.e(0, "unable to calculate the GRM for dominance effect using imputed dosage data.");
     if (make_grm_xchar_flag && dominance_flag) LOGGER.e(0, "unable to calculate the GRM for dominance effect for the X chromosome.");
     if (mlma_flag || mlma_loco_flag) {
-        if (!gxe_file.empty()) LOGGER << "Warning: the option --gxe option is disabled in this analysis." << std::endl;
-        if (!update_sex_file.empty()) LOGGER << "Warning: the option --update-sex option is disabled in this analysis." << std::endl;
-        if (grm_adj_fac>-1.0) LOGGER << "Warning: the option --grm-adj option is disabled in this analysis." << std::endl;
-        if (dosage_compen>-1.0) LOGGER << "Warning: the option --dc option is disabled in this analysis." << std::endl;
-        if (est_fix_eff) LOGGER << "Warning: the option --reml-est-fix option is disabled in this analysis." << std::endl;
-        if (est_fix_eff_var) LOGGER << "Warning: the option --reml-est-fix-varcov option is disabled in this analysis." << std::endl;
-        if (pred_rand_eff) LOGGER << "Warning: the option --reml-pred-rand option is disabled in this analysis." << std::endl;
-        if(cv_blup) LOGGER << "Warning: the option --cvblup option is disabled in this analysis." << std::endl;
-        if (reml_lrt_flag) LOGGER << "Warning: the option --reml-lrt option is disabled in this analysis." << std::endl;
+        if (!gxe_file.empty()) LOGGER.w(0, "the option --gxe option is disabled in this analysis.");
+        if (!update_sex_file.empty()) LOGGER.w(0, "the option --update-sex option is disabled in this analysis.");
+        if (grm_adj_fac>-1.0) LOGGER.w(0, "the option --grm-adj option is disabled in this analysis.");
+        if (dosage_compen>-1.0) LOGGER.w(0, "the option --dc option is disabled in this analysis.");
+        if (est_fix_eff) LOGGER.w(0, "the option --reml-est-fix option is disabled in this analysis.");
+        if (est_fix_eff_var) LOGGER.w(0, "the option --reml-est-fix-varcov option is disabled in this analysis.");
+        if (pred_rand_eff) LOGGER.w(0, "the option --reml-pred-rand option is disabled in this analysis.");
+        if(cv_blup) LOGGER.w(0, "the option --cvblup option is disabled in this analysis.");
+        if (reml_lrt_flag) LOGGER.w(0, "the option --reml-lrt option is disabled in this analysis.");
         if (!save_reml_file.empty() && !load_reml_file.empty()) LOGGER.e(0, "--save-reml and --load-reml cannot be used together.");
         if ((!save_reml_file.empty() || !load_reml_file.empty()) && mlma_loco_flag) LOGGER.e(0, "--save-reml and --load-reml are not supported with --mlma-loco.");
         if (!load_reml_file.empty() && !mlma_flag) LOGGER.e(0, "--load-reml can only be used with --mlma.");
@@ -1348,14 +1348,14 @@ void option(int option_num, char* option_str[])
     }
     // OpenMP
     if (thread_flag) {
-        if (thread_num == 1) LOGGER << "Note: This is a multi-thread program. You could specify the number of threads by the --thread-num option to speed up the computation if there are multiple processors in your machine." << std::endl;
-        else LOGGER << "Note: the program will be running on " << thread_num << " threads." << std::endl;
+        if (thread_num == 1) LOGGER.i(0, "This is a multi-thread program. You could specify the number of threads by the --thread-num option to speed up the computation if there are multiple processors in your machine.", "Note:");
+        else LOGGER.i(0, "the program will be running on " + std::to_string(thread_num) + " threads.", "Note:");
     }
 
     // std::set autosome
     if (autosome_flag) {
         if(extract_chr_start == extract_chr_end && extract_chr_start != 0){
-            LOGGER << "Warning: --autosome option omitted. You have specified the chromosome to analysis." << std::endl;
+            LOGGER.w(0, "--autosome option omitted. You have specified the chromosome to analysis.");
         }else{
             extract_chr_start = 1;
             extract_chr_end = autosome_num;
@@ -1522,7 +1522,7 @@ void option(int option_num, char* option_str[])
         if (!exclude_snp_file.empty()) pter_gcta->exclude_snp(exclude_snp_file);
         if (!extract_snp_name.empty()) pter_gcta->extract_single_snp(extract_snp_name);
         if (!exclude_snp_name.empty()) pter_gcta->exclude_single_snp(exclude_snp_name);
-        if (extract_chr_start > 0) LOGGER << "Warning: the option --chr, --autosome or --nonautosome is inactive for dosage data." << std::endl;
+        if (extract_chr_start > 0) LOGGER.w(0, "the option --chr, --autosome or --nonautosome is inactive for dosage data.");
         if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
         if (dose_mach_flag) pter_gcta->read_imp_dose_mach(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
         else if (dose_mach_gz_flag) pter_gcta->read_imp_dose_mach_gz(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);

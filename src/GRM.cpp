@@ -873,6 +873,24 @@ void flip64(uintptr_t a[64]) {
   }
 }
 
+/*
+ * Prefer compiler builtin bit-reverse when available for clarity and
+ * potential codegen improvements. Fall back to the manual implementation
+ * otherwise.
+ */
+#ifndef __has_builtin
+#define __has_builtin(x) 0
+#endif
+
+#if __has_builtin(__builtin_bitreverse64)
+uint64_t revbits(uint64_t x) {
+    return __builtin_bitreverse64(x);
+}
+#elif __has_builtin(__builtin_bitreverse)
+uint64_t revbits(uint64_t x) {
+    return __builtin_bitreverse(x);
+}
+#else
 uint64_t revbits(uint64_t x) {
     uint64_t t;
     x = (x << 32) | (x >> 32); // Swap register halves.
@@ -886,6 +904,7 @@ uint64_t revbits(uint64_t x) {
     x = (t | (t << 2)) ^ x;
     return x;
 }
+#endif
 
 /*
 void flip64(uint64_t a[64]) {
@@ -900,20 +919,6 @@ void flip64(uint64_t a[64]) {
 }
 */
 
-//#ifdef __linux__
-//#pragma message("multiple target of N thread")
-//__attribute__((target_clones("popcnt","default")))
-//#endif
-#if defined(__linux__) && GCTA_CPU_x86
-__attribute__((target("default")))
-#endif
-
-#if defined(__linux__) && GCTA_CPU_x86
-__attribute__((target("popcnt")))
-#endif
-uint32_t popcounts(uint64_t dw){
-    return popcount(dw);
-}
 
 void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex){
     int num_marker = markerIndex.size();
@@ -994,7 +999,7 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
             flip64(&sample_miss[baseMissIndex]);
 
             for(int k = baseMissIndex; k < baseMissIndex + markerPerN; k++){
-                sub_miss[k] += popcount(sample_miss[k]); // give sub_miss a little more avoid overflow
+                sub_miss[k] += std::popcount(sample_miss[k]); // give sub_miss a little more avoid overflow
             }
         }
         #pragma omp parallel for
@@ -1510,7 +1515,7 @@ void GRM::N_thread(int grm_index_from, int grm_index_to, const uintptr_t* cur_cm
                 if(cmask2){
                     uintptr_t cmask = cmask1 & cmask2;
                     if(cmask){
-                        *po_N += popcounts(cmask);
+                        *po_N += std::popcount(cmask);
                     }
                 }
                 po_N++;
