@@ -137,14 +137,18 @@ void Marker::matchSNPListFile(string filename, int num_min_fields, const vector<
     string line;
     vector<uint32_t> bad_lines;
     int num_line = 0;
+    vector<string> line_elements;
     while(std::getline(allele_file, line)){
         num_line++;
-        vector<string> line_elements;
-        uint16_t num_elements;
-        //BOTTLENECK:
-        boost::split(line_elements, line, boost::is_any_of("\t "));
-        num_elements = line_elements.size();
-        boost::replace_all(line_elements[num_elements - 1], "\r", "");
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        line_elements.clear();
+        size_t start = 0, pos;
+        while ((pos = line.find_first_of("\t ", start)) != std::string::npos) {
+            line_elements.emplace_back(line, start, pos - start);
+            start = pos + 1;
+        }
+        line_elements.emplace_back(line, start);
+        uint16_t num_elements = line_elements.size();
         if(num_elements < require_fields){
             bad_lines.push_back(num_line);
         }
@@ -556,14 +560,17 @@ void Marker::read_bim(string bim_file) {
     string line;
     int start_line_number = name.size() + 1;
     uint8_t chr_item;
+    vector<string> line_elements;
     while(std::getline(bim, line)){
         line_number++;
-        //std::istringstream line_buf(line);
-        //std::istream_iterator<string> begin(line_buf), end;
-        vector<string> line_elements;
-        //vector<string> line_elements(begin, end);
-        boost::split(line_elements, line, boost::is_any_of("\t "));
-        boost::replace_all(line_elements[line_elements.size() - 1], "\r", "");
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        line_elements.clear();
+        size_t start = 0, pos;
+        while ((pos = line.find_first_of("\t ", start)) != std::string::npos) {
+            line_elements.emplace_back(line, start, pos - start);
+            start = pos + 1;
+        }
+        line_elements.emplace_back(line, start);
         if(line_elements.size() < Constants::NUM_BIM_COL) {
             LOGGER.e(0, "the bim file [" + bim_file + "], line " + to_string(line_number)
                    + " has elements less than " + to_string(Constants::NUM_BIM_COL));
@@ -624,9 +631,16 @@ vector<pair<string, vector<uint32_t>>> Marker::read_gene(string gfile){
 
     string line;
     std::getline(genein, line);
+    if (!line.empty() && line.back() == '\r') line.pop_back();
     vector<string> line_elements;
-    boost::split(line_elements, line, boost::is_any_of("\t "));
-    boost::replace_all(line_elements[line_elements.size() - 1], "\r", "");
+    {
+        size_t start = 0, pos;
+        while ((pos = line.find_first_of("\t ", start)) != std::string::npos) {
+            line_elements.emplace_back(line, start, pos - start);
+            start = pos + 1;
+        }
+        line_elements.emplace_back(line, start);
+    }
     int nElements;
     if(line_elements[0] == "gene" && line_elements[1] == "chr" && 
             line_elements[2] == "start" && line_elements[3] == "end" && line_elements[4] == "strand"){
@@ -644,11 +658,20 @@ vector<pair<string, vector<uint32_t>>> Marker::read_gene(string gfile){
     vector<uint32_t> curIndices;
 
     vector<pair<string, vector<uint32_t>>> gene;
+    vector<string> gene_line_elements;
     while(std::getline(genein, line)){
         line_number++;
-        vector<string> line_elements;
-        boost::split(line_elements, line, boost::is_any_of("\t "));
-        boost::replace_all(line_elements[line_elements.size() - 1], "\r", "");
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        gene_line_elements.clear();
+        {
+            size_t start = 0, pos;
+            while ((pos = line.find_first_of("\t ", start)) != std::string::npos) {
+                gene_line_elements.emplace_back(line, start, pos - start);
+                start = pos + 1;
+            }
+            gene_line_elements.emplace_back(line, start);
+        }
+        vector<string> &line_elements = gene_line_elements;
         if(line_elements.size() != nElements) {
             LOGGER.e(0, "  line " + to_string(line_number)
                    + " has elements not equal to " + to_string(nElements));
@@ -1396,13 +1419,17 @@ vector<string> Marker::read_snplist(string snplist_file) {
     string line;
     int line_number = 0;
     int last_length = 0;
+    vector<string> line_elements;
     while(std::getline(if_snplist, line)){
         line_number++;
-        //std::istringstream line_buf(line);
-        //std::istream_iterator<string> begin(line_buf), end;
-        vector<string> line_elements;
-        boost::split(line_elements, line, boost::is_any_of("\t "));
-        boost::replace_all(line_elements[line_elements.size() - 1], "\r", "");
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        line_elements.clear();
+        size_t start = 0, pos;
+        while ((pos = line.find_first_of("\t ", start)) != std::string::npos) {
+            line_elements.emplace_back(line, start, pos - start);
+            start = pos + 1;
+        }
+        line_elements.emplace_back(line, start);
         if(line_elements.size() < 1){
             LOGGER.e(0, "the SNP list file [" + snplist_file + "], line " + to_string(line_number) +
                         " has elements less than 1");

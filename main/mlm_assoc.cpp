@@ -316,6 +316,14 @@ void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<
     }
     _Vi.resize(0,0);
 
+    // Precompute Vi * y once (Vi is symmetric → row-major == col-major)
+    std::vector<float> Vi_y(n);
+    cblas_sgemv(CblasColMajor, CblasNoTrans,
+                n, n,
+                1.0f, Vi.data(), n,
+                y.data(), 1,
+                0.0f, Vi_y.data(), 1);
+
     beta.resize(m);
     se=eigenVector::Zero(m);
     pval=eigenVector::Constant(m,2);
@@ -324,7 +332,7 @@ void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<
     int k = 0, l = 0;
     Eigen::MatrixXf X_block;
     std::vector<int> indx;
-    // Vi_X_block: row-major n × bs result of Vi * X_block
+    // Vi_X_block: col-major n × bs result of Vi * X_block
     std::vector<float> Vi_X_block, Xt_Vi_X_block, Xt_Vi_y_block;
 
     for(i = 0; i < m; ){
@@ -337,29 +345,24 @@ void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<
         Xt_Vi_X_block.resize(bs);
         Xt_Vi_y_block.resize(bs);
 
-        // Vi (row-major n×n) * X_block (col-major n×bs == row-major bs×n with Trans)
-        // → Vi_X_block (row-major n×bs)
-        // Reading Vi once for bs SNPs is the key Level-3 vs Level-2 gain.
-        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+        // Vi (symmetric n×n) * X_block (col-major n×bs) → Vi_X_block (col-major n×bs)
+        cblas_sgemm(CblasColMajor, CblasNoTrans, CblasNoTrans,
                     n, bs, n,
                     1.0f, Vi.data(), n,
                     X_block.data(), n,
-                    0.0f, Vi_X_block.data(), bs);
+                    0.0f, Vi_X_block.data(), n);
 
-        // Diagonal of X_block^T * Vi_X_block: dot(col l of X_block, col l of Vi_X_block)
-        // X_block col l: col-major → data + l*n, stride 1
-        // Vi_X_block col l: row-major n×bs → start at l, stride bs
+        // Diagonal of X_block^T * Vi_X_block: contiguous stride-1 dot products
         for(l = 0; l < bs; l++){
             Xt_Vi_X_block[l] = cblas_sdot(n, X_block.data() + (size_t)l * n, 1,
-                                           Vi_X_block.data() + l, bs);
+                                           Vi_X_block.data() + (size_t)l * n, 1);
         }
 
-        // y^T * Vi_X_block: one sgemv for the whole block
-        //BOTTLENECK
-        cblas_sgemv(CblasRowMajor, CblasTrans,
+        // X_block^T * Vi_y (precomputed) — avoids re-reading n×bs Vi_X_block
+        cblas_sgemv(CblasColMajor, CblasTrans,
                     n, bs,
-                    1.0f, Vi_X_block.data(), bs,
-                    y.data(), 1,
+                    1.0f, X_block.data(), n,
+                    Vi_y.data(), 1,
                     0.0f, Xt_Vi_y_block.data(), 1);
 
         for(l = 0; l < bs; l++){
