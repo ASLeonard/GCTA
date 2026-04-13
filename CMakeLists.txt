@@ -250,7 +250,7 @@ add_executable(gcta64 ${MAIN_SOURCE})
 
 add_subdirectory(main)
 target_include_directories(mainV1 PUBLIC ${COMMON_INCLUDES} ${GCTA_BLAS_INCLUDE_DIRS})
-target_link_libraries(mainV1 Eigen3::Eigen Boost::math Boost::iostreams)
+target_link_libraries(mainV1 Eigen3::Eigen Boost::math Boost::iostreams Spectra)
 
 set(GCTA_TARGETS gcta64 mainV1 ${GCTA_LIBS})
 

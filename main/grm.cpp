@@ -17,6 +17,8 @@
 #include <unordered_set>
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
+#include <Spectra/SymEigsSolver.h>
+#include <Spectra/MatOp/DenseSymMatProd.h>
 
 void gcta::enable_grm_bin_flag() {
     _grm_bin_flag = true;
@@ -677,26 +679,33 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
     manipulate_grm(grm_file, keep_indi_file, remove_indi_file, "", grm_cutoff, -2.0, -2, merge_grm_flag, true);
     _grm_N.resize(0, 0);
     int n = _keep.size();
+    if (out_pc_num > n) out_pc_num = n;
     LOGGER << "\nPerforming principal component analysis ..." << _grm.rows() << "x" << _grm.cols() << std::endl;
 
-    //BOTTLENECK
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(_grm.cast<double>());
-    Eigen::MatrixXd evec = (eigensolver.eigenvectors());
-    Eigen::VectorXd eval = eigensolver.eigenvalues();
+    Eigen::MatrixXd grm_dbl = _grm.cast<double>();
+    Spectra::DenseSymMatProd<double> op(grm_dbl);
+    int ncv = std::min(n, std::max(2 * out_pc_num + 1, 20));
+    Spectra::SymEigsSolver<Spectra::DenseSymMatProd<double>> eigs(op, out_pc_num, ncv);
+    eigs.init();
+    eigs.compute(Spectra::SortRule::LargestAlge);
+    if (eigs.info() != Spectra::CompInfo::Successful)
+        LOGGER.e(0, "eigenvalue decomposition failed.");
+
+    Eigen::VectorXd eval = eigs.eigenvalues();
+    Eigen::MatrixXd evec = eigs.eigenvectors();
 
     std::string eval_file = _out + ".eigenval";
     std::ofstream o_eval(eval_file.c_str());
     if (!o_eval) LOGGER.e(0, "cannot open the file [" + eval_file + "] to read.");
-    for (int i = n - 1; i >= 0; i--) o_eval << eval(i) << std::endl;
+    for (int i = 0; i < out_pc_num; i++) o_eval << eval(i) << std::endl;
     o_eval.close();
     LOGGER << "Eigenvalues of " << n << " individuals have been saved in [" + eval_file + "]." << std::endl;
     std::string evec_file = _out + ".eigenvec";
     std::ofstream o_evec(evec_file.c_str());
     if (!o_evec) LOGGER.e(0, "cannot open the file [" + evec_file + "] to read.");
-    if (out_pc_num > n) out_pc_num = n;
     for (int i = 0; i < n; i++) {
         o_evec << _fid[_keep[i]] << " " << _pid[_keep[i]];
-        for (int j = n - 1; j >= (n - out_pc_num); j--) o_evec << " " << evec(i, j);
+        for (int j = 0; j < out_pc_num; j++) o_evec << " " << evec(i, j);
         o_evec << std::endl;
     }
     o_evec.close();
