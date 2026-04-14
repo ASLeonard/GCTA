@@ -15,8 +15,6 @@
 #include <algorithm>
 #include <fstream>
 #include <string_view>
-#include <boost/iostreams/filter/gzip.hpp>
-#include <boost/iostreams/filtering_stream.hpp>
 
 void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_file, std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool within_family, bool inbred, bool no_adj_covar, std::string weight_file, std::string save_reml_file, std::string load_reml_file)
 {
@@ -620,125 +618,110 @@ void gcta::grm_minus_grm(float *grm, float *sub_grm)
 
 void gcta::save_reml_state(std::string filename, bool no_adj_covar)
 {
-    std::ofstream raw_file(filename, std::ios::binary);
-    if(!raw_file.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to write. (Use --save-reml to generate this file.)");
-    boost::iostreams::filtering_ostream outfile;
-    outfile.push(boost::iostreams::gzip_compressor());
-    outfile.push(raw_file);
-    
-    // Write magic header
-    char magic[5] = "REML";
-    outfile.write(magic, 4);
-    
-    // Write dimensions
     int n = _n;
     int x_c = _X_c;
-    int num_varcmp = _varcmp.size();
-    int num_r_indx = _r_indx.size();
+    int num_varcmp = static_cast<int>(_varcmp.size());
+    int num_r_indx = static_cast<int>(_r_indx.size());
     
-    outfile.write((char*)&n, sizeof(int));
-    outfile.write((char*)&x_c, sizeof(int));
-    outfile.write((char*)&num_varcmp, sizeof(int));
-    outfile.write((char*)&num_r_indx, sizeof(int));
+    std::ofstream outfile(filename, std::ios::binary);
+    if(!outfile.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
+
+    // magic + dimensions
+    outfile.write("REML", 4);
+    outfile.write(reinterpret_cast<const char*>(&n),          sizeof(int));
+    outfile.write(reinterpret_cast<const char*>(&x_c),        sizeof(int));
+    outfile.write(reinterpret_cast<const char*>(&num_varcmp), sizeof(int));
+    outfile.write(reinterpret_cast<const char*>(&num_r_indx), sizeof(int));
     
-    // Write _Vi matrix (row-major)
-    float f_buf = 0.0;
-    for(int i = 0; i < n; i++) {
-        for(int j = 0; j < n; j++) {
-            f_buf = (float)_Vi(i, j);
-            outfile.write((char*)&f_buf, sizeof(float));
-        }
+    // _Vi (row-major) — bulk write via a float buffer
+    {
+        size_t vi_floats = static_cast<size_t>(n) * n;
+        std::vector<float> vi_buf(vi_floats);
+        for(int i = 0; i < n; i++)
+            for(int j = 0; j < n; j++)
+                vi_buf[static_cast<size_t>(i) * n + j] = static_cast<float>(_Vi(i, j));
+        outfile.write(reinterpret_cast<const char*>(vi_buf.data()),
+                      static_cast<std::streamsize>(vi_floats * sizeof(float)));
     }
-    
-    // Write _b std::vector (fixed effects) if covariates are adjusted
+
+    // _b
     if(!no_adj_covar) {
-        for(int i = 0; i < x_c; i++) {
-            f_buf = (float)_b(i);
-            outfile.write((char*)&f_buf, sizeof(float));
-        }
+        std::vector<float> b_buf(x_c);
+        for(int i = 0; i < x_c; i++) b_buf[i] = static_cast<float>(_b(i));
+        outfile.write(reinterpret_cast<const char*>(b_buf.data()), x_c * sizeof(float));
     }
     
-    // Write _varcmp std::vector (variance components)
-    for(int i = 0; i < num_varcmp; i++) {
-        f_buf = (float)_varcmp[i];
-        outfile.write((char*)&f_buf, sizeof(float));
+    // _varcmp
+    {
+        std::vector<float> vc_buf(num_varcmp);
+        for(int i = 0; i < num_varcmp; i++) vc_buf[i] = static_cast<float>(_varcmp[i]);
+        outfile.write(reinterpret_cast<const char*>(vc_buf.data()), num_varcmp * sizeof(float));
     }
     
-    // Write _r_indx std::vector
-    for(int i = 0; i < num_r_indx; i++) {
-        int idx = _r_indx[i];
-        outfile.write((char*)&idx, sizeof(int));
-    }
+    // _r_indx
+    outfile.write(reinterpret_cast<const char*>(_r_indx.data()), num_r_indx * sizeof(int));
     
-    outfile.reset();
-    raw_file.close();
-    LOGGER << "Saved REML state (n=" << n << ", covariates=" << x_c << ", variance components=" << num_varcmp << ") to [" << filename << "]." << std::endl;
+    outfile.close();
+    LOGGER << "Saved REML state (n=" << n << ", covariates=" << x_c
+           << ", variance components=" << num_varcmp << ") to [" << filename << "]." << std::endl;
 }
 
 void gcta::load_reml_state(std::string filename, bool no_adj_covar)
 {
-    std::ifstream raw_file(filename, std::ios::binary);
-    if(!raw_file.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to read. Make sure you have run --mlma --save-reml first with matching --out prefix.");
-    boost::iostreams::filtering_istream infile;
-    infile.push(boost::iostreams::gzip_decompressor());
-    infile.push(raw_file);
+    std::ifstream infile(filename, std::ios::binary);
+    if(!infile.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to read. Make sure you have run --mlma --save-reml first with matching --out prefix.");
     
-    // Read and verify magic header
-    char magic[5] = {0};
+    // magic
+    char magic[4];
     infile.read(magic, 4);
-    if(std::string_view(magic, 4) != "REML") LOGGER.e(0, "file ["+filename+"] is not a valid REML state file.");
+    if(std::string_view(magic, 4) != "REML")
+        LOGGER.e(0, "file ["+filename+"] is not a valid REML state file.");
     
-    // Read dimensions
+    // dimensions
     int n = 0, x_c = 0, num_varcmp = 0, num_r_indx = 0;
-    infile.read((char*)&n, sizeof(int));
-    infile.read((char*)&x_c, sizeof(int));
-    infile.read((char*)&num_varcmp, sizeof(int));
-    infile.read((char*)&num_r_indx, sizeof(int));
+    infile.read(reinterpret_cast<char*>(&n),          sizeof(int));
+    infile.read(reinterpret_cast<char*>(&x_c),        sizeof(int));
+    infile.read(reinterpret_cast<char*>(&num_varcmp), sizeof(int));
+    infile.read(reinterpret_cast<char*>(&num_r_indx), sizeof(int));
     
-    // Validate dimensions match current dataset
-    if(n != _n) {
+    if(n != _n)
         LOGGER.e(0, "sample size mismatch: REML state has n=" + std::to_string(n) + " but current dataset has n=" + std::to_string(_n));
-    }
-    if(x_c != _X_c) {
+    if(x_c != _X_c)
         LOGGER.e(0, "number of covariates mismatch: REML state has " + std::to_string(x_c) + " covariates but current dataset has " + std::to_string(_X_c));
-    }
     
-    // Read _Vi matrix (row-major)
+    // _Vi (row-major) — bulk read
     _Vi.resize(n, n);
-    float f_buf = 0.0;
-    for(int i = 0; i < n; i++) {
-        for(int j = 0; j < n; j++) {
-            infile.read((char*)&f_buf, sizeof(float));
-            _Vi(i, j) = f_buf;
-        }
+    {
+        size_t vi_floats = static_cast<size_t>(n) * n;
+        std::vector<float> vi_buf(vi_floats);
+        infile.read(reinterpret_cast<char*>(vi_buf.data()),
+                    static_cast<std::streamsize>(vi_floats * sizeof(float)));
+        for(int i = 0; i < n; i++)
+            for(int j = 0; j < n; j++)
+                _Vi(i, j) = vi_buf[static_cast<size_t>(i) * n + j];
     }
-    
-    // Read _b std::vector (fixed effects) if covariates are adjusted
+
+    // _b
     if(!no_adj_covar) {
         _b.resize(x_c);
-        for(int i = 0; i < x_c; i++) {
-            infile.read((char*)&f_buf, sizeof(float));
-            _b(i) = f_buf;
-        }
+        std::vector<float> b_buf(x_c);
+        infile.read(reinterpret_cast<char*>(b_buf.data()), x_c * sizeof(float));
+        for(int i = 0; i < x_c; i++) _b(i) = b_buf[i];
     }
     
-    // Read _varcmp std::vector (variance components)
+    // _varcmp
     _varcmp.resize(num_varcmp);
-    for(int i = 0; i < num_varcmp; i++) {
-        infile.read((char*)&f_buf, sizeof(float));
-        _varcmp[i] = f_buf;
+    {
+        std::vector<float> vc_buf(num_varcmp);
+        infile.read(reinterpret_cast<char*>(vc_buf.data()), num_varcmp * sizeof(float));
+        for(int i = 0; i < num_varcmp; i++) _varcmp[i] = vc_buf[i];
     }
     
-    // Read _r_indx std::vector
+    // _r_indx
     _r_indx.resize(num_r_indx);
-    for(int i = 0; i < num_r_indx; i++) {
-        int idx = 0;
-        infile.read((char*)&idx, sizeof(int));
-        _r_indx[i] = idx;
-    }
+    infile.read(reinterpret_cast<char*>(_r_indx.data()), num_r_indx * sizeof(int));
     
-    infile.reset();
-    raw_file.close();
-    
-    LOGGER << "Loaded REML state from [" << filename << "]: n=" << n << ", covariates=" << x_c << ", variance components=" << num_varcmp << std::endl;
+    infile.close();
+    LOGGER << "Loaded REML state from [" << filename << "]: n=" << n
+           << ", covariates=" << x_c << ", variance components=" << num_varcmp << std::endl;
 }
