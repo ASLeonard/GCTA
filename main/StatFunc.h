@@ -43,6 +43,9 @@ namespace StatFunc
     ////////// P-value Calculatiion Functions End ////////////////
 
     ///////// Random Number Generation Functions Start ////////
+    // Global RNG instance seeded from std::random_device at startup
+    std::mt19937& rng();
+
     // (0, 1) uniform distribution generator — idum is accepted for API compatibility but ignored
     [[nodiscard]] inline double uniform_random_distribution(int & /*idum*/) {
         static std::random_device rd;
