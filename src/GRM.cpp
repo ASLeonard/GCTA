@@ -1363,6 +1363,8 @@ void GRM::deduce_GRM(){
         if((!grm_out) || (!N_out)){
             LOGGER.e(0, "can't open " + o_name + ".grm.bin or .grm.N.bin to write");
         }
+        setvbuf(grm_out, nullptr, _IOFBF, 1 << 20);
+        setvbuf(N_out,   nullptr, _IOFBF, 1 << 20);
     }
 
     float mtd_weight = 1.0;
