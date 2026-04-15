@@ -108,6 +108,8 @@ static std::random_device ran_device;
 static std::mt19937 gen(ran_device());
 static std::uniform_real_distribution<double> u_dis(0, 1);
 
+std::mt19937& StatFunc::rng() { return gen; }
+
 double StatFunc::gasdev(int &idum) {
     static int iset = 0;
     static double gset;

@@ -17,13 +17,10 @@
 */
 #ifndef UTILS_H
 #define UTILS_H
-#if defined(_MSC_VER)
-#include <intrin.h>
-#define popcount __popcnt64
-#elif defined(__GNUC__) || defined(__GNUG__)
-#define popcount __builtin_popcountll 
+#if __cplusplus >= 202002L
+#include <bit>
 #else
-#error "Compiler is not supported"
+#error "C++20 or newer required for std::popcount"
 #endif
 
 #include <string>
