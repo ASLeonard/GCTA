@@ -29,14 +29,10 @@ bool _LLT(MatrixType &A, double &logdet){
     gcta_blas_int info = 0;
     gcta_blas_int cols = (gcta_blas_int)A.cols();
     char uplo = 'L';
-    LOGGER.ts("LLT");
     dpotrf(&uplo, &cols, vi, &cols, &info);
-    //LOGGER << "  LLT time: " << LOGGER.tp("LLT") << std::endl;
     if(info == 0){
         logdet = A.diagonal().array().square().log().sum();
-        //LOGGER.ts("LLT_INV");
         dpotri(&uplo, &cols, vi, &cols, &info);
-        //LOGGER << "  LLT inverse time: " << LOGGER.tp("LLT_INV") << std::endl;
         if(info == 0){
             A.template triangularView<Eigen::Upper>() = A.transpose();
             return true;
@@ -48,6 +44,35 @@ bool _LLT(MatrixType &A, double &logdet){
     return false;
 }
 
+
+// LU factorization + inversion via LAPACK dgetrf/dgetri.
+// Uses blocked BLAS3 algorithms — faster than Eigen's PartialPivLU for large n.
+// Restores A to its original state on failure so downstream fallbacks see the
+// unmodified matrix (dgetrf overwrites A in-place).
+template<typename MatrixType>
+bool _LU(MatrixType &A, double &logdet) {
+    MatrixType A_orig = A;
+    auto *vi = A.data();
+    gcta_blas_int n = (gcta_blas_int)A.cols();
+    gcta_blas_int info = 0;
+    std::vector<gcta_blas_int> ipiv(n);
+
+    dgetrf(&n, &n, vi, &n, ipiv.data(), &info);
+    if (info != 0) { A = A_orig; return false; }
+
+    // log|det(A)| = sum(log|diag(U)|); L has unit diagonal so doesn't contribute
+    logdet = A.diagonal().array().abs().log().sum();
+
+    // Workspace query, then in-place inversion
+    gcta_blas_int lwork = -1;
+    double work_query = 0.0;
+    dgetri(&n, vi, &n, ipiv.data(), &work_query, &lwork, &info);
+    lwork = (gcta_blas_int)work_query;
+    std::vector<double> work(lwork);
+    dgetri(&n, vi, &n, ipiv.data(), work.data(), &lwork, &info);
+    if (info != 0) { A = A_orig; return false; }
+    return true;
+}
 
 template<typename MatrixType>
 bool SquareMatrixInverse(MatrixType &A, double &logdet, int &rank, INVmethod &method){
@@ -62,32 +87,31 @@ bool SquareMatrixInverse(MatrixType &A, double &logdet, int &rank, INVmethod &me
                     break;
                 }
             }
+            [[fallthrough]];
         case INV_LU:
             {
-                Eigen::PartialPivLU<MatrixType> lu(A);
-                double det = lu.determinant();
-                //std::cout << "LU det: " << std::scientific << det << std::endl;
-                if(det >= 1e-10 || det <= -1e-10){
-                    logdet = lu.matrixLU().diagonal().array().abs().log().sum();
-                    A = lu.inverse();
+                // LAPACK dgetrf/dgetri: blocked BLAS3, faster than Eigen PartialPivLU.
+                // _LU restores A on failure so INV_QR fallback gets the original matrix.
+                if(_LU(A, logdet)){
                     method = INV_LU;
                     ret = true;
                     break;
                 }
             }
+            [[fallthrough]];
         case INV_QR:
             {
                 Eigen::HouseholderQR<MatrixType> qr(A);
-                double det = qr.absDeterminant();
-                //std::cout << "QR det: " << std::scientific << det << std::endl;
-                if(det > 1e-16){
-                    logdet = qr.logAbsDeterminant();
+                // Compute logdet once instead of absDeterminant() + logAbsDeterminant()
+                logdet = qr.logAbsDeterminant();
+                if(logdet > std::log(1e-16)){
                     A = qr.solve(MatrixType::Identity(n, n));
                     method = INV_QR;
                     ret = true;
                     break;
                 }
             }
+            [[fallthrough]];
         case INV_FQR:
             // not necessary 
             // Eigen::HouseholderQR<MatrixType> qr(A);
@@ -108,6 +132,7 @@ bool SquareMatrixInverse(MatrixType &A, double &logdet, int &rank, INVmethod &me
                     }
                 }
             }
+            [[fallthrough]];
         case INV_SVD:
             //Eigen::BDCSVD<MatrixType> svd(A, Eigen::ComputeThinU|Eigen::ComputeThinV);
             ;

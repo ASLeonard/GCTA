@@ -129,7 +129,7 @@ public:
     //void make_grm_pca(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool output_bin, int grm_mtd, double wind_size, bool mlmassoc);
     void save_grm(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, std::string sex_file, double grm_cutoff, double adj_grm_fac, int dosage_compen, bool merge_grm_flag, bool output_grm_bin);
     void align_grm(std::string m_grm_file);
-    void pca(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num);
+    void pca(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num, bool pca_approx = true);
     void snp_pc_loading(std::string pc_file);
     void project_loading(std::string pc_load, int N); 
 
@@ -153,6 +153,7 @@ public:
     void set_reml_allow_constrain_run();
     void set_reml_diag_mul(double value);
     void set_reml_diagV_adj(int method);
+    void set_reml_trace_approx(bool on, int nprobes);
     void set_log_pval(bool log_pval);
     void set_reml_inv_method(int method);
 
@@ -336,12 +337,16 @@ private:
     bool comput_inverse_logdet_PLU(eigenMatrix &Vi, double &logdet);
     bool comput_inverse_logdet_LU(eigenMatrix &Vi, double &logdet);
     double calcu_P(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatrix &P);
+    double calcu_P_nomatrix(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i);
+    double calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatrix *P);
     void calcu_Hi(eigenMatrix &P, eigenMatrix &Hi);
     void reml_equation(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector &varcmp);
     double lgL_reduce_mdl(bool no_constrain);
     void em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, eigenVector &varcmp);
     void ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector &prev_varcmp, eigenVector &varcmp, double dlogL);
     void calcu_tr_PA(eigenMatrix &P, eigenVector &tr_PA);
+    eigenVector applyP_vec(const eigenVector &v) const;
+    void calcu_tr_PA_hutchpp(eigenVector &tr_PA, int m_probes);
     void calcu_Vp(double &Vp, double &Vp2, double &VarVp, double &VarVp2, eigenVector &varcmp, eigenMatrix &Hi);
     void calcu_hsq(int i, double Vp, double Vp2, double VarVp, double VarVp2, double &hsq, double &var_hsq, eigenVector &varcmp, eigenMatrix &Hi);
     void calcu_sum_hsq(double Vp, double VarVp, double &sum_hsq, double &var_sum_hsq, eigenVector &varcmp, eigenMatrix &Hi);
@@ -426,8 +431,9 @@ private:
     
 
     // mlma
-    void mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<const float> geno_mkl, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval);
-    void mlma_calcu_stat_covar(std::span<const float> y, [[maybe_unused]] std::span<const float> geno_mkl, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval);
+    struct MlmaResult { std::vector<float> beta, se, pval; };
+    MlmaResult mlma_calcu_stat(std::span<const float> y, unsigned long m);
+    MlmaResult mlma_calcu_stat_covar(std::span<const float> y, unsigned long m);
     void grm_minus_grm(float *grm, float *sub_grm);
 
     // population
@@ -596,7 +602,13 @@ private:
     std::vector<eigenMatrix> _A;
     eigenVector _y;
     eigenMatrix _Vi;
+    eigenMatrix _Vi_X;        // cached V^{-1} X for implicit P matvecs
+    eigenMatrix _Xt_Vi_X_i;   // cached (X' V^{-1} X)^{-1} for implicit P matvecs
     eigenMatrix _P;
+    bool _reml_trace_approx = false;
+    int  _reml_trace_approx_nprobes = 90;  // ~1% relative trace error
+    eigenMatrix _hutchpp_S;   // cached Rademacher probes (n × k) for Hutch++ range sketch
+    eigenMatrix _hutchpp_G;   // cached Rademacher probes (n × k) for Hutch++ residual
     eigenVector _b;
     std::vector<std::string> _var_name;
     std::vector<double> _varcmp;

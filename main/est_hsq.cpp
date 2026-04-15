@@ -12,6 +12,8 @@
 
 #include "gcta.h"
 #include "mem.hpp"
+#include "StatFunc.h"
+#include <random>
 
 void gcta::set_reml_diag_mul(double value){
     _reml_diag_mul = value;
@@ -61,6 +63,11 @@ void gcta::set_reml_mtd(int reml_mtd)
 
 void gcta::set_reml_inv_method(int method){
     _reml_inv_mtd = method;
+}
+
+void gcta::set_reml_trace_approx(bool on, int nprobes){
+    _reml_trace_approx = on;
+    _reml_trace_approx_nprobes = nprobes;
 }
     
 
@@ -961,7 +968,9 @@ void gcta::reml(bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, std:
         eigenVector y_fix_eff_loo = (y_fix_eff - diag_Xproj.cwiseProduct(_y)).array() / (1.0 - diag_Xproj.array()).array();
         eigenVector y_tilde = _y - y_fix_eff_loo;
         eigenVector y_tilde_centered = y_tilde.array() - y_tilde.mean();
-        eigenVector bBlup_base = (_Vi * y_tilde_centered);
+        // _Vi stores only the lower triangle; selfadjointView routes to dsymv.
+        eigenVector bBlup_base(_n);
+        bBlup_base.noalias() = _Vi.selfadjointView<Eigen::Lower>() * y_tilde_centered;
 
         int col_num = _r_indx.size();
         eigenMatrix bBlups(bBlup_base.size(),  col_num);
@@ -978,7 +987,15 @@ void gcta::reml(bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, std:
             int _y_size = _y.size();
             eigenVector diag_H(_y_size);
             for(int j = 0; j < _y_size; j++){
-                diag_H[j] = (_A[_r_indx[i]].col(j).array() * _Vi.col(j).array()).sum() * varcmp[i];
+                // _Vi stores only the lower triangle.  Vi.col(j) decomposes as:
+                //   rows k > j : lower triangle, contiguous in column-major
+                //   rows k < j : upper triangle -> use Vi(j,k) by symmetry (row access)
+                double s = _Vi(j, j) * _A[_r_indx[i]](j, j);
+                if (j > 0)
+                    s += _Vi.row(j).head(j).dot(_A[_r_indx[i]].row(j).head(j));
+                if (j + 1 < _y_size)
+                    s += _Vi.col(j).tail(_y_size - j - 1).dot(_A[_r_indx[i]].col(j).tail(_y_size - j - 1));
+                diag_H[j] = s * varcmp[i];
             }
             cvBlups.col(i) = (gBlup_fix_eff_loo.array() - diag_H.array() * y_tilde_centered.array()).array() / (1.0 - diag_H.array()).array();
         }
@@ -1083,6 +1100,11 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
     int i = 0, constrain_num = 0, iter = 0, reml_mtd_tmp = _reml_mtd;
     double logdet = 0.0, logdet_Xt_Vi_X = 0.0, prev_lgL = -1e20, lgL = -1e20, dlogL = 1000.0;
     eigenVector prev_prev_varcmp(varcmp), prev_varcmp(varcmp), varcomp_init(varcmp);
+    if (_reml_trace_approx && !_bivar_reml && !_within_family) {
+        LOGGER << "Using Hutch++ stochastic trace estimator with "
+               << _reml_trace_approx_nprobes << " probes (memory-saving mode; "
+               << "skips n*n P matrix materialisation)." << std::endl;
+    }
     bool converged_flag = false;
     for (iter = 0; iter < _reml_max_iter; iter++) {
         if (reml_bivar_fix_rg) update_A(prev_varcmp);
@@ -1104,8 +1126,6 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
             LOGGER << std::endl;
         }
         //LOGGER << "Iter " << iter << std::endl;
-        float time_vi = 0;
-        LOGGER.ts("DBGtime");
         if (_bivar_reml) calcu_Vi_bivar(_Vi, prev_varcmp, logdet, iter); // Calculate Vi, bivariate analysis //very slow
         else if (_within_family) calcu_Vi_within_family(_Vi, prev_varcmp, logdet, iter); // within-family REML
         else {
@@ -1113,24 +1133,24 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
                 LOGGER<<"Warning: V matrix is not positive-definite.\n";
                 varcmp = prev_prev_varcmp;
                 if(!calcu_Vi(_Vi, varcmp, logdet, iter)) LOGGER.e(0, "V matrix is not positive-definite.");
+                if (_P.size() == 0) calcu_P(_Vi, Vi_X, Xt_Vi_X_i, _P);
                 calcu_Hi(_P, Hi);
                 Hi = 2 * Hi;
                 break;
             }
         }
-        time_vi = LOGGER.tp("DBGtime");
-        //LOGGER << "calcu_vi_bivar returned" << std::endl;
-        float time_p = 0;
-        LOGGER.ts("DBGtime");
-        logdet_Xt_Vi_X = calcu_P(_Vi, Vi_X, Xt_Vi_X_i, _P); // Calculate P  //quick
-        time_p = LOGGER.tp("DBGtime");
-        
-        float time_reml = 0;
-        LOGGER.ts("DBGtime");
+        // When using Hutch++ with AI-REML or EM-REML, skip the n×n P materialisation.
+        // Fisher scoring (mtd 1) always needs the full P for calcu_Hi every iteration.
+        const bool skip_P = _reml_trace_approx && !_bivar_reml && !_within_family && _reml_mtd != 1;
+        if (skip_P) {
+            logdet_Xt_Vi_X = calcu_P_nomatrix(_Vi, Vi_X, Xt_Vi_X_i);
+            _P.resize(0, 0);  // release memory
+        } else {
+            logdet_Xt_Vi_X = calcu_P(_Vi, Vi_X, Xt_Vi_X_i, _P);
+        }
         if (_reml_mtd == 0) ai_reml(_P, Hi, Py, prev_varcmp, varcmp, dlogL);
         else if (_reml_mtd == 1) reml_equation(_P, Hi, Py, varcmp);
         else if (_reml_mtd == 2) em_reml(_P, Py, prev_varcmp, varcmp);  //slow ++
-        time_reml = LOGGER.tp("DBGtime");
         lgL = -0.5 * (logdet_Xt_Vi_X + logdet + (_y.transpose() * Py)(0, 0));
 
         if(_reml_force_converge && _reml_AI_not_invertible) break;
@@ -1154,7 +1174,7 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
         if (iter > 0) {
             LOGGER << iter << "\t" << std::fixed << LOGGER.setprecision(2) << lgL << "\t";
             for (i = 0; i < _r_indx.size(); i++) LOGGER << LOGGER.setprecision(5) << varcmp[i] << "\t";
-            //LOGGER << time_vi << "\t" << time_p << "\t" << time_reml << "\t";
+
             if (constrain_num > 0) LOGGER << "(" << constrain_num << " component(s) constrained)" << std::endl;
             else LOGGER << std::endl;
         } else {
@@ -1178,6 +1198,7 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
 
         if((_reml_force_converge || _reml_no_converge) && prev_lgL > lgL){
             varcmp = prev_varcmp;
+            if (_P.size() == 0) calcu_P(_Vi, Vi_X, Xt_Vi_X_i, _P);
             calcu_Hi(_P, Hi);
             Hi = 2 * Hi;
             break;
@@ -1188,6 +1209,7 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
         if ((varcmp - prev_varcmp).squaredNorm() / varcmp.squaredNorm() < 1e-8 && (fabs(dlogL) < 1e-4 || (fabs(dlogL) < 1e-2 && dlogL < 0))) {
             converged_flag = true;
             if (_reml_mtd == 2) {
+                if (_P.size() == 0) calcu_P(_Vi, Vi_X, Xt_Vi_X_i, _P);
                 calcu_Hi(_P, Hi);
                 Hi = 2 * Hi;
             } // for calculation of SE
@@ -1284,31 +1306,33 @@ void gcta::calcu_sum_hsq(double Vp, double VarVp, double &sum_hsq, double &var_s
 
 bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, int &iter)
 {
-    int i = 0, j = 0, k = 0;
-    std::string errmsg = "\n  the V (variance-covariance) matrix is not invertible.";
-
-    Vi = eigenMatrix::Zero(_n, _n);
+    Vi.resize(_n, _n);
     if (_r_indx.size() == 1) {
         Vi.diagonal() = eigenVector::Constant(_n, 1.0 / prev_varcmp[0]);
         logdet = _n * log(prev_varcmp[0]);
     } 
     else {
-        bool use_lu = false;
-        for (i = 0; i < _r_indx.size(); i++){
-            Vi += (_A[_r_indx[i]]) * prev_varcmp[i];
-            /*
-            if(prev_varcmp[i] < 0){
-                use_lu = true;
+
+        // Accumulate only the lower triangle of V = sum_i A_i * sigma_i^2.
+        // dpotrf reads only the lower triangle, and _LLT symmetrises from lower
+        // after dpotri, so the upper never needs to be filled during assembly.
+        const int num_comp = _r_indx.size();
+
+        // Only the lower triangle is written: dpotrf reads only lower, and _LLT
+        // symmetrises from lower afterward.  Writing the upper triangle here was
+        // redundant (it gets overwritten by dpotri/symmetrize anyway).
+        #pragma omp parallel for collapse(2)
+        for (int j = 0; j < _n; j++) {
+            for (int k = 0; k <= j; k++) {
+                double val = 0.0;
+                for (int ci = 0; ci < num_comp; ci++)
+                    val += (_A[_r_indx[ci]])(j, k) * prev_varcmp[ci];
+                Vi(j, k) = val;
             }
-            */
         }
 
-        INVmethod method_try;
-        if(_reml_inv_mtd == 0){
-            method_try = use_lu? INV_LU : INV_LLT;
-        }else{
-            method_try = static_cast<INVmethod>(_reml_inv_mtd);
-        }
+        constexpr bool use_lu = false;
+        INVmethod method_try = _reml_inv_mtd ? static_cast<INVmethod>(_reml_inv_mtd) : (use_lu ? INV_LU : INV_LLT);
             
         /*
         for(int i = 0; i < _r_indx.size(); i++){ 
@@ -1328,7 +1352,7 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
             if(_reml_diagV_adj == 1){
                 LOGGER<<"A small positive value is added to the diagonals. The results might not be reliable!"<<std::endl;
                 double d_buf = Vi.diagonal().mean() * _reml_diag_mul;
-                for(j = 0; j < _n ; j++) Vi(j,j) += d_buf;
+                for(int j = 0; j < _n ; j++) Vi(j,j) += d_buf;
                 if(!SquareMatrixInverse(Vi, logdet, rank, method_try)){
                     LOGGER << "Still can't be inverted. Try --reml-alg-inv 2 " << std::endl;
                     ret = false;  
@@ -1530,13 +1554,55 @@ bool gcta::inverse_H(eigenMatrix &H)
 
 double gcta::calcu_P(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatrix &P)
 {
-    Vi_X = Vi*_X;
-    Xt_Vi_X_i = _X.transpose() * Vi_X;
+    return calcu_P_impl(Vi, Vi_X, Xt_Vi_X_i, &P);
+}
+
+double gcta::calcu_P_nomatrix(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i)
+{
+    return calcu_P_impl(Vi, Vi_X, Xt_Vi_X_i, nullptr);
+}
+
+double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatrix *P)
+{
+    // Vi is symmetric; selfadjointView<Lower> routes to BLAS dsymm which reads only the
+    // lower triangle of the n×n matrix — halves memory bandwidth vs a general dgemm.
+    Vi_X.noalias() = Vi.selfadjointView<Eigen::Lower>() * _X;
+    Xt_Vi_X_i.noalias() = _X.transpose() * Vi_X;
+
     double logdet_Xt_Vi_X = 0.0;
-    int rank = 0; 
+    int rank = 0;
     INVmethod method = (_reml_inv_mtd == 0) ? INV_LLT : static_cast<INVmethod>(_reml_inv_mtd);
     if(!SquareMatrixInverse(Xt_Vi_X_i, logdet_Xt_Vi_X, rank, method)) LOGGER.e(0, "\n  the X^t * V^-1 * X matrix is not invertible. Please check the covariate(s) and/or the environmental factor(s).");
-    P = Vi - Vi_X * Xt_Vi_X_i * Vi_X.transpose();
+
+    // Cache for implicit P matvecs (applyP_vec / Hutch++)
+    _Vi_X = Vi_X;
+    _Xt_Vi_X_i = Xt_Vi_X_i;
+
+    // Skip n×n P materialisation when caller passes nullptr (Hutch++ path)
+    if (!P) return logdet_Xt_Vi_X;
+
+    // The correction Vi_X * Xt_Vi_X_i * Vi_X^T is symmetric PSD.
+    // Factor Xt_Vi_X_i = L L^T (c×c Cholesky, negligible cost since c is tiny).
+    // Then Vi_X * Xt_Vi_X_i * Vi_X^T = Z * Z^T where Z = Vi_X * L (n×c).
+    // selfadjointView::rankUpdate maps to BLAS dsyrk, computing only the lower
+    // triangle of the n×n update — halves flops vs a general dgemm.
+    Eigen::LLT<eigenMatrix> llt(Xt_Vi_X_i);
+    if(llt.info() == Eigen::Success) {
+        eigenMatrix Z;
+        Z.noalias() = Vi_X * llt.matrixL();
+        P->resize(_n, _n);
+        P->triangularView<Eigen::Lower>() = Vi.triangularView<Eigen::Lower>();
+        P->selfadjointView<Eigen::Lower>().rankUpdate(Z, static_cast<eigenMatrix::Scalar>(-1));
+        P->triangularView<Eigen::Upper>() = P->transpose();
+    } else {
+        // Rare fallback: Xt_Vi_X_i lost positive-definiteness after inversion (numerical
+        // edge case). Use general n×n products; noalias() avoids a defensive copy.
+        eigenMatrix W;
+        W.noalias() = Vi_X * Xt_Vi_X_i;
+        *P = Vi;
+        P->noalias() -= W * Vi_X.transpose();
+    }
+
     return logdet_Xt_Vi_X;
 }
 
@@ -1593,7 +1659,8 @@ void gcta::reml_equation(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigen
     if(_reml_AI_not_invertible) return;
 
     // Calculate R
-    Py = P*_y;
+    // P is symmetric; selfadjointView routes to BLAS dsymv (lower tri only).
+    Py.noalias() = P.selfadjointView<Eigen::Lower>() * _y;
     eigenVector R(_r_indx.size());
     for (int i = 0; i < _r_indx.size(); i++) {
         if (_bivar_reml || _within_family) R(i) = (Py.transpose()*(_Asp[_r_indx[i]]) * Py)(0, 0);
@@ -1610,7 +1677,11 @@ void gcta::reml_equation(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigen
 
 void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector &prev_varcmp, eigenVector &varcmp, double dlogL)
 {
-    Py = P*_y;
+    const bool use_approx = _reml_trace_approx && !_bivar_reml && !_within_family;
+
+    // Py = P * y
+    if (use_approx) Py = applyP_vec(_y);
+    else Py.noalias() = P.selfadjointView<Eigen::Lower>() * _y;
     //eigenVector cvec(_n);
     eigenMatrix APy(_n, _r_indx.size());
     //LOGGER << "AI reml 1 start" << std::endl;
@@ -1623,19 +1694,30 @@ void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector
     //LOGGER << "AI reml 2 start" << std::endl;
     // Calculate Hi
     eigenVector R(_r_indx.size());
-    #pragma omp parallel for
-    for (int i = 0; i < _r_indx.size(); i++) {
-        R(i) = (Py.transpose()*(APy.col(i)))(0, 0);
-        eigenVector cvec = P * (APy.col(i));
-        Hi(i, i) = ((APy.col(i)).transpose() * cvec)(0, 0);
-        for (int j = 0; j < i; j++) Hi(j, i) = Hi(i, j) = ((APy.col(j)).transpose() * cvec)(0, 0);
+    if (use_approx) {
+        #pragma omp parallel for
+        for (int i = 0; i < _r_indx.size(); i++) {
+            R(i) = (Py.transpose()*(APy.col(i)))(0, 0);
+            eigenVector cvec = applyP_vec(APy.col(i));
+            Hi(i, i) = ((APy.col(i)).transpose() * cvec)(0, 0);
+            for (int j = 0; j < i; j++) Hi(j, i) = Hi(i, j) = ((APy.col(j)).transpose() * cvec)(0, 0);
+        }
+    } else {
+        #pragma omp parallel for
+        for (int i = 0; i < _r_indx.size(); i++) {
+            R(i) = (Py.transpose()*(APy.col(i)))(0, 0);
+            eigenVector cvec = P.selfadjointView<Eigen::Lower>() * APy.col(i);
+            Hi(i, i) = ((APy.col(i)).transpose() * cvec)(0, 0);
+            for (int j = 0; j < i; j++) Hi(j, i) = Hi(i, j) = ((APy.col(j)).transpose() * cvec)(0, 0);
+        }
     }
     //LOGGER << "AI reml 2 end" << std::endl;
     Hi = 0.5 * Hi;
 
     // Calcualte tr(PA) and dL
     eigenVector tr_PA;
-    calcu_tr_PA(P, tr_PA);
+    if (use_approx) calcu_tr_PA_hutchpp(tr_PA, _reml_trace_approx_nprobes);
+    else calcu_tr_PA(P, tr_PA);
     R = -0.5 * (tr_PA - R);
 
     // Calculate variance component
@@ -1661,10 +1743,15 @@ void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, ei
     // Calculate trace(PA)
     //LOGGER << "Before em_reml: " << getVMemKB() << " " << getMemKB() << ", "; 
     eigenVector tr_PA;
-    calcu_tr_PA(P, tr_PA);  // extremely slow
-    //LOGGER << "calcu_tr_PA returned" << std::endl;
-    // Calculate R
-    Py = P*_y;
+    if (_reml_trace_approx && !_bivar_reml && !_within_family) {
+        calcu_tr_PA_hutchpp(tr_PA, _reml_trace_approx_nprobes);
+        Py = applyP_vec(_y);
+    } else {
+        calcu_tr_PA(P, tr_PA);  // exact path
+        // P is symmetric; selfadjointView routes to BLAS dsymv, reading only the
+        // lower triangle — halves memory bandwidth vs a general dgemv.
+        Py.noalias() = P.selfadjointView<Eigen::Lower>() * _y;
+    }
     eigenVector R(_r_indx.size());
 
     #pragma omp parallel for
@@ -1684,14 +1771,95 @@ void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, ei
     //varcmp = (varcmp.array() - prev_varcmp.array())*2 + prev_varcmp.array();        
 }
 
+// Implicit P*v = V^{-1}v - V^{-1}X (X'V^{-1}X)^{-1} X'V^{-1}v
+// Uses cached _Vi, _Vi_X, _Xt_Vi_X_i from calcu_P.
+eigenVector gcta::applyP_vec(const eigenVector &v) const
+{
+    // w = V^{-1} v   (dsymv on lower triangle)
+    eigenVector w = _Vi.selfadjointView<Eigen::Lower>() * v;
+    // a = X' w = X' V^{-1} v   (dgemv, c-dimensional)
+    eigenVector a = _Vi_X.transpose() * v;
+    // b = (X' V^{-1} X)^{-1} a   (tiny c×c symmetric solve)
+    eigenVector b = _Xt_Vi_X_i.selfadjointView<Eigen::Lower>() * a;
+    // P v = w - V^{-1} X b
+    w.noalias() -= _Vi_X * b;
+    return w;
+}
+
+// Hutch++ stochastic trace estimation: tr(P * A_i) for all variance components.
+// NOTE: This is a MEMORY optimisation, not a speed optimisation. Each call does
+// ~2k dsymv(n×n) per component vs one O(n²) sweep for exact trace. The benefit
+// is avoiding materialisation of the n×n P matrix, saving 8n² bytes of RAM.
+// Probe vectors S and G are generated once (on first call) and cached in
+// _hutchpp_S / _hutchpp_G so that the trace estimate is a smooth deterministic
+// function of the variance components, allowing AI-REML to converge.
+// Reference: Meyer, Musco, Musco, Woodruff (2021), "Hutch++", SIAM SOSA.
+void gcta::calcu_tr_PA_hutchpp(eigenVector &tr_PA, int m_probes)
+{
+    const int ncomp = _r_indx.size();
+    tr_PA.resize(ncomp);
+    // Split budget: k probes each for range-sketch, low-rank, residual Hutchinson
+    const int k = std::max(m_probes / 3, 3);
+
+    // Lazily generate probe vectors once per REML run; reuse across iterations
+    // so the trace estimate is a deterministic function of varcmp → smooth
+    // optimisation landscape → Newton convergence.
+    if (_hutchpp_S.rows() != _n || _hutchpp_S.cols() != k) {
+        std::mt19937 &rng = StatFunc::rng();
+        std::uniform_int_distribution<int> coin(0, 1);
+        _hutchpp_S.resize(_n, k);
+        _hutchpp_G.resize(_n, k);
+        for (int j = 0; j < k; j++)
+            for (int r = 0; r < _n; r++) {
+                _hutchpp_S(r, j) = coin(rng) ? 1.0 : -1.0;
+                _hutchpp_G(r, j) = coin(rng) ? 1.0 : -1.0;
+            }
+    }
+
+    for (int ci = 0; ci < ncomp; ci++) {
+        const auto &Ai = _A[_r_indx[ci]];
+
+        // Helper: apply (P * A_i) to a vector
+        auto applyPA = [&](const eigenVector &z) -> eigenVector {
+            eigenVector Az = Ai.selfadjointView<Eigen::Lower>() * z;
+            return applyP_vec(Az);
+        };
+
+        // --- Phase A: range sketch ---
+        eigenMatrix K(_n, k);
+        for (int j = 0; j < k; j++)
+            K.col(j) = applyPA(_hutchpp_S.col(j));
+
+        // QR factorisation of K to get orthonormal basis Q (n x k)
+        Eigen::HouseholderQR<eigenMatrix> qr(K);
+        eigenMatrix Q = qr.householderQ() * eigenMatrix::Identity(_n, k);
+
+        // --- Phase B: low-rank trace contribution ---
+        eigenMatrix MQ(_n, k);
+        for (int j = 0; j < k; j++) MQ.col(j) = applyPA(Q.col(j));
+        double t_lr = Q.cwiseProduct(MQ).sum();
+
+        // --- Phase C: Hutchinson residual ---
+        eigenMatrix MG(_n, k);
+        for (int j = 0; j < k; j++) MG.col(j) = applyPA(_hutchpp_G.col(j));
+
+        // Project out Q: R = G - Q*(Q'G), MR = MG - MQ*(Q'G)
+        eigenMatrix QtG = Q.transpose() * _hutchpp_G;   // k x k
+        eigenMatrix R = _hutchpp_G - Q * QtG;
+        eigenMatrix MR = MG - MQ * QtG;
+
+        double t_hutch = R.cwiseProduct(MR).sum() / k;
+
+        tr_PA(ci) = t_lr + t_hutch;
+    }
+}
+
 // input P, calculate tr(PA)
 void gcta::calcu_tr_PA(eigenMatrix &P, eigenVector &tr_PA) {
     //LOGGER << "Before calcu_tr_PA: " << getVMemKB() << " " << getMemKB() << ", "; 
 
     // Calculate trace(PA)
     tr_PA.resize(_r_indx.size());
-    //double d_bufs[_n];
-    double *d_bufs = new double[_n];
     for (int i = 0; i < _r_indx.size(); i++) {
         //LOGGER << "calcu_tr_PA " << i << std::endl;
         if (_bivar_reml || _within_family){
@@ -1714,20 +1882,22 @@ void gcta::calcu_tr_PA(eigenMatrix &P, eigenVector &tr_PA) {
             //temp.resize(0,0);
         }
         else {
-            double d_buf = 0.0;
-            memset(d_bufs, 0, _n * sizeof(double));
-            #pragma omp parallel for
-            for (int k = 0; k < _n; k++) {
-                for (int l = 0; l < _n; l++) d_bufs[k] += P(k, l)*(_A[_r_indx[i]])(k, l);
+            // tr(P * A) = P ⊙ A elementwise summed. Both P and A are symmetric,
+            // so only the lower triangle is needed: diagonal contributes weight 1,
+            // off-diagonal weight 2. Column-major loop order (col outer, row inner)
+            // keeps both P and A accesses sequential in memory, halving bandwidth
+            // vs reading all n² elements with a full ddot.
+            const auto &Ai = _A[_r_indx[i]];
+            double s = 0.0;
+            #pragma omp parallel for reduction(+:s) schedule(static)
+            for (int col = 0; col < _n; col++) {
+                s += P(col, col) * Ai(col, col);
+                for (int row = col + 1; row < _n; row++)
+                    s += 2.0 * P(row, col) * Ai(row, col);
             }
-            for(int k = 0; k < _n; k++){
-                d_buf += d_bufs[k];
-            }
-            tr_PA(i) = d_buf;
+            tr_PA(i) = s;
         }
     }
-    delete[] d_bufs;
-
 }
 
 // blue estimate of SNP effect

@@ -240,44 +240,48 @@ void gcta::read_bedfile(std::string bedfile)
     if (_keep.size() == 0) LOGGER.e(0, "no individual is retained for analysis.");
 
     // Read bed file
-    char ch[1];
-    std::bitset<8> b;
+    const size_t bytes_per_snp = (_indi_num + 3) / 4;
     _snp_1.resize(_include.size());
     _snp_2.resize(_include.size());
     for (i = 0; i < _include.size(); i++) {
         _snp_1[i].reserve(_keep.size());
         _snp_2[i].reserve(_keep.size());
     }
-    std::fstream BIT(bedfile.c_str(), std::ios::in | std::ios::binary);
+    std::ifstream BIT(bedfile.c_str(), std::ios::in | std::ios::binary);
     if (!BIT) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
     LOGGER << "Reading PLINK BED file from [" + bedfile + "] in SNP-major format ..." << std::endl;
-    for (i = 0; i < 3; i++) BIT.read(ch, 1); // skip the first three bytes
+
+    // Read entire file into memory to avoid per-byte fstream overhead
+    BIT.seekg(0, std::ios::end);
+    const size_t file_size = BIT.tellg();
+    BIT.seekg(0, std::ios::beg);
+    std::vector<unsigned char> bed_buf(file_size);
+    BIT.read(reinterpret_cast<char*>(bed_buf.data()), file_size);
+    BIT.close();
+    size_t buf_pos = 3; // skip magic bytes
+
     int snp_indx = 0, indi_indx = 0;
     for (j = 0, snp_indx = 0; j < _snp_num; j++) { // Read genotype in SNP-major mode, 00: homozA1A1; 11: homozA2A2; 10: heterozygote; 01: missing
         if (!rsnp[j]) {
-            for (i = 0; i < _indi_num; i += 4) BIT.read(ch, 1);
+            buf_pos += bytes_per_snp;
             continue;
         }
         for (i = 0, indi_indx = 0; i < _indi_num;) {
-            BIT.read(ch, 1);
-            if (!BIT) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
-            b = ch[0];
-            k = 0;
-            while (k < 7 && i < _indi_num) { // change code: 11 for AA; 00 for BB;
-                if (!rindi[i]) k += 2;
-                else {
-                    _snp_2[snp_indx][indi_indx] = (!b[k++]);
-                    _snp_1[snp_indx][indi_indx] = (!b[k++]);
-                    indi_indx++;
-                }
-                i++;
+            if (buf_pos >= file_size) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
+            unsigned char byte = bed_buf[buf_pos++];
+            for (int bit = 0; bit < 8 && i < _indi_num; bit += 2, i++) {
+                if (!rindi[i]) continue;
+                int genotype = (byte >> bit) & 3;
+                // BED encoding: 00=homA1, 01=missing, 10=het, 11=homA2
+                // _snp_1=!bit0, _snp_2=!bit1
+                _snp_2[snp_indx][indi_indx] = !(genotype & 1);
+                _snp_1[snp_indx][indi_indx] = !((genotype >> 1) & 1);
+                indi_indx++;
             }
         }
         if (snp_indx == _include.size()) break;
         snp_indx++;
     }
-    BIT.clear();
-    BIT.close();
     LOGGER << "Genotype data for " << _keep.size() << " individuals and " << _include.size() << " SNPs to be included from [" + bedfile + "]." << std::endl;
 
     update_fam(rindi);
@@ -1891,28 +1895,35 @@ void gcta::calcu_maf()
     }
 }
 
+//TODO: better name?
 void gcta::mu_func(int j, std::vector<double> &fac) {
     int i = 0;
     double fcount = 0.0, f_buf = 0.0;
+    const int snp_idx = _include[j];
+    const double mu_acc = 0.0;
     if (_dosage_flag) {
         for (i = 0; i < _keep.size(); i++) {
-            if (_geno_dose[_keep[i]][_include[j]] < DOSAGE_NA) {
-                _mu[_include[j]] += fac[i] * _geno_dose[_keep[i]][_include[j]];
+            if (_geno_dose[_keep[i]][snp_idx] < DOSAGE_NA) {
+                _mu[snp_idx] += fac[i] * _geno_dose[_keep[i]][snp_idx];
                 fcount += fac[i];
             }
         }
     } else {
+        const bool flip = (_allele2[snp_idx] == _ref_A[snp_idx]);
+        const auto &s1 = _snp_1[snp_idx];
+        const auto &s2 = _snp_2[snp_idx];
         for (i = 0; i < _keep.size(); i++) {
-            if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
-                f_buf = (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
-                if (_allele2[_include[j]] == _ref_A[_include[j]]) f_buf = 2.0 - f_buf;
-                _mu[_include[j]] += fac[i] * f_buf;
+            const int ki = _keep[i];
+            if (!s1[ki] || s2[ki]) {
+                f_buf = (s1[ki] + s2[ki]);
+                if (flip) f_buf = 2.0 - f_buf;
+                _mu[snp_idx] += fac[i] * f_buf;
                 fcount += fac[i];
             }
         }
     }
 
-    if (fcount > 0.0)_mu[_include[j]] /= fcount;
+    if (fcount > 0.0) _mu[snp_idx] /= fcount;
 }
 
 void gcta::update_impRsq(std::string zinfofile) {
@@ -2337,14 +2348,21 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
         }
     }
     else{
+        // Precompute SNP indices and flip flags to avoid per-iteration string comparison
+        std::vector<int> snp_k(m);
+        std::vector<bool> snp_flip(m);
+        for (j = 0; j < m; j++) {
+            snp_k[j] = _include[snp_indx[j]];
+            snp_flip[j] = (_allele1[snp_k[j]] != _ref_A[snp_k[j]]);
+        }
         #pragma omp parallel for private(j, k)
         for (i = 0; i < n; i++) {
             for (j = 0; j < m; j++) {
-                k = _include[snp_indx[j]];
+                k = snp_k[j];
                 if (!_snp_1[k][_keep[i]] || _snp_2[k][_keep[i]]) {
-                    if (_allele1[k] == _ref_A[k]) X(i,j) = _snp_1[k][_keep[i]] + _snp_2[k][_keep[i]];
-                    else X(i,j) = 2.0 - (_snp_1[k][_keep[i]] + _snp_2[k][_keep[i]]);
-                    X(i,j) -= _mu[k];
+                    float geno = _snp_1[k][_keep[i]] + _snp_2[k][_keep[i]];
+                    if (snp_flip[j]) geno = 2.0f - geno;
+                    X(i,j) = geno - _mu[k];
                 }
                 else X(i,j) = 0.0;
             }

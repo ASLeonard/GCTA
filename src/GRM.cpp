@@ -802,7 +802,7 @@ GRM::GRM(Pheno* pheno, Marker* marker) {
     }
     memset(N, 0, fill_N * sizeof(uint32_t));
 
-    std::vector<uint32_t> sub_miss(index_keep.size() + 64);
+    sub_miss.assign(index_keep.size() + 64, 0);
 
     //calculate each index in pair thread;
     int num_thread = omp_get_max_threads();
@@ -823,6 +823,22 @@ GRM::GRM(Pheno* pheno, Marker* marker) {
 
     if(options_b.find("isMtd") != options_b.end()){
         isMtd = options_b["isMtd"];
+    }
+
+    // Cache constants derived from part_keep_indices
+    grm_n = static_cast<int>(part_keep_indices.second) + 1;
+    grm_m = static_cast<int>(part_keep_indices.second) - static_cast<int>(part_keep_indices.first) + 1;
+    grm_s_n = grm_n - grm_m;
+    grm_bytes_std_geno = static_cast<int>(sizeof(double)) * grm_n;
+    // Pre-allocate scratch buffers for calculate_GRM_blas
+    validIndexBuf.reserve(nMarkerBlock);
+    {
+        const int markerPerN = static_cast<int>(sizeof(uintptr_t) * CHAR_BIT);
+        const int numNSampleBlock = (grm_n + markerPerN - 1) / markerPerN;
+        // Size covers all marker blocks at once so N_thread can be called in a
+        // single parallel region across all blocks rather than 16 separate ones.
+        const int numNblockMax = (nMarkerBlock + markerPerN - 1) / markerPerN;
+        sampleMissBuf.resize(static_cast<size_t>(numNSampleBlock) * markerPerN * numNblockMax);
     }
 
     //t_print(begin, "  INIT finished");
@@ -923,95 +939,78 @@ void flip64(uint64_t a[64]) {
 void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex){
     int num_marker = markerIndex.size();
 
-    static int m = part_keep_indices.second - part_keep_indices.first + 1;
-    static int n = part_keep_indices.second + 1;
-    static int n_sample = n;
-    static int s_n = n - m;
-    static int bytesStdGeno = sizeof(double) * n_sample;
-
-   // GenoBufItem items[num_marker];
- 
-    #pragma omp parallel for
+    #pragma omp parallel for schedule(static)
     for(int i = 0; i < num_marker; i++){
         GenoBufItem &item = gbufitems[i];
         item.extractedMarkerIndex = markerIndex[i];
         geno->getGenoDouble(buf, i, &item);
     }
 
-    vector<int> validIndex;
-    validIndex.reserve(num_marker);
+    validIndexBuf.clear();
     for(int i = 0; i < num_marker; i++){
         if(gbufitems[i].valid){
-            validIndex.push_back(i);
+            validIndexBuf.push_back(i);
         }
     }
 
-    int curNumValidMarkers = validIndex.size();
+    int curNumValidMarkers = static_cast<int>(validIndexBuf.size());
 
+    #pragma omp parallel for schedule(static)
     for(int i = 0; i < curNumValidMarkers; i++){
-        int curIndex = validIndex[i];
-        memcpy(stdGeno + i * n_sample, gbufitems[curIndex].geno.data(), bytesStdGeno);
-        sd.push_back(gbufitems[curIndex].sd);
-        /*
-        if(gbufitems[i].missing[41/64] & (1UL << (41 %64))){
-        */
+        memcpy(stdGeno + i * grm_n, gbufitems[validIndexBuf[i]].geno.data(), grm_bytes_std_geno);
+    }
+    for(int i = 0; i < curNumValidMarkers; i++){
+        sd.push_back(gbufitems[validIndexBuf[i]].sd);
     }
 
-    static char notrans='N', trans='T';
-    static double alpha = 1.0, beta = 1.0;
-    static char uplo='L';
-   // A * At 
+    static const double alpha = 1.0, beta = 1.0;
     if(part_keep_indices.first == 0){
-        cblas_dsyrk(CblasColMajor, CblasLower, CblasNoTrans, n, curNumValidMarkers, alpha, stdGeno, n_sample, beta, grm, m);
+        cblas_dsyrk(CblasColMajor, CblasLower, CblasNoTrans, grm_n, curNumValidMarkers, alpha, stdGeno, grm_n, beta, grm, grm_m);
     }else{
-        //dgemm(&notrans, &trans, &m, &n, &num_marker, &alpha, stdGeno + part_keep_indices.first, &n_sample, stdGeno, &n_sample, &beta, grm, &m);
-        cblas_dgemm(CblasColMajor, CblasNoTrans, CblasTrans, m, s_n, curNumValidMarkers, alpha, stdGeno + part_keep_indices.first, n_sample, stdGeno, n_sample, beta, grm, m);
-        double * grm_start = grm + ((uint64_t)s_n) * m;
-        cblas_dsyrk(CblasColMajor, CblasLower, CblasNoTrans, m, curNumValidMarkers, alpha, stdGeno + part_keep_indices.first, n_sample, beta, grm_start, m); 
+        cblas_dgemm(CblasColMajor, CblasNoTrans, CblasTrans, grm_m, grm_s_n, curNumValidMarkers, alpha, stdGeno + part_keep_indices.first, grm_n, stdGeno, grm_n, beta, grm, grm_m);
+        double *grm_start = grm + (uint64_t)grm_s_n * grm_m;
+        cblas_dsyrk(CblasColMajor, CblasLower, CblasNoTrans, grm_m, curNumValidMarkers, alpha, stdGeno + part_keep_indices.first, grm_n, beta, grm_start, grm_m);
     }
 
-    //memset(this->cmask_buf, 0, num_byte_cmask);
-
-    //LOGGER << "count N" << std::endl;
     const int markerPerN = sizeof(uintptr_t) * CHAR_BIT;
-    int numNblock = (curNumValidMarkers + markerPerN - 1) / markerPerN;
-    static int numNSampleBlock = (n + markerPerN - 1) / markerPerN;
-    //LOGGER << "marker block: " << numNblock << ", sample block:" << numNSampleBlock << ", MarkerPerN: " << markerPerN << std::endl;
-    //LOGGER << ", n: " << n << std::endl;
-    std::vector<uintptr_t> sample_miss(numNSampleBlock * markerPerN); // don't need to set to 0
+    const int numNblock = (curNumValidMarkers + markerPerN - 1) / markerPerN;
+    const int numNSampleBlock = (grm_n + markerPerN - 1) / markerPerN;
+    const int blockStride = numNSampleBlock * markerPerN;
+
+    // Build all missing-data blocks serially. Total work is O(nMarkerBlock * N / 64),
+    // trivial vs BLAS; the fork/join cost of parallelising it would exceed the savings.
     for(int i = 0; i < numNblock; i++){
-        int lastIndex = markerPerN * (i + 1);
-        int lastValidIndex = lastIndex > curNumValidMarkers ? curNumValidMarkers : lastIndex;
-
-        int baseMarkerIndex = markerPerN * i;
-        #pragma omp parallel for
+        const int baseMarkerIndex = markerPerN * i;
+        const int lastValidIndex  = std::min(markerPerN * (i + 1), curNumValidMarkers);
+        uintptr_t *block_buf = sampleMissBuf.data() + i * blockStride;
         for(int j = 0; j < numNSampleBlock; j++){
-            int baseMissIndex = j * markerPerN;
+            const int baseMissIndex = j * markerPerN;
             for(int k = baseMarkerIndex; k < lastValidIndex; k++){
-                int curMarkerIndex = validIndex[k];
-                sample_miss[baseMissIndex + k - baseMarkerIndex] = revbits(gbufitems[curMarkerIndex].missing[j]);
+                block_buf[baseMissIndex + k - baseMarkerIndex] = revbits(gbufitems[validIndexBuf[k]].missing[j]);
             }
-            for(int k = lastValidIndex; k < lastIndex; k++){
-                sample_miss[baseMissIndex + k - baseMarkerIndex] = 0UL;
+            for(int k = lastValidIndex; k < markerPerN * (i + 1); k++){
+                block_buf[baseMissIndex + k - baseMarkerIndex] = 0UL;
             }
-            
-            flip64(&sample_miss[baseMissIndex]);
-
+            flip64(&block_buf[baseMissIndex]);
             for(int k = baseMissIndex; k < baseMissIndex + markerPerN; k++){
-                sub_miss[k] += std::popcount(sample_miss[k]); // give sub_miss a little more avoid overflow
+                sub_miss[k] += std::popcount(block_buf[k]);
             }
         }
-        #pragma omp parallel for
-        for(int index = 0; index < index_grm_pairs.size(); index++){
-            auto index_pair = index_grm_pairs[index];
-            N_thread(index_pair.first, index_pair.second, sample_miss.data());
+    }
+
+    // Single parallel region: each thread processes its pair range across all blocks.
+    // This reduces fork/join barriers from numNblock to 1, and keeps each thread's
+    // N[] output range hot in cache across the inner block loop.
+    #pragma omp parallel for schedule(static)
+    for(int index = 0; index < (int)index_grm_pairs.size(); index++){
+        const auto index_pair = index_grm_pairs[index];
+        for(int i = 0; i < numNblock; i++){
+            N_thread(index_pair.first, index_pair.second, sampleMissBuf.data() + i * blockStride);
         }
     }
 
     finished_marker += num_marker;
-
     numValidMarkers += curNumValidMarkers;
-
 }
 
     /*
@@ -1364,6 +1363,8 @@ void GRM::deduce_GRM(){
         if((!grm_out) || (!N_out)){
             LOGGER.e(0, "can't open " + o_name + ".grm.bin or .grm.N.bin to write");
         }
+        setvbuf(grm_out, nullptr, _IOFBF, 1 << 20);
+        setvbuf(N_out,   nullptr, _IOFBF, 1 << 20);
     }
 
     float mtd_weight = 1.0;
@@ -1507,14 +1508,25 @@ void GRM::N_thread(int grm_index_from, int grm_index_to, const uintptr_t* cur_cm
         const uintptr_t *p_cmask2 = cur_cmask;
         uintptr_t cmask1 = *p_cmask1++;
         if(cmask1){
-            for(int index_pair2 = 0; index_pair2 != index_pair1 + 1; index_pair2++){
-                uintptr_t cmask2 = *p_cmask2++;
-                if(cmask2){
-                    uintptr_t cmask = cmask1 & cmask2;
-                    if(cmask){
-                        *po_N += std::popcount(cmask);
-                    }
-                }
+            int count = index_pair1 + 1;
+            int index_pair2 = 0;
+            // Unrolled: process 4 pairs per iteration
+            for(; index_pair2 + 3 < count; index_pair2 += 4){
+                uintptr_t c0 = p_cmask2[0];
+                uintptr_t c1 = p_cmask2[1];
+                uintptr_t c2 = p_cmask2[2];
+                uintptr_t c3 = p_cmask2[3];
+                po_N[0] += std::popcount(cmask1 & c0);
+                po_N[1] += std::popcount(cmask1 & c1);
+                po_N[2] += std::popcount(cmask1 & c2);
+                po_N[3] += std::popcount(cmask1 & c3);
+                p_cmask2 += 4;
+                po_N += 4;
+            }
+            // Remainder
+            for(; index_pair2 < count; index_pair2++){
+                uintptr_t cmask = cmask1 & (*p_cmask2++);
+                if(cmask) *po_N += std::popcount(cmask);
                 po_N++;
             }
         }else{
@@ -1940,8 +1952,14 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
 }
 
 void GRM::processMakeGRM(){
-    nMarkerBlock = 128;
+    nMarkerBlock = 1024;
     gbufitems = new GenoBufItem[nMarkerBlock];
+    {
+        const int markerPerN = static_cast<int>(sizeof(uintptr_t) * CHAR_BIT);
+        const int numNSampleBlock = (grm_n + markerPerN - 1) / markerPerN;
+        const int numNblockMax = (nMarkerBlock + markerPerN - 1) / markerPerN;
+        sampleMissBuf.resize(static_cast<size_t>(numNSampleBlock) * markerPerN * numNblockMax);
+    }
     /*
     uint32_t sampleCT, missPtrSize; 
     geno->setGenoItemSize(sampleCT, missPtrSize);
@@ -1958,7 +1976,9 @@ void GRM::processMakeGRM(){
     
     vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks;
     if(options.find("use_blas") != options.end()){
-        callBacks.push_back(bind(&GRM::calculate_GRM_blas, this, _1, _2));
+        callBacks.push_back([this](uintptr_t *buf, const vector<uint32_t> &idx){
+            calculate_GRM_blas(buf, idx);
+        });
     }else{
         //callBacks.push_back(bind(&GRM::calculate_GRM, &grm, _1, _2));
         LOGGER.e(0, "the original version has been deleted. Please use GCTA >= 1.92.4");
@@ -1978,8 +1998,14 @@ void GRM::processMakeGRM(){
 }
 
 void GRM::processMakeGRMX(){
-    nMarkerBlock = 128;
+    nMarkerBlock = 1024;
     gbufitems = new GenoBufItem[nMarkerBlock];
+    {
+        const int markerPerN = static_cast<int>(sizeof(uintptr_t) * CHAR_BIT);
+        const int numNSampleBlock = (grm_n + markerPerN - 1) / markerPerN;
+        const int numNblockMax = (nMarkerBlock + markerPerN - 1) / markerPerN;
+        sampleMissBuf.resize(static_cast<size_t>(numNSampleBlock) * markerPerN * numNblockMax);
+    }
     /*
     uint32_t sampleCT, missPtrSize; 
     geno->setGenoItemSize(sampleCT, missPtrSize);
@@ -1996,7 +2022,9 @@ void GRM::processMakeGRMX(){
     
     vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks;
     if(options.find("use_blas") != options.end()){
-        callBacks.push_back(bind(&GRM::calculate_GRM_blas, this, _1, _2));
+        callBacks.push_back([this](uintptr_t *buf, const vector<uint32_t> &idx){
+            calculate_GRM_blas(buf, idx);
+        });
     }else{
         //callBacks.push_back(bind(&GRM::calculate_GRM, &grm, _1, _2));
         LOGGER.e(0, "the original version has been deleted. Please use GCTA >= 1.92.4");

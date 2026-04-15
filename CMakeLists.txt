@@ -188,7 +188,7 @@ endif()
 if(_GCTA_BLAS STREQUAL "Accelerate")
     find_library(ACCELERATE_LIBRARY Accelerate REQUIRED)
     list(APPEND GCTA_BLAS_LIBS ${ACCELERATE_LIBRARY})
-    list(APPEND GCTA_BLAS_DEFINES GCTA_USE_ACCELERATE ACCELERATE_NEW_LAPACK ACCELERATE_LAPACK_ILP64)
+    list(APPEND GCTA_BLAS_DEFINES GCTA_USE_ACCELERATE ACCELERATE_NEW_LAPACK EIGEN_USE_BLAS EIGEN_USE_LAPACK)
     set(GCTA_BLAS_PROVIDER "Accelerate" CACHE INTERNAL "")
     if(NOT CMAKE_OSX_SYSROOT)
         execute_process(
@@ -279,7 +279,7 @@ add_executable(gcta64 ${MAIN_SOURCE})
 
 add_subdirectory(main)
 target_include_directories(mainV1 PUBLIC ${COMMON_INCLUDES} ${GCTA_BLAS_INCLUDE_DIRS})
-target_link_libraries(mainV1 Eigen3::Eigen Boost::math Boost::iostreams)
+target_link_libraries(mainV1 Eigen3::Eigen Boost::math Boost::iostreams Spectra)
 
 set(GCTA_TARGETS gcta64 mainV1 ${GCTA_LIBS})
 
@@ -344,12 +344,6 @@ endforeach()
 #enable_testing()
 #ADD_SUBDIRECTORY(test)
 
-IF(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json")
-    EXECUTE_PROCESS(COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json
-        ${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json
-    )
-ENDIF()
 
 # List all targets (verbose, only if requested)
 if(CMAKE_VERBOSE_MAKEFILE OR GCTA_LIST_TARGETS)

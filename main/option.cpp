@@ -82,7 +82,7 @@ void option(int option_num, char* option_str[])
     // GRM
     bool ibc = false, ibc_all = false, grm_flag = false, grm_bin_flag = true, m_grm_flag = false, m_grm_bin_flag = true, make_grm_flag = false, make_grm_inbred_flag = false, dominance_flag = false, make_grm_xchar_flag = false, grm_out_bin_flag = true, make_grm_f3_flag = false;
     bool align_grm_flag = false;
-    bool pca_flag = false, pcl_flag = false;
+    bool pca_flag = false, pcl_flag = false, pca_approx_flag = true;
     bool project_flag = false;
     double grm_adj_fac = -2.0, grm_cutoff = -2.0, rm_high_ld_cutoff = -1.0, bK_threshold = -10.0;
     int dosage_compen = -2, out_pc_num = 20, make_grm_mtd = 0;
@@ -119,6 +119,8 @@ void option(int option_num, char* option_str[])
     bool logp_flag = false;
     int mphen = 1, mphen2 = 2, reml_mtd = 0, MaxIter = 100;
     bool reml_allow_constrain_run = false;
+    bool reml_trace_approx = false;
+    int  reml_trace_nprobes = 90;
     double prevalence = -2.0, prevalence2 = -2.0;
     bool reml_flag = false, pred_rand_eff = false, est_fix_eff = false, est_fix_eff_var = false, blup_snp_flag = false, no_constrain = false, reml_lrt_flag = false, no_lrt = false, bivar_reml_flag = false, ignore_Ce = false, within_family = false, reml_bending = false, HE_reg_flag = false, reml_diag_one = false, bivar_no_constrain = false;
     int reml_diagV_adj = 0;
@@ -540,6 +542,12 @@ void option(int option_num, char* option_str[])
             } else out_pc_num = std::atoi(argv[i]);
             LOGGER << "--pca " << out_pc_num << std::endl;
             if (out_pc_num < 1) LOGGER.e(0, "\n the value to be specified after --pca should be positive.\n");
+        } else if (flag == "--pca-approx") {
+            pca_approx_flag = true;
+            LOGGER << "--pca-approx" << std::endl;
+        } else if (flag == "--no-pca-approx") {
+            pca_approx_flag = false;
+            LOGGER << "--no-pca-approx (full eigendecomposition)" << std::endl;
         } else if (flag == "--pc-loading") {
             pcl_flag = true;
             thread_flag = true;
@@ -802,6 +810,14 @@ void option(int option_num, char* option_str[])
         }else if (flag == "--reml-amzvc"){
             reml_allow_constrain_run = true;
             LOGGER << "--reml-amzvc" <<  std::endl;
+        } else if (flag == "--reml-trace-approx") {
+            reml_trace_approx = true;
+            LOGGER << "--reml-trace-approx" << std::endl;
+        } else if (flag == "--reml-trace-nprobes") {
+            reml_trace_nprobes = std::atoi(argv[++i]);
+            reml_trace_approx = true;
+            LOGGER << "--reml-trace-nprobes " << reml_trace_nprobes << std::endl;
+            if (reml_trace_nprobes < 9) LOGGER.e(0, "\n  --reml-trace-nprobes should be >= 9.\n");
         } else if (flag == "--reml-diag-one") {
             reml_diag_one = true;
             LOGGER << "--reml-diag-one " <<  std::endl;
@@ -1375,6 +1391,7 @@ void option(int option_num, char* option_str[])
     if(reml_no_converge_flag) pter_gcta->set_reml_no_converge();
     if(reml_fixed_var_flag) pter_gcta->set_reml_fixed_var();
     if(reml_allow_constrain_run) pter_gcta->set_reml_allow_constrain_run();
+    if(reml_trace_approx) pter_gcta->set_reml_trace_approx(true, reml_trace_nprobes);
     if(reml_mtd != 0) pter_gcta->set_reml_mtd(reml_mtd);
     if(reml_inv_method != 0) pter_gcta->set_reml_inv_method(reml_inv_method);
     pter_gcta->set_reml_diagV_adj(reml_diagV_adj);
@@ -1559,7 +1576,7 @@ void option(int option_num, char* option_str[])
         pter_gcta->set_cv_blup(cv_blup);
         pter_gcta->fit_reml(grm_file, phen_file, qcovar_file, covar_file, qgxe_file, gxe_file, kp_indi_file, rm_indi_file, update_sex_file, mphen, grm_cutoff, grm_adj_fac, dosage_compen, m_grm_flag, pred_rand_eff, est_fix_eff, est_fix_eff_var, reml_mtd, MaxIter, reml_priors, reml_priors_var, reml_drop, no_lrt, prevalence, no_constrain, mlma_flag, within_family, reml_bending, reml_diag_one, weight_file);
     } else if (grm_flag || m_grm_flag) {
-        if (pca_flag) pter_gcta->pca(grm_file, kp_indi_file, rm_indi_file, grm_cutoff, m_grm_flag, out_pc_num);
+        if (pca_flag) pter_gcta->pca(grm_file, kp_indi_file, rm_indi_file, grm_cutoff, m_grm_flag, out_pc_num, pca_approx_flag);
         else if (make_grm_flag) pter_gcta->save_grm(grm_file, kp_indi_file, rm_indi_file, update_sex_file, grm_cutoff, grm_adj_fac, dosage_compen, m_grm_flag, grm_out_bin_flag);
         else if (align_grm_flag) pter_gcta->align_grm(grm_file);
         else if (bK_threshold > -1) pter_gcta->grm_bK(grm_file, kp_indi_file, rm_indi_file, bK_threshold, grm_out_bin_flag);

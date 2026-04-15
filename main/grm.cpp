@@ -17,6 +17,8 @@
 #include <unordered_set>
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
+#include <Spectra/SymEigsSolver.h>
+#include <Spectra/MatOp/DenseSymMatProd.h>
 
 void gcta::enable_grm_bin_flag() {
     _grm_bin_flag = true;
@@ -672,30 +674,52 @@ void gcta::grm_bK(std::string grm_file, std::string keep_indi_file, std::string 
     output_grm(grm_out_bin_flag);
 }
 
-void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num)
+void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num, bool pca_approx)
 {
     manipulate_grm(grm_file, keep_indi_file, remove_indi_file, "", grm_cutoff, -2.0, -2, merge_grm_flag, true);
     _grm_N.resize(0, 0);
-    int i = 0, j = 0, n = _keep.size();
-    LOGGER << "\nPerforming principal component analysis ..." << std::endl;
+    int n = _keep.size();
+    if (out_pc_num > n) out_pc_num = n;
+    LOGGER << "\nPerforming principal component analysis ..." << _grm.rows() << "x" << _grm.cols() << std::endl;
 
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(_grm.cast<double>());
-    Eigen::MatrixXd evec = (eigensolver.eigenvectors());
-    Eigen::VectorXd eval = eigensolver.eigenvalues();
+    Eigen::MatrixXd grm_dbl = _grm.cast<double>();
+    Eigen::VectorXd eval;
+    Eigen::MatrixXd evec;
+
+    if (pca_approx) {
+        // TODO: parallelize the Lanczos mat-vec by replacing DenseSymMatProd with a custom operator
+        // that wraps perform_op() in an OpenMP parallel loop over rows (EIGEN_USE_OPENMP won't help — it only parallelizes gemm, not symv).
+        Spectra::DenseSymMatProd<double> op(grm_dbl);
+        int ncv = std::min(n, std::max(2 * out_pc_num + 1, 20));
+        Spectra::SymEigsSolver<Spectra::DenseSymMatProd<double>> eigs(op, out_pc_num, ncv);
+        eigs.init();
+        eigs.compute(Spectra::SortRule::LargestAlge);
+        if (eigs.info() != Spectra::CompInfo::Successful)
+            LOGGER.e(0, "eigenvalue decomposition failed.");
+        eval = eigs.eigenvalues();
+        evec = eigs.eigenvectors();
+    } else {
+        LOGGER << "Using full eigenvalue decomposition (--pca-approx not set)." << std::endl;
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(grm_dbl);
+        if (es.info() != Eigen::Success)
+            LOGGER.e(0, "eigenvalue decomposition failed.");
+        // SelfAdjointEigenSolver returns eigenvalues in ascending order; reverse to get largest first.
+        eval = es.eigenvalues().reverse().head(out_pc_num);
+        evec = es.eigenvectors().rowwise().reverse().leftCols(out_pc_num);
+    }
 
     std::string eval_file = _out + ".eigenval";
     std::ofstream o_eval(eval_file.c_str());
     if (!o_eval) LOGGER.e(0, "cannot open the file [" + eval_file + "] to read.");
-    for (i = n - 1; i >= 0; i--) o_eval << eval(i) << std::endl;
+    for (int i = 0; i < out_pc_num; i++) o_eval << eval(i) << std::endl;
     o_eval.close();
     LOGGER << "Eigenvalues of " << n << " individuals have been saved in [" + eval_file + "]." << std::endl;
     std::string evec_file = _out + ".eigenvec";
     std::ofstream o_evec(evec_file.c_str());
     if (!o_evec) LOGGER.e(0, "cannot open the file [" + evec_file + "] to read.");
-    if (out_pc_num > n) out_pc_num = n;
-    for (i = 0; i < n; i++) {
+    for (int i = 0; i < n; i++) {
         o_evec << _fid[_keep[i]] << " " << _pid[_keep[i]];
-        for (j = n - 1; j >= (n - out_pc_num); j--) o_evec << " " << evec(i, j);
+        for (int j = 0; j < out_pc_num; j++) o_evec << " " << evec(i, j);
         o_evec << std::endl;
     }
     o_evec.close();
