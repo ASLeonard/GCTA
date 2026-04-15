@@ -1298,7 +1298,7 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
         // Only the lower triangle is written: dpotrf reads only lower, and _LLT
         // symmetrises from lower afterward.  Writing the upper triangle here was
         // redundant (it gets overwritten by dpotri/symmetrize anyway).
-        #pragma omp parallel for collapse(2) schedule(static)
+        #pragma omp parallel for collapse(2)
         for (int j = 0; j < _n; j++) {
             for (int k = 0; k <= j; k++) {
                 double val = 0.0;

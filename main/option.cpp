@@ -82,7 +82,7 @@ void option(int option_num, char* option_str[])
     // GRM
     bool ibc = false, ibc_all = false, grm_flag = false, grm_bin_flag = true, m_grm_flag = false, m_grm_bin_flag = true, make_grm_flag = false, make_grm_inbred_flag = false, dominance_flag = false, make_grm_xchar_flag = false, grm_out_bin_flag = true, make_grm_f3_flag = false;
     bool align_grm_flag = false;
-    bool pca_flag = false, pcl_flag = false;
+    bool pca_flag = false, pcl_flag = false, pca_approx_flag = true;
     bool project_flag = false;
     double grm_adj_fac = -2.0, grm_cutoff = -2.0, rm_high_ld_cutoff = -1.0, bK_threshold = -10.0;
     int dosage_compen = -2, out_pc_num = 20, make_grm_mtd = 0;
@@ -540,6 +540,12 @@ void option(int option_num, char* option_str[])
             } else out_pc_num = std::atoi(argv[i]);
             LOGGER << "--pca " << out_pc_num << std::endl;
             if (out_pc_num < 1) LOGGER.e(0, "\n the value to be specified after --pca should be positive.\n");
+        } else if (flag == "--pca-approx") {
+            pca_approx_flag = true;
+            LOGGER << "--pca-approx" << std::endl;
+        } else if (flag == "--no-pca-approx") {
+            pca_approx_flag = false;
+            LOGGER << "--no-pca-approx (full eigendecomposition)" << std::endl;
         } else if (flag == "--pc-loading") {
             pcl_flag = true;
             thread_flag = true;
@@ -1559,7 +1565,7 @@ void option(int option_num, char* option_str[])
         pter_gcta->set_cv_blup(cv_blup);
         pter_gcta->fit_reml(grm_file, phen_file, qcovar_file, covar_file, qgxe_file, gxe_file, kp_indi_file, rm_indi_file, update_sex_file, mphen, grm_cutoff, grm_adj_fac, dosage_compen, m_grm_flag, pred_rand_eff, est_fix_eff, est_fix_eff_var, reml_mtd, MaxIter, reml_priors, reml_priors_var, reml_drop, no_lrt, prevalence, no_constrain, mlma_flag, within_family, reml_bending, reml_diag_one, weight_file);
     } else if (grm_flag || m_grm_flag) {
-        if (pca_flag) pter_gcta->pca(grm_file, kp_indi_file, rm_indi_file, grm_cutoff, m_grm_flag, out_pc_num);
+        if (pca_flag) pter_gcta->pca(grm_file, kp_indi_file, rm_indi_file, grm_cutoff, m_grm_flag, out_pc_num, pca_approx_flag);
         else if (make_grm_flag) pter_gcta->save_grm(grm_file, kp_indi_file, rm_indi_file, update_sex_file, grm_cutoff, grm_adj_fac, dosage_compen, m_grm_flag, grm_out_bin_flag);
         else if (align_grm_flag) pter_gcta->align_grm(grm_file);
         else if (bK_threshold > -1) pter_gcta->grm_bK(grm_file, kp_indi_file, rm_indi_file, bK_threshold, grm_out_bin_flag);

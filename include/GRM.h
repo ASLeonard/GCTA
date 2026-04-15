@@ -139,6 +139,16 @@ private:
 
     GenoBufItem *gbufitems = NULL;
 
+    // Constants derived from part_keep_indices, cached after construction
+    int grm_n = 0;               // part_keep_indices.second + 1
+    int grm_m = 0;               // part_keep_indices.second - part_keep_indices.first + 1
+    int grm_s_n = 0;             // grm_n - grm_m
+    int grm_bytes_std_geno = 0;  // sizeof(double) * grm_n
+
+    // Pre-allocated scratch buffers reused across calculate_GRM_blas calls
+    std::vector<int> validIndexBuf;
+    std::vector<uintptr_t> sampleMissBuf;
+
     //Just for testing
 #ifndef NDEBUG
     FILE * o_geno0;
