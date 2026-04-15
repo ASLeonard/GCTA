@@ -1954,6 +1954,12 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
 void GRM::processMakeGRM(){
     nMarkerBlock = 1024;
     gbufitems = new GenoBufItem[nMarkerBlock];
+    {
+        const int markerPerN = static_cast<int>(sizeof(uintptr_t) * CHAR_BIT);
+        const int numNSampleBlock = (grm_n + markerPerN - 1) / markerPerN;
+        const int numNblockMax = (nMarkerBlock + markerPerN - 1) / markerPerN;
+        sampleMissBuf.resize(static_cast<size_t>(numNSampleBlock) * markerPerN * numNblockMax);
+    }
     /*
     uint32_t sampleCT, missPtrSize; 
     geno->setGenoItemSize(sampleCT, missPtrSize);
@@ -1994,6 +2000,12 @@ void GRM::processMakeGRM(){
 void GRM::processMakeGRMX(){
     nMarkerBlock = 1024;
     gbufitems = new GenoBufItem[nMarkerBlock];
+    {
+        const int markerPerN = static_cast<int>(sizeof(uintptr_t) * CHAR_BIT);
+        const int numNSampleBlock = (grm_n + markerPerN - 1) / markerPerN;
+        const int numNblockMax = (nMarkerBlock + markerPerN - 1) / markerPerN;
+        sampleMissBuf.resize(static_cast<size_t>(numNSampleBlock) * markerPerN * numNblockMax);
+    }
     /*
     uint32_t sampleCT, missPtrSize; 
     geno->setGenoItemSize(sampleCT, missPtrSize);

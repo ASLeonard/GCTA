@@ -309,7 +309,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
     const auto n = static_cast<unsigned long>(y.size());
     constexpr int max_block_size = 10000;
     unsigned long i = 0;
-    eigenVector beta(m), se = eigenVector::Zero(m), pval = eigenVector::Constant(m, 2);
+    std::vector<float> beta(m, 0.0f), se(m, 0.0f), pval(m, 2.0f);
     Eigen::MatrixXf Vi = _Vi.cast<float>();
     _Vi.resize(0,0);
 
@@ -355,12 +355,11 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
                     Vi_y.data(), 1,
                     0.0f, Xt_Vi_y_block.data(), 1);
 
-        // TODO do some better checks for nan values
+
         for(l = 0; l < bs; l++){
             float inv_xvx = 1.0f / Xt_Vi_X_block[l];
-            se[i + l] = inv_xvx;
-            beta[i + l] = inv_xvx * Xt_Vi_y_block[l];
-            if(inv_xvx > 1.0e-30f){
+            if(std::isfinite(inv_xvx) && inv_xvx > 1.0e-30f){
+                beta[i + l] = inv_xvx * Xt_Vi_y_block[l];
                 se[i + l] = std::sqrt(inv_xvx);
                 float chisq = beta[i + l] / se[i + l];
                 pval[i + l] = StatFunc::pchisq(chisq * chisq, 1, _log_pval);
@@ -378,7 +377,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
     const int p = static_cast<int>(_X_c);  // number of fixed covariates
     constexpr int max_block_size = 10000;
     unsigned long i = 0;
-    eigenVector beta(m), se = eigenVector::Zero(m), pval = eigenVector::Constant(m, 2);
+    std::vector<float> beta(m, 0.0f), se(m, 0.0f), pval(m, 2.0f);
 
     Eigen::MatrixXf Vi = _Vi.cast<float>();
     _Vi.resize(0,0);
@@ -576,7 +575,7 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
     
     eigenVector y_buf=_y;
     std::vector<float> y(_n);
-    std::vector<eigenVector> beta(chrs.size()), se(chrs.size()), pval(chrs.size());
+    std::vector<std::vector<float>> beta(chrs.size()), se(chrs.size()), pval(chrs.size());
     for(c1=0; c1<chrs.size(); c1++){
         LOGGER<<"\n-----------------------------------\n#Chr "<<chrs[c1]<<":"<<std::endl;
         extract_chr(chrs[c1], chrs[c1]);

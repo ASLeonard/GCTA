@@ -426,7 +426,7 @@ private:
     
 
     // mlma
-    struct MlmaResult { eigenVector beta, se, pval; };
+    struct MlmaResult { std::vector<float> beta, se, pval; };
     MlmaResult mlma_calcu_stat(std::span<const float> y, unsigned long m);
     MlmaResult mlma_calcu_stat_covar(std::span<const float> y, unsigned long m);
     void grm_minus_grm(float *grm, float *sub_grm);
