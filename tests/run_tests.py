@@ -107,7 +107,7 @@ TEST_CASES: List[TestCase] = [
              "--grm",    "tests/data/test",
              "--pheno",  "tests/data/test.phen",
              "--mlma",
-             "--save-reml", "tests/query/bfile_twostep.reml.gz",
+             "--save-reml", "tests/query/bfile_twostep.reml",
              "--out",    "tests/query/bfile_twostep"],
             [QUERY_BINARY,
              "--threads", "8",
@@ -115,12 +115,12 @@ TEST_CASES: List[TestCase] = [
              "--grm",    "tests/data/test",
              "--pheno",  "tests/data/test.phen",
              "--mlma",
-             "--load-reml", "tests/query/bfile_twostep.reml.gz",
+             "--load-reml", "tests/query/bfile_twostep.reml",
              "--out",    "tests/query/bfile_twostep"],
         ],
         # truth is the one-step reference; query is the _B (load-reml) output
         truth_file="tests/truth/bfile_onestep.mlma",
-        query_file="tests/query/bfile_twostep_B.mlma",
+        query_file="tests/query/bfile_twostep.mlma",
     ),
 
     # ------------------------------------------------------------------

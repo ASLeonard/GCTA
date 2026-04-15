@@ -283,9 +283,11 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     }*/
     
     if (_mu.empty()) calcu_mu();
-    eigenVector beta, se, pval;
-    if(no_adj_covar) mlma_calcu_stat_covar(std::span<const float>(y), std::span<const float>(_geno_mkl, static_cast<size_t>(n) * m), m, beta, se, pval);
-    else mlma_calcu_stat(std::span<const float>(y), std::span<const float>(_geno_mkl, static_cast<size_t>(n) * m), m, beta, se, pval);
+
+    //should we just init these here
+    auto [beta, se, pval] = no_adj_covar
+        ? mlma_calcu_stat_covar(std::span<const float>(y), m)
+        : mlma_calcu_stat(std::span<const float>(y), m);
     delete[] _geno_mkl;
     
     const std::string filename = _out + ".mlma";
@@ -302,16 +304,13 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     ofile.close();
 }
 
-void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<const float> geno_mkl, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval)
+gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m)
 {
     const auto n = static_cast<unsigned long>(y.size());
     constexpr int max_block_size = 10000;
-    unsigned long i = 0, j = 0;
-    std::vector<float> Vi(static_cast<size_t>(n) * n);
-    #pragma omp parallel for private(j)
-    for(i=0; i<n; i++){
-        for(j=0; j<n; j++) Vi[i*n+j]=_Vi(i,j);
-    }
+    unsigned long i = 0;
+    eigenVector beta(m), se = eigenVector::Zero(m), pval = eigenVector::Constant(m, 2);
+    Eigen::MatrixXf Vi = _Vi.cast<float>();
     _Vi.resize(0,0);
 
     // Precompute Vi * y once (Vi is symmetric → use ssymv)
@@ -321,9 +320,6 @@ void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<
                 y.data(), 1,
                 0.0f, Vi_y.data(), 1);
 
-    beta.resize(m);
-    se=eigenVector::Zero(m);
-    pval=eigenVector::Constant(m,2);
     LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<std::endl;
 
     int k = 0, l = 0;
@@ -359,6 +355,7 @@ void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<
                     Vi_y.data(), 1,
                     0.0f, Xt_Vi_y_block.data(), 1);
 
+        // TODO do some better checks for nan values
         for(l = 0; l < bs; l++){
             float inv_xvx = 1.0f / Xt_Vi_X_block[l];
             se[i + l] = inv_xvx;
@@ -372,20 +369,18 @@ void gcta::mlma_calcu_stat(std::span<const float> y, [[maybe_unused]] std::span<
 
         i += bs;
     }
+    return {beta, se, pval};
 }
 
-void gcta::mlma_calcu_stat_covar(std::span<const float> y, [[maybe_unused]] std::span<const float> geno_mkl, unsigned long m, eigenVector &beta, eigenVector &se, eigenVector &pval)
+gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned long m)
 {
     const auto n = static_cast<unsigned long>(y.size());
     const int p = static_cast<int>(_X_c);  // number of fixed covariates
     constexpr int max_block_size = 10000;
-    unsigned long i = 0, j = 0;
+    unsigned long i = 0;
+    eigenVector beta(m), se = eigenVector::Zero(m), pval = eigenVector::Constant(m, 2);
 
-    // Flatten Vi to a float array (Vi is symmetric so row-major == col-major)
-    std::vector<float> Vi(static_cast<size_t>(n) * n);
-    #pragma omp parallel for private(j)
-    for(i = 0; i < n; i++)
-        for(j = 0; j < n; j++) Vi[i*n+j] = static_cast<float>(_Vi(i,j));
+    Eigen::MatrixXf Vi = _Vi.cast<float>();
     _Vi.resize(0,0);
 
     // Precompute Vi * y once (Vi is symmetric → use ssymv)
@@ -396,10 +391,7 @@ void gcta::mlma_calcu_stat_covar(std::span<const float> y, [[maybe_unused]] std:
 
     // --- Schur complement precomputation (done once, not per SNP) ---
     // C (n×p, col-major float): fixed covariate matrix
-    std::vector<float> C(static_cast<size_t>(n) * p);
-    for(i = 0; i < n; i++)
-        for(j = 0; j < static_cast<unsigned long>(p); j++)
-            C[j*n + i] = static_cast<float>(_X(i,j));
+    Eigen::MatrixXf C = _X.cast<float>();
 
     // Vi_C = Vi * C  (n×p, col-major; Vi is symmetric → use ssymm)
     std::vector<float> Vi_C(static_cast<size_t>(n) * p);
@@ -424,9 +416,6 @@ void gcta::mlma_calcu_stat_covar(std::span<const float> y, [[maybe_unused]] std:
     cblas_sgemv(CblasColMajor, CblasNoTrans,
                 p, p, 1.0f, A.data(), p, c_vec.data(), 1, 0.0f, t_vec.data(), 1);
 
-    beta.resize(m);
-    se = eigenVector::Zero(m);
-    pval = eigenVector::Constant(m, 2);
     LOGGER << "\nRunning association tests for " << m << " SNPs ..." << std::endl;
 
     int k = 0, l = 0;
@@ -483,6 +472,7 @@ void gcta::mlma_calcu_stat_covar(std::span<const float> y, [[maybe_unused]] std:
 
         i += bs;
     }
+    return {beta, se, pval};
 }
 
 void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool inbred, bool no_adj_covar)
@@ -621,8 +611,10 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
         _P.resize(0,0);
         _A[0].resize(0,0);
 
-        if(no_adj_covar)  mlma_calcu_stat_covar(std::span<const float>(y), std::span<const float>(geno_chrs[c1], static_cast<size_t>(n) * _include.size()), _include.size(), beta[c1], se[c1], pval[c1]);
-        else mlma_calcu_stat(std::span<const float>(y), std::span<const float>(geno_chrs[c1], static_cast<size_t>(n) * _include.size()), _include.size(), beta[c1], se[c1], pval[c1]);
+        auto [b, s, p] = no_adj_covar
+            ? mlma_calcu_stat_covar(std::span<const float>(y), _include.size())
+            : mlma_calcu_stat(std::span<const float>(y), _include.size());
+        beta[c1] = std::move(b); se[c1] = std::move(s); pval[c1] = std::move(p);
         
         _include=include_o;
         _snp_name_map=snp_name_map_o;
