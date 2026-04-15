@@ -56,7 +56,7 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
 
     if (skip_grm_loading) {
         if (!grm_file.empty() || m_grm_flag || subtract_grm_flag) {
-            LOGGER << "Skipping GRM loading because --load-reml is std::set. Ensure the saved REML state matches the current sample std::set." << std::endl;
+            LOGGER << "Skipping GRM loading because --load-reml is set. Ensure the saved REML state matches the current sample set." << std::endl;
         }
     } else {
         if(subtract_grm_flag){

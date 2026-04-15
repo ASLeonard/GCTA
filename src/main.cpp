@@ -57,16 +57,24 @@ void out_ver(bool flag_outFile){
         log = bind(&Logger::m, LOGGER_P, _1, _2, _3);
     }
 
+    //TODO: can we add more build details here?
     log(0, "*******************************************************************", "");
     log(0, "* Genome-wide Complex Trait Analysis (GCTA)", "");
     log(0, std::string("* version ") + std::string(GCTA_VERSION) + std::string(" ") + getOSName(), "");
-#if (defined __linux__ || defined __linux) && defined __GNUC__
-    std::string compile_info("");
-    std::ostringstream outstring;
-    outstring << "* Built at " << __DATE__ << " " << __TIME__ << ", "
-        << "by GCC " << __GNUC__ << "." << __GNUC_MINOR__;
-    compile_info = outstring.str();
-    log(0, compile_info, "");
+    {
+        std::ostringstream outstring;
+        outstring << "* Built at " << __DATE__ << " " << __TIME__;
+#if defined(__clang__)
+        outstring << ", by Clang " << __clang_major__ << "." << __clang_minor__ << "." << __clang_patchlevel__;
+#elif defined(__GNUC__)
+        outstring << ", by GCC " << __GNUC__ << "." << __GNUC_MINOR__;
+#elif defined(_MSC_VER)
+        outstring << ", by MSVC " << _MSC_VER;
+#endif
+        log(0, outstring.str(), "");
+    }
+#ifdef GCTA_BLAS_BACKEND_STR
+    log(0, std::string("* BLAS/LAPACK: ") + GCTA_BLAS_BACKEND_STR, "");
 #endif
     log(0, "* (C) 2010-present, Yang Lab, Westlake University", "");
     log(0, "* Please report bugs to Jian Yang <jian.yang@westlake.edu.cn>", "");
