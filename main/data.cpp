@@ -2614,7 +2614,11 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
             // ── Fill storage ──────────────────────────────────────────────────
             if (_dosage_flag) {
                 _mu.push_back(mu_a1);
-                const double p = mu_a1 / 2.0; // A1 allele frequency
+                // Precompute the two non-additive dosage constants once per SNP
+                // rather than recomputing 4*p-2 and 2*p for every sample.
+                const double p              = mu_a1 / 2.0;
+                const float  dose_het       = static_cast<float>(2.0 * p);
+                const float  dose_hom_minor = static_cast<float>(4.0 * p - 2.0);
                 for (i = 0; i < nsamples; i++) {
                     if (ref_counts[i] < 0) { _geno_dose[i].push_back(DOSAGE_NA); continue; }
                     const int a1_count = a1_is_ref ? ref_counts[i] : (ploidy - ref_counts[i]);
@@ -2625,8 +2629,8 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
                             break;
                         case GeneticModel::NONADDITIVE:
                             if      (a1_count == ploidy) dosage = 0.0f;
-                            else if (a1_count == 0)      dosage = static_cast<float>(4.0 * p - 2.0);
-                            else                         dosage = static_cast<float>(2.0 * p);
+                            else if (a1_count == 0)      dosage = dose_hom_minor;
+                            else                         dosage = dose_het;
                             break;
                     }
                     _geno_dose[i].push_back(dosage);
