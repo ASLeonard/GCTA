@@ -2456,7 +2456,7 @@ static int vcf_chr_to_int(const char* chrom) {
 
 void gcta::read_vcf_file(std::string vcffile, std::string region)
 {
-    int i = 0, j = 0;
+    int i = 0;
     LOGGER << "Reading VCF/BCF file" << (_dosage_flag ? " (dosage mode)" : "")
            << " from [" + vcffile + "] ..." << std::endl;
 
@@ -2494,17 +2494,27 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
         }
     }
 
-    // ── Pass 1: build SNP list and compute mean REF allele count per SNP ──────
+    // ── Clear SNP metadata ────────────────────────────────────────────────────
     _chr.clear(); _snp_name.clear(); _genet_dst.clear();
     _bp.clear();  _allele1.clear();  _allele2.clear();
-    std::vector<double> mu_buf; // mean REF allele count (0–ploidy) per SNP
-    int n_multiallelic = 0;
-    bcf1_t* rec = bcf_init();
+
+    // Pre-size the outer dimension of per-sample storage; inner (per-SNP) is
+    // push_back'd below so we never need the total SNP count in advance.
+    if (_dosage_flag) {
+        _mu.clear();
+        _geno_dose.assign(nsamples, {});
+    } else {
+        _snp_1.clear();
+        _snp_2.clear();
+    }
+
+    int      n_multiallelic = 0;
+    bcf1_t*  rec            = bcf_init();
+    int32_t* gt_arr         = nullptr;
+    int      n_gt_arr       = 0;
 
     {
-        int32_t*   gt_arr   = nullptr;
-        int        n_gt_arr = 0;
-        hts_itr_t* itr      = nullptr;
+        hts_itr_t* itr = nullptr;
         if (idx) {
             itr = bcf_itr_querys(idx, hdr, region.c_str());
             if (!itr) {
@@ -2517,29 +2527,21 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
                          "]. Check that the region string matches the chromosome naming in the file.");
             }
         }
+
         while (itr ? (bcf_itr_next(fp, itr, rec) >= 0) : (bcf_read(fp, hdr, rec) >= 0)) {
             bcf_unpack(rec, BCF_UN_STR);
             if (rec->n_allele != 2) { ++n_multiallelic; continue; }
-            const char* chrom = bcf_hdr_id2name(hdr, rec->rid);
-            _chr.push_back(vcf_chr_to_int(chrom));
-            std::string snpid;
-            if (rec->d.id && strcmp(rec->d.id, ".") != 0)
-                snpid = rec->d.id;
-            else
-                snpid = std::string(chrom) + ":" + std::to_string(rec->pos + 1) +
-                        ":" + rec->d.allele[0] + ":" + rec->d.allele[1];
-            _snp_name.push_back(snpid);
-            _genet_dst.push_back(0.0);
-            _bp.push_back(rec->pos + 1);
-            _allele1.push_back(rec->d.allele[0]);
-            _allele2.push_back(rec->d.allele[1]);
 
-            // Compute mean REF allele count across non-missing samples
+            // ── Decode genotypes ──────────────────────────────────────────────
+            int ret    = bcf_get_genotypes(hdr, rec, &gt_arr, &n_gt_arr);
+            int ploidy = (ret > 0) ? ret / nsamples : 2;
+
+            // ── Per-sample REF allele counts + mean ───────────────────────────
+            // ref_counts[i] == -1 means missing for individual i.
+            std::vector<int> ref_counts(nsamples, -1);
             double allele_sum = 0.0;
             int    valid_n    = 0;
-            int ret = bcf_get_genotypes(hdr, rec, &gt_arr, &n_gt_arr);
             if (ret > 0) {
-                int ploidy = ret / nsamples;
                 for (i = 0; i < nsamples; i++) {
                     bool missing = false;
                     int  rcnt    = 0;
@@ -2548,94 +2550,40 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
                         if (bcf_gt_is_missing(g) || g == bcf_int32_vector_end) { missing = true; break; }
                         if (bcf_gt_allele(g) == 0) rcnt++;
                     }
-                    if (!missing) { allele_sum += rcnt; valid_n++; }
+                    if (!missing) { ref_counts[i] = rcnt; allele_sum += rcnt; valid_n++; }
                 }
             }
-            mu_buf.push_back(valid_n > 0 ? allele_sum / valid_n : 0.0);
-        }
-        if (itr) hts_itr_destroy(itr);
-        free(gt_arr);
-    }
+            const double mu_ref = valid_n > 0 ? allele_sum / valid_n : 0.0;
 
-    if (n_multiallelic > 0)
-        LOGGER << "Warning: " << n_multiallelic
-               << " multiallelic variant(s) skipped (only biallelic sites supported)." << std::endl;
+            // ── Minor-allele convention ───────────────────────────────────────
+            // a1_is_ref: REF is the minor allele (no allele swap needed).
+            // When false, A1 = ALT and counts must be flipped (ploidy - ref_count).
+            const bool   a1_is_ref = (mu_ref / 2.0 <= 0.5);
+            const double mu_a1     = a1_is_ref ? mu_ref : (2.0 - mu_ref);
 
-    _snp_num = static_cast<int>(_chr.size());
-    LOGGER << _snp_num << " biallelic SNPs found in [" + vcffile + "]." << std::endl;
-    init_include();
+            // ── Record SNP metadata ───────────────────────────────────────────
+            const char* chrom = bcf_hdr_id2name(hdr, rec->rid);
+            _chr.push_back(vcf_chr_to_int(chrom));
+            std::string snpid;
+            if (rec->d.id && strcmp(rec->d.id, ".") != 0)
+                snpid = rec->d.id;
+            else
+                snpid = std::string(chrom) + "_" + std::to_string(rec->pos + 1); //std::string(chrom) + ":" + std::to_string(rec->pos + 1) +
+                      //  ":" + rec->d.allele[0] + ":" + rec->d.allele[1];
+            _snp_name.push_back(snpid);
+            _genet_dst.push_back(0.0);
+            _bp.push_back(rec->pos + 1);
+            // A1 = minor allele, A2 = major allele (consistent with BIM convention).
+            _allele1.push_back(a1_is_ref ? rec->d.allele[0] : rec->d.allele[1]);
+            _allele2.push_back(a1_is_ref ? rec->d.allele[1] : rec->d.allele[0]);
 
-    // ── Enforce minor-allele convention ───────────────────────────────────────
-    // _ref_A stores the original VCF REF allele so pass 2 can resolve direction.
-    _ref_A   = _allele1;
-    _other_A = _allele2;
-    for (j = 0; j < _snp_num; j++) {
-        if (mu_buf[j] / 2.0 > 0.5) {
-            std::swap(_allele1[j], _allele2[j]);
-            mu_buf[j] = 2.0 - mu_buf[j];
-        }
-    }
-
-    // Precompute per-SNP direction flag for pass 2
-    // a1_is_ref[j] == true  → A1 is VCF REF (no swap occurred)
-    // a1_is_ref[j] == false → A1 is VCF ALT (swap occurred; dosage/bits must be flipped)
-    std::vector<bool> a1_is_ref(_snp_num);
-    for (j = 0; j < _snp_num; j++)
-        a1_is_ref[j] = (_allele1[j] == _ref_A[j]);
-
-    if (_dosage_flag) {
-        _mu.resize(_snp_num);
-        for (j = 0; j < _snp_num; j++) _mu[j] = mu_buf[j];
-        LOGGER << "Allele frequencies calculated from genotype data." << std::endl;
-        _geno_dose.resize(nsamples);
-        for (i = 0; i < nsamples; i++) _geno_dose[i].resize(_snp_num);
-    } else {
-        _snp_1.assign(_snp_num, std::vector<bool>(nsamples, false));
-        _snp_2.assign(_snp_num, std::vector<bool>(nsamples, false));
-    }
-
-    // ── Pass 2: reopen file and fill genotype/dosage storage ─────────────────
-    bcf_hdr_destroy(hdr);
-    bcf_close(fp);
-    fp = bcf_open(vcffile.c_str(), "r");
-    if (!fp) {
-        bcf_destroy(rec);
-        if (idx) hts_idx_destroy(idx);
-        LOGGER.e(0, "cannot reopen [" + vcffile + "] for second pass.");
-    }
-    hdr = bcf_hdr_read(fp);
-
-    int32_t*   gt_arr   = nullptr;
-    int        n_gt_arr = 0;
-    int        snp_indx = 0;
-    {
-        hts_itr_t* itr = nullptr;
-        if (idx) itr = bcf_itr_querys(idx, hdr, region.c_str());
-        while (itr ? (bcf_itr_next(fp, itr, rec) >= 0) : (bcf_read(fp, hdr, rec) >= 0)) {
-            bcf_unpack(rec, BCF_UN_STR);
-            if (rec->n_allele != 2) continue;
-
-            const bool flip = !a1_is_ref[snp_indx]; // true when A1 is ALT
-            int ret = bcf_get_genotypes(hdr, rec, &gt_arr, &n_gt_arr);
-            if (ret <= 0) {
-                if (_dosage_flag)
-                    for (i = 0; i < nsamples; i++) _geno_dose[i][snp_indx] = DOSAGE_NA;
-                snp_indx++; continue;
-            }
-            int ploidy = ret / nsamples;
-
+            // ── Fill storage ──────────────────────────────────────────────────
             if (_dosage_flag) {
-                double p = _mu[snp_indx] / 2.0; // A1 (minor) allele frequency
+                _mu.push_back(mu_a1);
+                const double p = mu_a1 / 2.0; // A1 allele frequency
                 for (i = 0; i < nsamples; i++) {
-                    bool is_missing = false;
-                    int  ref_count  = 0;
-                    for (int pp = 0; pp < ploidy; pp++) {
-                        int32_t g = gt_arr[i * ploidy + pp];
-                        if (bcf_gt_is_missing(g) || g == bcf_int32_vector_end) { is_missing = true; break; }
-                        if (bcf_gt_allele(g) == 0) ref_count++;
-                    }
-                    if (is_missing) { _geno_dose[i][snp_indx] = DOSAGE_NA; continue; }
-                    int a1_count = flip ? (ploidy - ref_count) : ref_count;
+                    if (ref_counts[i] < 0) { _geno_dose[i].push_back(DOSAGE_NA); continue; }
+                    const int a1_count = a1_is_ref ? ref_counts[i] : (ploidy - ref_counts[i]);
                     float dosage = 0.0f;
                     switch (_genetic_model) {
                         case GeneticModel::ADDITIVE:
@@ -2647,25 +2595,22 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
                             else                         dosage = static_cast<float>(2.0 * p);
                             break;
                     }
-                    _geno_dose[i][snp_indx] = dosage;
+                    _geno_dose[i].push_back(dosage);
                 }
             } else {
+                std::vector<bool> s1(nsamples), s2(nsamples);
                 for (i = 0; i < nsamples; i++) {
-                    bool is_missing = false;
-                    int  ref_count  = 0;
-                    for (int pp = 0; pp < ploidy; pp++) {
-                        int32_t g = gt_arr[i * ploidy + pp];
-                        if (bcf_gt_is_missing(g) || g == bcf_int32_vector_end) { is_missing = true; break; }
-                        if (bcf_gt_allele(g) == 0) ref_count++;
-                    }
-                    int a1_count = flip ? (ploidy - ref_count) : ref_count;
-                    // PLINK BED encoding: HomA1=(1,1), Het=(0,1), HomALT=(0,0), Missing=(1,0)
+                    const bool is_missing = (ref_counts[i] < 0);
+                    const int  a1_count   = is_missing ? 0
+                                            : (a1_is_ref ? ref_counts[i] : (ploidy - ref_counts[i]));
+                    // PLINK BED encoding: HomA1=(1,1), Het=(0,1), HomA2=(0,0), Missing=(1,0)
                     // TODO: is this wrong? Plink1.9 guide states 10 is HET and 01 is missing?
-                    _snp_1[snp_indx][i] = is_missing  || (a1_count == ploidy);
-                    _snp_2[snp_indx][i] = !is_missing && (a1_count >= 1);
+                    s1[i] = is_missing  || (a1_count == ploidy);
+                    s2[i] = !is_missing && (a1_count >= 1);
                 }
+                _snp_1.push_back(std::move(s1));
+                _snp_2.push_back(std::move(s2));
             }
-            snp_indx++;
         }
         if (itr) hts_itr_destroy(itr);
     }
@@ -2675,6 +2620,18 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
     bcf_hdr_destroy(hdr);
     bcf_close(fp);
     if (idx) hts_idx_destroy(idx);
+
+    if (n_multiallelic > 0)
+        LOGGER << "Warning: " << n_multiallelic
+               << " multiallelic variant(s) skipped (only biallelic sites supported)." << std::endl;
+
+    _snp_num = static_cast<int>(_chr.size());
+    LOGGER << _snp_num << " biallelic SNPs found in [" + vcffile + "]." << std::endl;
+    init_include();
+
+    // _ref_A = _allele1 (minor), _other_A = _allele2 — consistent with BIM convention.
+    _ref_A   = _allele1;
+    _other_A = _allele2;
 
     if (_dosage_flag)
         LOGGER << "Dosage data for " << nsamples << " individuals and " << _snp_num
