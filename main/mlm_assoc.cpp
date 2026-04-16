@@ -330,7 +330,13 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
     std::vector<float> Xt_Vi_X_block(max_block_size);
     std::vector<float> Xt_Vi_y_block(max_block_size);
 
+    int last_pct = -1;
     for(i = 0; i < m; ){
+        int cur_pct = static_cast<int>(i * 100 / m);
+        if(cur_pct != last_pct){
+            LOGGER.p(0, std::to_string(i) + " / " + std::to_string(m) + " SNPs (" + std::to_string(cur_pct) + "%)");
+            last_pct = cur_pct;
+        }
         int bs = (int)std::min((unsigned long)max_block_size, m - i);
         indx.resize(bs);
         for(k = 0; k < bs; k++) indx[k] = i + k;
@@ -368,6 +374,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
 
         i += bs;
     }
+    LOGGER.p(0, std::to_string(m) + " / " + std::to_string(m) + " SNPs (100%)");
     return {beta, se, pval};
 }
 
@@ -427,7 +434,13 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
     std::vector<float> f_vec(max_block_size);     // X_block^T Vi_y
     std::vector<float> Dt_t_vec(max_block_size);  // D_block^T t
 
+    int last_pct_c = -1;
     for(i = 0; i < m; ){
+        int cur_pct_c = static_cast<int>(i * 100 / m);
+        if(cur_pct_c != last_pct_c){
+            LOGGER.p(0, std::to_string(i) + " / " + std::to_string(m) + " SNPs (" + std::to_string(cur_pct_c) + "%)");
+            last_pct_c = cur_pct_c;
+        }
         int bs = static_cast<int>(std::min(static_cast<unsigned long>(max_block_size), m - i));
         indx.resize(bs);
         for(k = 0; k < bs; k++) indx[k] = i + k;
@@ -471,6 +484,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
 
         i += bs;
     }
+    LOGGER.p(0, std::to_string(m) + " / " + std::to_string(m) + " SNPs (100%)");
     return {beta, se, pval};
 }
 

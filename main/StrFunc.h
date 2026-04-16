@@ -24,7 +24,7 @@
 namespace StrFunc
 {
 	[[nodiscard]] bool str_within_quto(std::string_view str, std::string &str_buf);
-	[[nodiscard]] int split_string(std::string_view str, std::vector<std::string> &vec_str, std::string_view separator=" ,\t;\n");
+	int split_string(std::string_view str, std::vector<std::string> &vec_str, std::string_view separator=" ,\t;\n");
 	[[nodiscard]] std::string first_string(std::string_view str, char separator);
 	[[nodiscard]] std::string last_string(std::string_view str, char separator);
 	void to_upper(std::string &str) noexcept;
