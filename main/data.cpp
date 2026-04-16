@@ -2508,10 +2508,43 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
         _snp_2.clear();
     }
 
+    // ── Reserve SNP metadata vectors ──────────────────────────────────────────
+    // When an index is loaded, sum hts_idx_get_stat across all contigs (or just
+    // the queried contig for a region) for an exact upper bound on record count.
+    // Without an index, fall back to a 1 M SNP heuristic.
+    {
+        size_t reserve_hint = 1u << 20; // fallback: 1 M SNPs
+        if (idx) {
+            uint64_t total = 0;
+            if (!region.empty()) {
+                // Only count the single contig being queried.
+                int tid = bcf_hdr_name2id(hdr, region.substr(0, region.find_first_of(":-")).c_str());
+                if (tid >= 0) {
+                    uint64_t mapped = 0, unmapped = 0;
+                    hts_idx_get_stat(idx, tid, &mapped, &unmapped);
+                    total = mapped;
+                }
+            } else {
+                // Sum across all contigs in the header.
+                for (int c = 0; c < hdr->n[BCF_DT_CTG]; c++) {
+                    uint64_t mapped = 0, unmapped = 0;
+                    hts_idx_get_stat(idx, c, &mapped, &unmapped);
+                    total += mapped;
+                }
+            }
+            if (total > 0) reserve_hint = static_cast<size_t>(total);
+        }
+        _chr.reserve(reserve_hint);  _snp_name.reserve(reserve_hint);
+        _genet_dst.reserve(reserve_hint); _bp.reserve(reserve_hint);
+        _allele1.reserve(reserve_hint); _allele2.reserve(reserve_hint);
+        if (_dosage_flag) _mu.reserve(reserve_hint);
+    }
+
     int      n_multiallelic = 0;
     bcf1_t*  rec            = bcf_init();
     int32_t* gt_arr         = nullptr;
     int      n_gt_arr       = 0;
+    std::vector<int> ref_counts(nsamples, -1);
 
     {
         hts_itr_t* itr = nullptr;
@@ -2529,7 +2562,8 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
         }
 
         while (itr ? (bcf_itr_next(fp, itr, rec) >= 0) : (bcf_read(fp, hdr, rec) >= 0)) {
-            bcf_unpack(rec, BCF_UN_STR);
+
+            bcf_unpack(rec, BCF_UN_ALL);
             if (rec->n_allele != 2) { ++n_multiallelic; continue; }
 
             // ── Decode genotypes ──────────────────────────────────────────────
@@ -2538,7 +2572,7 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
 
             // ── Per-sample REF allele counts + mean ───────────────────────────
             // ref_counts[i] == -1 means missing for individual i.
-            std::vector<int> ref_counts(nsamples, -1);
+            ref_counts.assign(nsamples, -1);
             double allele_sum = 0.0;
             int    valid_n    = 0;
             if (ret > 0) {
