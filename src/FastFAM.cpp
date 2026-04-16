@@ -3575,7 +3575,7 @@ void FastFAM::processFAMreg(){
 
     string gfile = options["geneset"];
     LOGGER.i(0, "Reading gene list file from [" + gfile + "]...");
-    vector<pair<string, vector<uint32_t>>> genelist = marker->read_gene(gfile);
+    std::vector<std::pair<std::string, std::vector<uint32_t>>> genelist = marker->read_gene(gfile);
     int numGeneBlock = genelist.size();
     if(numGeneBlock == 0){
         LOGGER.e(0, "can't find a valid gene in the genotype file.");

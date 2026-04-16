@@ -107,7 +107,7 @@ void gcta::set_genetic_model(std::string model) {
     if (!stringToGeneticModel(model, _genetic_model)) {
         LOGGER.e(0, "genetic model must be either 'additive' or 'nonadditive'.");
     }
-    LOGGER << "Genetic model std::set to: " << model << std::endl;
+    LOGGER << "Genetic model set to: " << model << std::endl;
 }
 
 void gcta::read_famfile(std::string famfile) {
@@ -321,7 +321,7 @@ void gcta::read_bedfile(std::string bedfile)
  *   - RR (homozygous for reference) = 0
  *   - RA (heterozygous) = 2p (where p is allele frequency)
  *   - AA (homozygous for alternate) = 4p - 2
- *   - Missing values are std::set to DOSAGE_NA
+ *   - Missing values are set to DOSAGE_NA
  * 
  * Prerequisites:
  *   - read_famfile() must be called first to initialize individuals

@@ -1381,7 +1381,7 @@ void option(int option_num, char* option_str[])
         else LOGGER.i(0, "the program will be running on " + std::to_string(thread_num) + " threads.", "Note:");
     }
 
-    // std::set autosome
+    // set autosome
     if (autosome_flag) {
         if(extract_chr_start == extract_chr_end && extract_chr_start != 0){
             LOGGER.w(0, "--autosome option omitted. You have specified the chromosome to analysis.");
