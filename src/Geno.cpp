@@ -1498,7 +1498,6 @@ void Geno::loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf, bo
    
     preGenoDouble(numMarkerBuf, bMakeGeno, bGenoCenter, bGenoStd, bMakeMiss);
     thread read_thread([this, &extractIndex](){this->readGeno(extractIndex);});
-    read_thread.detach();
     // main loop
     
     LOGGER.ts("LOOP_GENO_PRE");
@@ -1558,6 +1557,7 @@ void Geno::loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf, bo
         LOGGER.i(1, ss.str());
         LOGGER << nFinishedMarker << " SNPs have been processed." << std::endl;
     }
+    read_thread.join();
     endGenoDouble();
 }
 
