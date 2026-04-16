@@ -17,6 +17,7 @@
 #include <limits>
 #include <htslib/vcf.h>
 #include <htslib/hts.h>
+#include <htslib/synced_bcf_reader.h>
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
 #include "gcta.h"
@@ -2450,21 +2451,30 @@ static int vcf_chr_to_int(const char* chrom) {
 // is the major allele, A1/A2 are swapped and the genotypes re-oriented.
 //
 // If region is non-empty the file must be indexed (.csi or .tbi).
-
-//TODO: Do we really need a 2-pass strategy? We could compute mean REF allele count on the fly in dosage mode, and skip it entirely in non-dosage mode (since it's not used for anything).
-// The main reason for the 2-pass strategy is to build the SNP list and _snp_name_map before reading genotypes, but we could do that in a single pass by building the SNP list and map on the fly as we read records.
-
 void gcta::read_vcf_file(std::string vcffile, std::string region)
 {
     int i = 0;
     LOGGER << "Reading VCF/BCF file" << (_dosage_flag ? " (dosage mode)" : "")
            << " from [" + vcffile + "] ..." << std::endl;
 
-    // ── Open file and read header ─────────────────────────────────────────────
-    htsFile*   fp  = bcf_open(vcffile.c_str(), "r");
-    if (!fp) LOGGER.e(0, "cannot open the file [" + vcffile + "] to read.");
-    bcf_hdr_t* hdr = bcf_hdr_read(fp);
-    if (!hdr) { bcf_close(fp); LOGGER.e(0, "cannot read VCF/BCF header from [" + vcffile + "]."); }
+    // ── Open via synced_bcf_reader (handles VCF.gz and BCF uniformly) ─────────
+    bcf_srs_t* sr = bcf_sr_init();
+    if (!region.empty()) {
+        if (bcf_sr_set_regions(sr, region.c_str(), 0) != 0) {
+            bcf_sr_destroy(sr);
+            LOGGER.e(0, "failed to set region [" + region + "]. "
+                     "Check that the region string is valid (e.g. chr1:1000-2000).");
+        }
+    }
+    if (!bcf_sr_add_reader(sr, vcffile.c_str())) {
+        std::string err_msg = "cannot open [" + vcffile + "]";
+        if (!region.empty())
+            err_msg += ". Region queries require an indexed file (.tbi/.csi). "
+                       "Create one with: bcftools index " + vcffile;
+        bcf_sr_destroy(sr);
+        LOGGER.e(0, err_msg);
+    }
+    bcf_hdr_t* hdr = bcf_sr_get_header(sr, 0);
 
     // ── Populate sample information from VCF header ───────────────────────────
     int nsamples = bcf_hdr_nsamples(hdr);
@@ -2475,24 +2485,10 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
     _mo_id.assign(nsamples, "0");
     _sex.assign(nsamples, 0);
     _pheno.assign(nsamples, -9.0);
-    for (i = 0; i < nsamples; i++) {
-        _fid[i] = hdr->samples[i];
-        _pid[i] = hdr->samples[i];
-    }
+    for (i = 0; i < nsamples; i++)
+        _fid[i] = _pid[i] = hdr->samples[i];
     LOGGER << nsamples << " samples found in VCF/BCF header." << std::endl;
     init_keep();
-
-    // ── Load index if a region was requested ──────────────────────────────────
-    hts_idx_t* idx = nullptr;
-    if (!region.empty()) {
-        idx = bcf_index_load(vcffile.c_str());
-        if (!idx) {
-            bcf_hdr_destroy(hdr);
-            bcf_close(fp);
-            LOGGER.e(0, "--vcf-region requires an index (.csi or .tbi) for [" + vcffile +
-                     "]. Create one with: bcftools index " + vcffile);
-        }
-    }
 
     // ── Clear SNP metadata ────────────────────────────────────────────────────
     _chr.clear(); _snp_name.clear(); _genet_dst.clear();
@@ -2509,28 +2505,19 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
     }
 
     // ── Reserve SNP metadata vectors ──────────────────────────────────────────
-    // When an index is loaded, sum hts_idx_get_stat across all contigs (or just
-    // the queried contig for a region) for an exact upper bound on record count.
-    // Without an index, fall back to a 1 M SNP heuristic.
+    // Use the index (if loaded by the synced reader) to estimate record count.
     {
         size_t reserve_hint = 1u << 20; // fallback: 1 M SNPs
-        if (idx) {
+        hts_idx_t* stat_idx = sr->readers[0].bcf_idx;
+        if (!stat_idx && sr->readers[0].tbx_idx)
+            stat_idx = sr->readers[0].tbx_idx->idx;
+        if (stat_idx) {
             uint64_t total = 0;
-            if (!region.empty()) {
-                // Only count the single contig being queried.
-                int tid = bcf_hdr_name2id(hdr, region.substr(0, region.find_first_of(":-")).c_str());
-                if (tid >= 0) {
-                    uint64_t mapped = 0, unmapped = 0;
-                    hts_idx_get_stat(idx, tid, &mapped, &unmapped);
-                    total = mapped;
-                }
-            } else {
-                // Sum across all contigs in the header.
-                for (int c = 0; c < hdr->n[BCF_DT_CTG]; c++) {
-                    uint64_t mapped = 0, unmapped = 0;
-                    hts_idx_get_stat(idx, c, &mapped, &unmapped);
-                    total += mapped;
-                }
+            int n_seq = hts_idx_nseq(stat_idx);
+            for (int c = 0; c < n_seq; c++) {
+                uint64_t mapped = 0, unmapped = 0;
+                hts_idx_get_stat(stat_idx, c, &mapped, &unmapped);
+                total += mapped;
             }
             if (total > 0) reserve_hint = static_cast<size_t>(total);
         }
@@ -2541,27 +2528,13 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
     }
 
     int      n_multiallelic = 0;
-    bcf1_t*  rec            = bcf_init();
     int32_t* gt_arr         = nullptr;
     int      n_gt_arr       = 0;
     std::vector<int> ref_counts(nsamples, -1);
 
-    {
-        hts_itr_t* itr = nullptr;
-        if (idx) {
-            itr = bcf_itr_querys(idx, hdr, region.c_str());
-            if (!itr) {
-                free(gt_arr);
-                bcf_destroy(rec);
-                hts_idx_destroy(idx);
-                bcf_hdr_destroy(hdr);
-                bcf_close(fp);
-                LOGGER.e(0, "failed to query region [" + region + "] in [" + vcffile +
-                         "]. Check that the region string matches the chromosome naming in the file.");
-            }
-        }
-
-        while (itr ? (bcf_itr_next(fp, itr, rec) >= 0) : (bcf_read(fp, hdr, rec) >= 0)) {
+    while (bcf_sr_next_line(sr)) {
+        bcf1_t* rec = bcf_sr_get_line(sr, 0);
+        if (!rec) continue;
 
             bcf_unpack(rec, BCF_UN_ALL);
             if (rec->n_allele != 2) { ++n_multiallelic; continue; }
@@ -2590,9 +2563,13 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
             const double mu_ref = valid_n > 0 ? allele_sum / valid_n : 0.0;
 
             // ── Minor-allele convention ───────────────────────────────────────
-            // a1_is_ref: REF is the minor allele (no allele swap needed).
-            // When false, A1 = ALT and counts must be flipped (ploidy - ref_count).
-            const bool   a1_is_ref = (mu_ref / 2.0 <= 0.5);
+            // A1 = minor allele; A2 = major allele.
+            // Tie-break at AF=0.5: follow PLINK and assign A1 to the
+            // lexicographically earlier allele string (REF wins if REF <= ALT).
+            const double af_ref = mu_ref / 2.0;
+            const bool   a1_is_ref = (af_ref < 0.5) ||
+                                     (af_ref == 0.5 &&
+                                      strcmp(rec->d.allele[0], rec->d.allele[1]) <= 0);
             const double mu_a1     = a1_is_ref ? mu_ref : (2.0 - mu_ref);
 
             // ── Record SNP metadata ───────────────────────────────────────────
@@ -2614,8 +2591,6 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
             // ── Fill storage ──────────────────────────────────────────────────
             if (_dosage_flag) {
                 _mu.push_back(mu_a1);
-                // Precompute the two non-additive dosage constants once per SNP
-                // rather than recomputing 4*p-2 and 2*p for every sample.
                 const double p              = mu_a1 / 2.0;
                 const float  dose_het       = static_cast<float>(2.0 * p);
                 const float  dose_hom_minor = static_cast<float>(4.0 * p - 2.0);
@@ -2641,8 +2616,14 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
                     const bool is_missing = (ref_counts[i] < 0);
                     const int  a1_count   = is_missing ? 0
                                             : (a1_is_ref ? ref_counts[i] : (ploidy - ref_counts[i]));
-                    // PLINK BED encoding: HomA1=(1,1), Het=(0,1), HomA2=(0,0), Missing=(1,0)
-                    // TODO: is this wrong? Plink1.9 guide states 10 is HET and 01 is missing?
+                    // Internal _snp_1/_snp_2 encoding (NOT the raw BED bit pairs):
+                    //   HomA1   → (snp_1=1, snp_2=1)  → snp_1+snp_2 = 2
+                    //   Het     → (snp_1=0, snp_2=1)  → snp_1+snp_2 = 1
+                    //   HomA2   → (snp_1=0, snp_2=0)  → snp_1+snp_2 = 0
+                    //   Missing → (snp_1=1, snp_2=0)  → detected by snp_1 && !snp_2
+                    // Raw BED stores the bit-negations of this (00=HomA1, 01=missing,
+                    // 10=het, 11=HomA2); read_bedfile applies !bit1/!bit0 to arrive
+                    // at the same convention used here.
                     s1[i] = is_missing  || (a1_count == ploidy);
                     s2[i] = !is_missing && (a1_count >= 1);
                 }
@@ -2650,14 +2631,9 @@ void gcta::read_vcf_file(std::string vcffile, std::string region)
                 _snp_2.push_back(std::move(s2));
             }
         }
-        if (itr) hts_itr_destroy(itr);
-    }
 
     free(gt_arr);
-    bcf_destroy(rec);
-    bcf_hdr_destroy(hdr);
-    bcf_close(fp);
-    if (idx) hts_idx_destroy(idx);
+    bcf_sr_destroy(sr);
 
     if (n_multiallelic > 0)
         LOGGER << "Warning: " << n_multiallelic
