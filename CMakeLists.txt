@@ -86,6 +86,7 @@ include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 set(CMAKE_DISABLE_FIND_PACKAGE_CLANG_FORMAT ON CACHE BOOL "" FORCE)
 
+set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_SHARED ON CACHE BOOL "" FORCE)
@@ -122,7 +123,17 @@ set(SPECTRA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(CMAKE_SKIP_INSTALL_RULES ON)
 
-FetchContent_MakeAvailable(zlib eigen spectra zstd Boost sqlite)
+# Make zlib available first so Boost iostreams can find its headers
+FetchContent_MakeAvailable(zlib)
+set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR}" CACHE PATH "" FORCE)
+if(UNIX)
+    set(ZLIB_LIBRARY "${zlib_BINARY_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}z${CMAKE_STATIC_LIBRARY_SUFFIX}" CACHE FILEPATH "" FORCE)
+else()
+    set(ZLIB_LIBRARY "${zlib_BINARY_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}zlibstatic${CMAKE_STATIC_LIBRARY_SUFFIX}" CACHE FILEPATH "" FORCE)
+endif()
+set(ZLIB_FOUND TRUE CACHE BOOL "" FORCE)
+
+FetchContent_MakeAvailable(eigen spectra zstd Boost sqlite)
 
 set(CMAKE_SKIP_INSTALL_RULES OFF)
 add_library(sqlite3 STATIC ${sqlite_SOURCE_DIR}/sqlite3.c)
@@ -212,6 +223,20 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS")
         list(APPEND GCTA_BLAS_LIBS ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
         if(OPENBLAS_INCLUDE_DIR)
             list(APPEND GCTA_BLAS_INCLUDE_DIRS ${OPENBLAS_INCLUDE_DIR})
+        else()
+            find_path(LAPACKE_INCLUDE_DIR lapacke.h
+                HINTS
+                    /usr/include/openblas
+                    /usr/local/include/openblas
+                    /usr/include/x86_64-linux-gnu/openblas-pthread
+                    /usr/include
+                    /usr/local/include)
+            if(LAPACKE_INCLUDE_DIR)
+                list(APPEND GCTA_BLAS_INCLUDE_DIRS ${LAPACKE_INCLUDE_DIR})
+                message(STATUS "Found lapacke.h in: ${LAPACKE_INCLUDE_DIR}")
+            else()
+                message(WARNING "lapacke.h not found. Set OPENBLAS_INCLUDE_DIR to the directory containing lapacke.h")
+            endif()
         endif()
     endif()
     list(APPEND GCTA_BLAS_DEFINES GCTA_USE_OPENBLAS EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
@@ -237,7 +262,7 @@ elseif(_GCTA_BLAS STREQUAL "MKL")
     find_package(MKL REQUIRED)
     list(APPEND GCTA_BLAS_LIBS MKL::MKL)
     list(APPEND GCTA_BLAS_INCLUDE_DIRS ${MKL_INCLUDE})
-    list(APPEND GCTA_BLAS_DEFINES GCTA_USE_MKL EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
+    list(APPEND GCTA_BLAS_DEFINES GCTA_USE_MKL EIGEN_USE_MKL EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
     set(GCTA_BLAS_PROVIDER "MKL" CACHE INTERNAL "")
 
 else()
