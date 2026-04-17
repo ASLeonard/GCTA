@@ -357,12 +357,28 @@ target_include_directories(Pgenlib PRIVATE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR}
 
 target_link_libraries(gcta64 mainV1 ${GCTA_LIBS} Pgenlib sqlite3 libzstd Threads::Threads)
 
-# Link BLAS before GSL so OpenBLAS/Accelerate cblas symbols take precedence
-# over libgslcblas in dyld symbol resolution order
+# Link BLAS before GSL so OpenBLAS/Accelerate/MKL cblas symbols take precedence
+# over libgslcblas in dyld (macOS) and ld.so (Linux) symbol resolution order
 target_link_libraries(gcta64 ${GCTA_BLAS_LIBS})
 
 if (NOT WIN32)
-    target_link_libraries(gcta64 GSL::gsl GSL::gslcblas)
+    # Link only GSL (not gslcblas) when a BLAS backend is available,
+    # so GSL uses our BLAS for cblas symbols rather than its own scalar cblas.
+    # On Linux wrap in --as-needed/--no-as-needed to prevent GSL from pulling
+    # in its own transitive libopenblas which would override our BLAS backend.
+    if(_GCTA_BLAS STREQUAL "None")
+        target_link_libraries(gcta64 GSL::gsl GSL::gslcblas)
+    elseif(UNIX AND NOT APPLE)
+        target_link_libraries(gcta64 -Wl,--as-needed GSL::gsl -Wl,--no-as-needed)
+    else()
+        target_link_libraries(gcta64 GSL::gsl)
+    endif()
+endif()
+
+# On Linux, re-link BLAS after GSL to ensure it appears last in NEEDED and
+# its cblas symbols take precedence via ld.so's first-match ordering.
+if(UNIX AND NOT APPLE AND NOT _GCTA_BLAS STREQUAL "None")
+    target_link_libraries(gcta64 ${GCTA_BLAS_LIBS})
 endif()
 
 foreach(target IN LISTS GCTA_TARGETS)

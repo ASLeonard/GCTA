@@ -1125,7 +1125,6 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
             for (i = 0; i < _r_indx.size(); i++) LOGGER << _var_name[_r_indx[i]] << "\t";
             LOGGER << std::endl;
         }
-        //LOGGER << "Iter " << iter << std::endl;
         if (_bivar_reml) calcu_Vi_bivar(_Vi, prev_varcmp, logdet, iter); // Calculate Vi, bivariate analysis //very slow
         else if (_within_family) calcu_Vi_within_family(_Vi, prev_varcmp, logdet, iter); // within-family REML
         else {
@@ -1318,17 +1317,14 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
         // after dpotri, so the upper never needs to be filled during assembly.
         const int num_comp = _r_indx.size();
 
-        // Only the lower triangle is written: dpotrf reads only lower, and _LLT
-        // symmetrises from lower afterward.  Writing the upper triangle here was
-        // redundant (it gets overwritten by dpotri/symmetrize anyway).
-        #pragma omp parallel for collapse(2)
-        for (int j = 0; j < _n; j++) {
-            for (int k = 0; k <= j; k++) {
-                double val = 0.0;
-                for (int ci = 0; ci < num_comp; ci++)
-                    val += (_A[_r_indx[ci]])(j, k) * prev_varcmp[ci];
-                Vi(j, k) = val;
-            }
+        // V = sum_i sigma_i^2 * A_i  (lower triangle only; dpotrf reads only lower).
+        Vi.triangularView<Eigen::Lower>().setZero();
+        for (int ci = 0; ci < num_comp; ci++) {
+            const double s = prev_varcmp[ci];
+            const eigenMatrix &Ai = _A[_r_indx[ci]];
+            #pragma omp parallel for schedule(static)
+            for (int j = 0; j < _n; j++)
+                Vi.col(j).tail(_n - j) += s * Ai.col(j).tail(_n - j);
         }
 
         constexpr bool use_lu = false;
@@ -1609,7 +1605,6 @@ double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi
 // input P, calculate PA and Hi
 void gcta::calcu_Hi(eigenMatrix &P, eigenMatrix &Hi)
 {
-    double d_buf = 0.0;
     //LOGGER << "Before calcu_Hi: " << getVMemKB() << " " << getMemKB() << ", "; 
 
     // Calculate PA
@@ -1621,21 +1616,12 @@ void gcta::calcu_Hi(eigenMatrix &P, eigenMatrix &Hi)
     }
 
 
-    // Calculate Hi
-    //double d_bufs[_n];
-    double *d_bufs = new double[_n];
-    for (int i = 0; i < _r_indx.size(); i++) {
+    // tr(PA_i * PA_j) = sum_{k,l} PA_i(k,l) * PA_j(l,k)
+    //                 = PA_i ⊙ PA_j^T  (Frobenius inner product)
+    // Eigen maps this to a single BLAS ddot-equivalent, no temporaries needed.
+    for (int i = 0; i < (int)_r_indx.size(); i++) {
         for (int j = 0; j <= i; j++) {
-            memset(d_bufs, 0, _n * sizeof(double));
-            d_buf = 0.0;
-            #pragma omp parallel for 
-            for (int k = 0; k < _n; k++) {
-                for (int l = 0; l < _n; l++) d_bufs[k] += (PA[i])(k, l)*(PA[j])(l, k);
-            }
-            for(int k = 0; k < _n; k++){
-                d_buf += d_bufs[k];
-            }
-            Hi(i, j) = Hi(j, i) = d_buf;
+            Hi(i, j) = Hi(j, i) = PA[i].cwiseProduct(PA[j].transpose()).sum();
         }
     }
 
@@ -1646,7 +1632,6 @@ void gcta::calcu_Hi(eigenMatrix &P, eigenMatrix &Hi)
         }
         else LOGGER.e(0, "the information matrix is not invertible.");
     }
-    delete[] d_bufs;
 }
 
 // use Fisher-scoring to estimate variance component
@@ -1685,30 +1670,30 @@ void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector
     //eigenVector cvec(_n);
     eigenMatrix APy(_n, _r_indx.size());
     //LOGGER << "AI reml 1 start" << std::endl;
-    #pragma omp parallel for
-    for (int i = 0; i < _r_indx.size(); i++) {
-        if (_bivar_reml || _within_family) (APy.col(i)) = (_Asp[_r_indx[i]]) * Py;
-        else (APy.col(i)) = (_A[_r_indx[i]]) * Py;
+    for (int i = 0; i < (int)_r_indx.size(); i++) {
+        if (_bivar_reml || _within_family)
+            APy.col(i).noalias() = _Asp[_r_indx[i]] * Py;
+        else
+            APy.col(i).noalias() = _A[_r_indx[i]].selfadjointView<Eigen::Lower>() * Py;
     }
 
     //LOGGER << "AI reml 2 start" << std::endl;
     // Calculate Hi
     eigenVector R(_r_indx.size());
     if (use_approx) {
-        #pragma omp parallel for
-        for (int i = 0; i < _r_indx.size(); i++) {
-            R(i) = (Py.transpose()*(APy.col(i)))(0, 0);
+        for (int i = 0; i < (int)_r_indx.size(); i++) {
+            R(i) = Py.dot(APy.col(i));
             eigenVector cvec = applyP_vec(APy.col(i));
-            Hi(i, i) = ((APy.col(i)).transpose() * cvec)(0, 0);
-            for (int j = 0; j < i; j++) Hi(j, i) = Hi(i, j) = ((APy.col(j)).transpose() * cvec)(0, 0);
+            Hi(i, i) = APy.col(i).dot(cvec);
+            for (int j = 0; j < i; j++) Hi(j, i) = Hi(i, j) = APy.col(j).dot(cvec);
         }
     } else {
-        #pragma omp parallel for
-        for (int i = 0; i < _r_indx.size(); i++) {
-            R(i) = (Py.transpose()*(APy.col(i)))(0, 0);
-            eigenVector cvec = P.selfadjointView<Eigen::Lower>() * APy.col(i);
-            Hi(i, i) = ((APy.col(i)).transpose() * cvec)(0, 0);
-            for (int j = 0; j < i; j++) Hi(j, i) = Hi(i, j) = ((APy.col(j)).transpose() * cvec)(0, 0);
+        for (int i = 0; i < (int)_r_indx.size(); i++) {
+            R(i) = Py.dot(APy.col(i));
+            eigenVector cvec(_n);
+            cvec.noalias() = P.selfadjointView<Eigen::Lower>() * APy.col(i);
+            Hi(i, i) = APy.col(i).dot(cvec);
+            for (int j = 0; j < i; j++) Hi(j, i) = Hi(i, j) = APy.col(j).dot(cvec);
         }
     }
     //LOGGER << "AI reml 2 end" << std::endl;
@@ -1752,15 +1737,19 @@ void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, ei
         // lower triangle — halves memory bandwidth vs a general dgemv.
         Py.noalias() = P.selfadjointView<Eigen::Lower>() * _y;
     }
+    // R(i) = Py' * A_i * Py  — computed as a dsymv + dot to avoid forming the
+    // n×n outer product.  Sequential over components (typically 2–3) so BLAS
+    // threads inside dsymv are not competing with an outer OMP parallel region.
     eigenVector R(_r_indx.size());
-
-    #pragma omp parallel for
-    for (int i = 0; i < _r_indx.size(); i++) {
-        //LOGGER << "EM reml " << i << std::endl;
-        if (_bivar_reml || _within_family) R(i) = (Py.transpose()*(_Asp[_r_indx[i]]) * Py)(0, 0);
-        else R(i) = (Py.transpose()*(_A[_r_indx[i]]) * Py)(0, 0);
-        // Calculate Variance component;
-        varcmp(i) = prev_varcmp(i) - prev_varcmp(i) * prev_varcmp(i) * (tr_PA(i) -  R(i)) / _n;
+    eigenVector tmp(_n);
+    for (int i = 0; i < (int)_r_indx.size(); i++) {
+        if (_bivar_reml || _within_family)
+            R(i) = Py.dot(_Asp[_r_indx[i]] * Py);
+        else {
+            tmp.noalias() = _A[_r_indx[i]].selfadjointView<Eigen::Lower>() * Py;
+            R(i) = Py.dot(tmp);
+        }
+        varcmp(i) = prev_varcmp(i) - prev_varcmp(i) * prev_varcmp(i) * (tr_PA(i) - R(i)) / _n;
     }
 
 
