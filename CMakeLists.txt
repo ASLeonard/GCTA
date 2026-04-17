@@ -357,12 +357,18 @@ target_include_directories(Pgenlib PRIVATE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR}
 
 target_link_libraries(gcta64 mainV1 ${GCTA_LIBS} Pgenlib sqlite3 libzstd Threads::Threads)
 
+# Link BLAS before GSL so OpenBLAS/Accelerate cblas symbols take precedence
+# over libgslcblas in dyld symbol resolution order
+target_link_libraries(gcta64 ${GCTA_BLAS_LIBS})
+
 if (NOT WIN32)
     target_link_libraries(gcta64 GSL::gsl GSL::gslcblas)
 endif()
 
 foreach(target IN LISTS GCTA_TARGETS)
-    target_link_libraries(${target} ${GCTA_BLAS_LIBS})
+    if(NOT target STREQUAL "gcta64")
+        target_link_libraries(${target} ${GCTA_BLAS_LIBS})
+    endif()
 endforeach()
 
 # Testing has some problems currently
