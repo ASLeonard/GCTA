@@ -979,9 +979,6 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
     const int numNblock = (curNumValidMarkers + markerPerN - 1) / markerPerN;
     const int numNSampleBlock = (grm_n + markerPerN - 1) / markerPerN;
     const int blockStride = numNSampleBlock * markerPerN;
-
-    // Build all missing-data blocks serially. Total work is O(nMarkerBlock * N / 64),
-    // trivial vs BLAS; the fork/join cost of parallelising it would exceed the savings.
     for(int i = 0; i < numNblock; i++){
         const int baseMarkerIndex = markerPerN * i;
         const int lastValidIndex  = std::min(markerPerN * (i + 1), curNumValidMarkers);
@@ -1000,6 +997,7 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
             }
         }
     }
+
 
     // Single parallel region: each thread processes its pair range across all blocks.
     // This reduces fork/join barriers from numNblock to 1, and keeps each thread's
@@ -1955,7 +1953,6 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
 }
 
 void GRM::processMakeGRM(){
-    nMarkerBlock = 1024;
     gbufitems = new GenoBufItem[nMarkerBlock];
     {
         const int markerPerN = static_cast<int>(sizeof(uintptr_t) * CHAR_BIT);
@@ -2001,7 +1998,6 @@ void GRM::processMakeGRM(){
 }
 
 void GRM::processMakeGRMX(){
-    nMarkerBlock = 1024;
     gbufitems = new GenoBufItem[nMarkerBlock];
     {
         const int markerPerN = static_cast<int>(sizeof(uintptr_t) * CHAR_BIT);
