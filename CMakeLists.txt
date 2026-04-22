@@ -57,7 +57,7 @@ endif()
 set(GCTA_BLAS_BACKEND "Auto" CACHE STRING "BLAS/LAPACK backend: Auto, MKL, OpenBLAS, or Accelerate")
 set_property(CACHE GCTA_BLAS_BACKEND PROPERTY STRINGS Auto MKL OpenBLAS Accelerate)
 option(GCTA_LIST_TARGETS "List imported and local targets during configure" OFF)
-option(GCTA_UNITY_BUILD "Enable unity builds for faster compilation" OFF)
+option(GCTA_UNITY_BUILD "Enable unity builds for faster compilation" ON)
 option(GCTA_ENABLE_IPO "Enable IPO/LTO in Release builds" ON)
 
 # Initialize plink-ng submodule if needed
@@ -123,17 +123,37 @@ set(SPECTRA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(CMAKE_SKIP_INSTALL_RULES ON)
 
-# Make zlib available first so Boost iostreams can find its headers
-FetchContent_MakeAvailable(zlib)
-set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR}" CACHE PATH "" FORCE)
-if(UNIX)
-    set(ZLIB_LIBRARY "${zlib_BINARY_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}z${CMAKE_STATIC_LIBRARY_SUFFIX}" CACHE FILEPATH "" FORCE)
+# Prefer system zlib; fall back to FetchContent so Boost iostreams can find its headers
+find_package(ZLIB QUIET)
+if(NOT ZLIB_FOUND)
+    message(STATUS "System zlib not found, fetching...")
+    FetchContent_MakeAvailable(zlib)
+    set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR}" CACHE PATH "" FORCE)
+    if(UNIX)
+        set(ZLIB_LIBRARY "${zlib_BINARY_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}z${CMAKE_STATIC_LIBRARY_SUFFIX}" CACHE FILEPATH "" FORCE)
+    else()
+        set(ZLIB_LIBRARY "${zlib_BINARY_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}zlibstatic${CMAKE_STATIC_LIBRARY_SUFFIX}" CACHE FILEPATH "" FORCE)
+    endif()
+    set(ZLIB_FOUND TRUE CACHE BOOL "" FORCE)
+    set(GCTA_ZLIB_INCLUDE_DIRS "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
 else()
-    set(ZLIB_LIBRARY "${zlib_BINARY_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}zlibstatic${CMAKE_STATIC_LIBRARY_SUFFIX}" CACHE FILEPATH "" FORCE)
+    message(STATUS "Using system zlib: ${ZLIB_INCLUDE_DIRS}")
+    set(GCTA_ZLIB_INCLUDE_DIRS "${ZLIB_INCLUDE_DIRS}")
 endif()
-set(ZLIB_FOUND TRUE CACHE BOOL "" FORCE)
 
-FetchContent_MakeAvailable(eigen spectra zstd Boost sqlite)
+# Prefer system zstd; fall back to FetchContent
+find_package(zstd QUIET)
+if(NOT zstd_FOUND)
+    message(STATUS "System zstd not found, fetching...")
+    FetchContent_MakeAvailable(eigen spectra zstd Boost sqlite)
+    set(GCTA_ZSTD_INCLUDE_DIRS "${zstd_SOURCE_DIR}/lib")
+    set(GCTA_ZSTD_LIBS libzstd)
+else()
+    message(STATUS "Using system zstd")
+    FetchContent_MakeAvailable(eigen spectra Boost sqlite)
+    set(GCTA_ZSTD_INCLUDE_DIRS "")
+    set(GCTA_ZSTD_LIBS zstd::libzstd_shared)
+endif()
 
 set(CMAKE_SKIP_INSTALL_RULES OFF)
 add_library(sqlite3 STATIC ${sqlite_SOURCE_DIR}/sqlite3.c)
@@ -276,35 +296,39 @@ set(MAIN_SOURCE "${CMAKE_SOURCE_DIR}/src/main.cpp")
 
 file(GLOB SRCS "${CMAKE_SOURCE_DIR}/src/*.cpp")
 list(REMOVE_ITEM SRCS "${MAIN_SOURCE}")
-list(APPEND SRCS "${CMAKE_SOURCE_DIR}/src/acat.c")
 
-set(GCTA_LIBS "")
-foreach(lib_src ${SRCS})
-    get_filename_component(file_name "${lib_src}" NAME_WE)
-    string(TOLOWER ${file_name} lib_name)
-    add_library(${lib_name} "${lib_src}")
+# acat.c is pure C — keep it in its own small library so the C++ PCH
+# applied to gcta_core does not bleed into C compilation units.
+add_library(acat_c OBJECT "${CMAKE_SOURCE_DIR}/src/acat.c")
+target_include_directories(acat_c PUBLIC ${COMMON_INCLUDES})
 
-    target_include_directories(${lib_name} PUBLIC
-        ${COMMON_INCLUDES}
-        ${GCTA_BLAS_INCLUDE_DIRS}
-        # PLINK2.0 pgen library;
-        "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include"
-        "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/simde")
+add_library(gcta_core OBJECT ${SRCS})
 
-    target_link_libraries(${lib_name}
-        Boost::algorithm Boost::math Boost::crc Boost::iostreams
-        Eigen3::Eigen
-        Spectra
-        sqlite3)
+target_include_directories(gcta_core PUBLIC
+    ${COMMON_INCLUDES}
+    ${GCTA_BLAS_INCLUDE_DIRS}
+    "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include"
+    "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/simde")
 
-    list(APPEND GCTA_LIBS ${lib_name})
-endforeach(lib_src)
+target_link_libraries(gcta_core PRIVATE
+    Boost::algorithm Boost::math Boost::crc Boost::iostreams
+    Eigen3::Eigen
+    Spectra
+    sqlite3
+    ${GCTA_ZSTD_LIBS})
+
+target_precompile_headers(gcta_core PRIVATE
+    <Eigen/Dense>
+    <boost/algorithm/string.hpp>
+    <boost/math/distributions.hpp>)
+
+set(GCTA_LIBS gcta_core acat_c)
 
 add_executable(gcta64 ${MAIN_SOURCE})
 
 add_subdirectory(main)
 target_include_directories(mainV1 PUBLIC ${COMMON_INCLUDES} ${GCTA_BLAS_INCLUDE_DIRS})
-target_link_libraries(mainV1 Eigen3::Eigen Boost::math Boost::iostreams Spectra)
+target_link_libraries(mainV1 PRIVATE Eigen3::Eigen Boost::math Boost::iostreams Spectra)
 
 set(GCTA_TARGETS gcta64 mainV1 ${GCTA_LIBS})
 
@@ -328,9 +352,8 @@ endforeach()
 # Apply common includes and definitions to all targets
 foreach(target IN LISTS GCTA_TARGETS)
     target_include_directories(${target} PRIVATE
-        ${zstd_SOURCE_DIR}/lib
-        ${zlib_SOURCE_DIR}
-        ${zlib_BINARY_DIR}
+        ${GCTA_ZSTD_INCLUDE_DIRS}
+        ${GCTA_ZLIB_INCLUDE_DIRS}
         ${GCTA_BLAS_INCLUDE_DIRS})
     target_compile_definitions(${target} PRIVATE ${GCTA_BLAS_DEFINES}
         GCTA_BLAS_BACKEND_STR="${GCTA_BLAS_PROVIDER}")
@@ -344,8 +367,14 @@ endforeach()
 
 # Link OpenMP to all targets
 foreach(target IN LISTS GCTA_TARGETS)
-    target_link_libraries(${target} OpenMP::OpenMP_CXX)
+    target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
 endforeach()
+
+# Thin LTO for GCC on Linux (Clang handles LTO via INTERPROCEDURAL_OPTIMIZATION)
+if(CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND LINUX)
+    target_compile_options(gcta64 PRIVATE -flto=thin)
+    target_link_options(gcta64 PRIVATE -flto=thin)
+endif()
 
 add_subdirectory(third_party)
 
@@ -353,13 +382,13 @@ target_include_directories(gcta64 PRIVATE
     ${COMMON_INCLUDES}
     ${GCTA_BLAS_INCLUDE_DIRS})
 
-target_include_directories(Pgenlib PRIVATE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
+target_include_directories(Pgenlib PRIVATE ${GCTA_ZLIB_INCLUDE_DIRS})
 
-target_link_libraries(gcta64 mainV1 ${GCTA_LIBS} Pgenlib sqlite3 libzstd Threads::Threads)
+target_link_libraries(gcta64 PRIVATE mainV1 gcta_core acat_c Pgenlib sqlite3 ${GCTA_ZSTD_LIBS} Threads::Threads Eigen3::Eigen)
 
 # Link BLAS before GSL so OpenBLAS/Accelerate/MKL cblas symbols take precedence
 # over libgslcblas in dyld (macOS) and ld.so (Linux) symbol resolution order
-target_link_libraries(gcta64 ${GCTA_BLAS_LIBS})
+target_link_libraries(gcta64 PRIVATE ${GCTA_BLAS_LIBS})
 
 if (NOT WIN32)
     # Link only GSL (not gslcblas) when a BLAS backend is available,
@@ -367,23 +396,23 @@ if (NOT WIN32)
     # On Linux wrap in --as-needed/--no-as-needed to prevent GSL from pulling
     # in its own transitive libopenblas which would override our BLAS backend.
     if(_GCTA_BLAS STREQUAL "None")
-        target_link_libraries(gcta64 GSL::gsl GSL::gslcblas)
+        target_link_libraries(gcta64 PRIVATE GSL::gsl GSL::gslcblas)
     elseif(UNIX AND NOT APPLE)
-        target_link_libraries(gcta64 -Wl,--as-needed GSL::gsl -Wl,--no-as-needed)
+        target_link_libraries(gcta64 PRIVATE -Wl,--as-needed GSL::gsl -Wl,--no-as-needed)
     else()
-        target_link_libraries(gcta64 GSL::gsl)
+        target_link_libraries(gcta64 PRIVATE GSL::gsl)
     endif()
 endif()
 
 # On Linux, re-link BLAS after GSL to ensure it appears last in NEEDED and
 # its cblas symbols take precedence via ld.so's first-match ordering.
 if(UNIX AND NOT APPLE AND NOT _GCTA_BLAS STREQUAL "None")
-    target_link_libraries(gcta64 ${GCTA_BLAS_LIBS})
+    target_link_libraries(gcta64 PRIVATE ${GCTA_BLAS_LIBS})
 endif()
 
 foreach(target IN LISTS GCTA_TARGETS)
     if(NOT target STREQUAL "gcta64")
-        target_link_libraries(${target} ${GCTA_BLAS_LIBS})
+        target_link_libraries(${target} PRIVATE ${GCTA_BLAS_LIBS})
     endif()
 endforeach()
 
@@ -412,7 +441,7 @@ if(LINUX)
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
 
     # Targets
-    install(TARGETS gcta64 mainV1 ${GCTA_LIBS}
+    install(TARGETS gcta64 mainV1
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)
@@ -425,7 +454,7 @@ if(LINUX)
     install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.svg
         DESTINATION share/icons/hicolor/scalable/apps)
 elseif(WIN32)
-    install(TARGETS gcta64 mainV1 ${GCTA_LIBS} DESTINATION bin)
+    install(TARGETS gcta64 mainV1 DESTINATION bin)
 
     file(GLOB RUNTIME_DLLS "${CMAKE_BINARY_DIR}/*.dll")
     install(FILES
@@ -443,7 +472,7 @@ elseif(APPLE)
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
 
     # Install target executables and libraries
-    install(TARGETS gcta64 mainV1 ${GCTA_LIBS}
+    install(TARGETS gcta64 mainV1
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)
