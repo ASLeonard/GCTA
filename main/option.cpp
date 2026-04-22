@@ -1487,7 +1487,7 @@ void option(int option_num, char* option_str[])
             else if (make_grm_flag) pter_gcta->make_grm(dominance_flag, make_grm_xchar_flag, make_grm_inbred_flag, grm_out_bin_flag, make_grm_mtd, false, make_grm_f3_flag, subpopu_file);
             else if (recode || recode_nomiss || recode_std) pter_gcta->save_XMat(recode_nomiss, recode_std);
             else if (LD) pter_gcta->LD_Blocks(LD_step, LD_wind, LD_sig, LD_i, save_ram);
-            else if (LD_prune_rsq>-1.0) pter_gcta->LD_pruning_mkl(LD_prune_rsq, LD_wind);
+            else if (LD_prune_rsq>-1.0) pter_gcta->LD_pruning(LD_prune_rsq, LD_wind);
             else if (ld_score_flag){
                 if(ld_score_multi_file.empty()) pter_gcta->calcu_mean_rsq(LD_wind, LD_rsq_cutoff, dominance_flag);
                 else pter_gcta->calcu_mean_rsq_multiSet(ld_score_multi_file, LD_wind, LD_rsq_cutoff, dominance_flag);
@@ -1553,7 +1553,7 @@ void option(int option_num, char* option_str[])
         if (out_freq_flag) pter_gcta->save_freq(out_ssq_flag);
         else if (make_grm_flag) pter_gcta->make_grm(dominance_flag, make_grm_xchar_flag, make_grm_inbred_flag, grm_out_bin_flag, make_grm_mtd, false, make_grm_f3_flag, subpopu_file);
         else if (recode || recode_nomiss || recode_std) pter_gcta->save_XMat(recode_nomiss, recode_std);
-        else if (LD_prune_rsq>-1.0) pter_gcta->LD_pruning_mkl(LD_prune_rsq, LD_wind);
+        else if (LD_prune_rsq>-1.0) pter_gcta->LD_pruning(LD_prune_rsq, LD_wind);
         else if (ld_score_flag){
                 if(ld_score_multi_file.empty()) pter_gcta->calcu_mean_rsq(LD_wind, LD_rsq_cutoff, dominance_flag);
                 else pter_gcta->calcu_mean_rsq_multiSet(ld_score_multi_file, LD_wind, LD_rsq_cutoff, dominance_flag);

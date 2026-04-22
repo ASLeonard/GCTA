@@ -82,7 +82,7 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
             }
             else{
                 grm_files.push_back("NA");
-                make_grm_mkl(false, false, inbred, true, 0, true);
+                make_grm(false, false, inbred, true, 0, true);
                 for(i=0; i<_keep.size(); i++) grm_id.push_back(_fid[_keep[i]]+":"+_pid[_keep[i]]);
             }
         }
@@ -178,9 +178,9 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
                 (_A[0]).resize(_n, _n);
                 #pragma omp parallel for private(j)
                 for(i=0; i<_n; i++){
-                    for(j=0; j<=i; j++) (_A[0])(j,i)=(_A[0])(i,j)=_grm_mkl[kp[i]*_n+kp[j]];
+                    for(j=0; j<=i; j++) (_A[0])(j,i)=(_A[0])(i,j)=_grm(kp[i],kp[j]);
                 }
-                delete[] _grm_mkl;
+                _grm.resize(0,0);
             }
         }
         _A[_r_indx.size()-1]=eigenMatrix::Identity(_n, _n);
@@ -260,8 +260,7 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     
     _P.resize(0,0);
     _A.clear();
-    //TODO: better logging
-    std::cout << "\nRegression coefficient(s) (e.g., general mean): " <<_b <<std::endl;
+    LOGGER << "\nRegression coefficient(s) (e.g., general mean): " <<_b <<std::endl;
 
     std::vector<float> y(n);
     if(!no_adj_covar)
@@ -289,7 +288,7 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     auto [beta, se, pval] = no_adj_covar
         ? mlma_calcu_stat_covar(std::span<const float>(y), m)
         : mlma_calcu_stat(std::span<const float>(y), m);
-    delete[] _geno_mkl;
+    _geno.resize(0, 0);
     
     const std::string filename = _out + ".mlma";
     LOGGER<<"\nSaving the results of the mixed linear model association analyses of "<<m<<" SNPs to ["+filename+"] ..."<<std::endl;
@@ -410,7 +409,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
     cblas_sgemm(CblasColMajor, CblasTrans, CblasNoTrans,
                 p, p, n, 1.0f, C.data(), n, Vi_C.data(), n, 0.0f, A.data(), p);
     double d_buf = 0.0;
-    if(!comput_inverse_logdet_LU_mkl_array(p, A.data(), d_buf))
+    if(!comput_inverse_logdet_LU_array(p, A.data(), d_buf))
         LOGGER.e(0, "covariate matrix C^T Vi C is not invertible.");
 
     // c = C^T Vi_y  (p×1)
@@ -532,8 +531,7 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
     std::vector<int> include_o(_include);
     std::map<std::string, int> snp_name_map_o(_snp_name_map);
     std::vector<float> m_chrs_f(chrs.size());
-    std::vector<float *> grm_chrs(chrs.size());
-    std::vector<float *> geno_chrs(chrs.size());
+    std::vector<eigenMatrix> grm_chrs(chrs.size());
     std::vector< std::vector<int> > icld_chrs(chrs.size());
     LOGGER<<std::endl;
     if(_mu.empty()) calcu_mu();
@@ -541,17 +539,15 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
     for(c1=0; c1<chrs.size(); c1++){
         LOGGER<<"Chr "<<chrs[c1]<<":"<<std::endl;
         extract_chr(chrs[c1], chrs[c1]);
-        make_grm_mkl(false, false, inbred, true, 0, true);
+        make_grm(false, false, inbred, true, 0, true);
         
         m_chrs_f[c1]=(float)_include.size();
         icld_chrs[c1]=_include;
         _include=include_o;
         _snp_name_map=snp_name_map_o;
         
-        geno_chrs[c1]=_geno_mkl;
-        _geno_mkl=NULL;
-        grm_chrs[c1]=_grm_mkl;
-        _grm_mkl=NULL;
+        grm_chrs[c1]=std::move(_grm);
+        _geno.resize(0, 0);
     }
     for(i=0; i<_keep.size(); i++) grm_id.push_back(_fid[_keep[i]]+":"+_pid[_keep[i]]);
     
@@ -602,7 +598,7 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
             #pragma omp parallel for private(j)
             for(i=0; i<_n; i++){
                 for(j=0; j<=i; j++){
-                    (_A[0])(i,j)+=(grm_chrs[c2])[kp[i]*_n+kp[j]]*m_chrs_f[c2];
+                    (_A[0])(i,j)+=grm_chrs[c2](kp[i],kp[j])*m_chrs_f[c2];
                 }
             }
             d_buf+=m_chrs_f[c2];
@@ -633,11 +629,6 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
         _include=include_o;
         _snp_name_map=snp_name_map_o;
         LOGGER<<"-----------------------------------"<<std::endl;
-    }
-    
-    for(c1=0; c1<chrs.size(); c1++){
-        delete[] (grm_chrs[c1]);
-        delete[] (geno_chrs[c1]);
     }
     
     std::string filename=_out+".loco.mlma";

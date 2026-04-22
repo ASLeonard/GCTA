@@ -13,16 +13,11 @@
 #ifndef _GCTA_H
 #define _GCTA_H
 
-#ifndef EIGEN_YES_I_KNOW_SPARSE_MODULE_IS_NOT_STABLE_YET
-#define EIGEN_YES_I_KNOW_SPARSE_MODULE_IS_NOT_STABLE_YET
-#endif
-
 #include "cpu.h"
 #include <cstdio>
 #include "CommFunc.h"
 #include "StrFunc.h"
 #include "StatFunc.h"
-#include "eigen_func.h"
 #include <fstream>
 #include <iomanip>
 #include <bitset>
@@ -190,10 +185,8 @@ public:
     void paa(std::string aa_file);
     void ibc(bool ibc_all);
 
-    // mkl
-    void make_grm_mkl(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool output_bin, int grm_mtd, bool mlmassoc, bool diag_f3_flag = false);
-    void calcu_mean_rsq_mkl(int wind_size, double rsq_cutoff);
-    void LD_pruning_mkl(double rsq_cutoff, int wind_size);
+    // LD pruning
+    void LD_pruning(double rsq_cutoff, int wind_size);
     //void make_grm_wt_mkl(string i_ld_file, int wind_m, double wt_ld_cut, bool grm_xchr_flag, bool inbred, bool output_bin, int grm_mtd=0, int wt_mtd=0, bool mlmassoc=false, bool impData_flag=false, int ttl_snp_num=-1);
 
     void make_uni_id(std::vector<std::string> &uni_id, std::map<std::string, int> &uni_id_map);
@@ -330,12 +323,9 @@ private:
     void init_varcomp(std::vector<double> &reml_priors_var, std::vector<double> &reml_priors, eigenVector &varcmp);
     bool calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, int &iter, bool factorize_only = false);
     bool inverse_H(eigenMatrix &H);
-    bool comput_inverse_logdet_LDLT(eigenMatrix &Vi, double &logdet);
     void bend_V(eigenMatrix &Vi);
     void bend_A();
     bool bending_eigenval(eigenVector &eval);
-    bool comput_inverse_logdet_PLU(eigenMatrix &Vi, double &logdet);
-    bool comput_inverse_logdet_LU(eigenMatrix &Vi, double &logdet);
     double calcu_P(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatrix &P);
     double calcu_P_nomatrix(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i);
     double calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatrix *P);
@@ -416,18 +406,11 @@ private:
     char flip_allele(char a);
     void read_one_IRG(std::ofstream &oped, int ind, std::string IRG_fname, double GC_cutoff);
 
-    // mkl 
-    void make_XMat_mkl(float* X, bool grm_d_flag);
-    void std_XMat_mkl(float* X, std::vector<double> &sd_SNP, bool grm_xchr_flag, bool miss_with_mu = false, bool divid_by_std = true);
-    void std_XMat_d_mkl(float *X, std::vector<double> &sd_SNP, bool miss_with_mu = false, bool divid_by_std = true);
-    void output_grm_mkl(float* A, bool output_grm_bin);
-    bool comput_inverse_logdet_LDLT_mkl(eigenMatrix &Vi, double &logdet);
-    bool comput_inverse_logdet_LU_mkl(eigenMatrix &Vi, double &logdet);
-    bool comput_inverse_logdet_LU_mkl_array(int n, float *Vi, double &logdet);
-    void LD_pruning_blk_mkl(float *X, std::vector<int> &brk_pnt, double rsq_cutoff, std::vector<int> &rm_snp_ID1);
-    void calcu_ssx_sqrt_i_mkl(float *X_std, std::vector<double> &ssx);
-    void calcu_ld_blk_mkl(float *X, std::vector<double> &ssx, std::vector<int> &brk_pnt, std::vector<int> &brk_pnt3, eigenVector &mean_rsq, eigenVector &snp_num, eigenVector &max_rsq, bool second, double rsq_cutoff);
-    void calcu_ld_blk_split_mkl(int size, int size_limit, float *X_sub, std::vector<double> &ssx_sub, double rsq_cutoff, std::vector<double> &rsq_size, std::vector<double> &mean_rsq_sub, std::vector<double> &max_rsq_sub, int s1, int s2, bool second);
+
+    bool comput_inverse_logdet_LDLT(eigenMatrix &Vi, double &logdet);
+    bool comput_inverse_logdet_LU(eigenMatrix &Vi, double &logdet);
+    bool comput_inverse_logdet_LU_array(int n, float *Vi, double &logdet);
+    void LD_pruning_blk(const Eigen::MatrixXf &X, std::vector<int> &brk_pnt, double rsq_cutoff, std::vector<int> &rm_snp_ID1);
     
 
     // mlma
@@ -583,8 +566,6 @@ private:
     // grm 
     Eigen::MatrixXf _grm_N;
     eigenMatrix _grm;
-    float * _grm_mkl;
-    float * _geno_mkl;
     bool _grm_bin_flag;
 
     // reml
