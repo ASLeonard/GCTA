@@ -2,33 +2,32 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.28)
 
 project(GCTA2 LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_C_STANDARD 23)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if (CMAKE_COMPILER_IS_GNUCC)
-    MESSAGE("Compiling by GCC ${CMAKE_CXX_COMPILER_VERSION}")
-    if (NOT (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 6.0))
-        MESSAGE(FATAL_ERROR "GCTA can't build without GCC version >= 6.1")
+if(CMAKE_COMPILER_IS_GNUCC)
+    message("Compiling by GCC ${CMAKE_CXX_COMPILER_VERSION}")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13.0)
+        message(FATAL_ERROR "GCTA requires GCC >= 13 for reliable C++23 support (found ${CMAKE_CXX_COMPILER_VERSION})")
     endif()
-elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
-    MESSAGE("Compiling by Clang ${CMAKE_CXX_COMPILER_VERSION}")
-    if (NOT (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 8.0))
-        MESSAGE(FATAL_ERROR "GCTA can't build without Clang version >= 8.0")
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message("Compiling by Clang ${CMAKE_CXX_COMPILER_VERSION}")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 17.0)
+        message(FATAL_ERROR "GCTA requires Clang >= 17 for reliable C++23 support (found ${CMAKE_CXX_COMPILER_VERSION})")
     endif()
-
-    # If using Homebrew LLVM on macOS, ensure we use its libc++
     if(APPLE AND CMAKE_CXX_COMPILER MATCHES "/opt/homebrew/opt/llvm")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
-        link_directories(/opt/homebrew/opt/llvm/lib/c++)
-        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -L/opt/homebrew/opt/llvm/lib/c++")
-        list(APPEND CMAKE_BUILD_RPATH "/opt/homebrew/opt/llvm/lib/c++")
-        message(STATUS "Using Homebrew LLVM libc++ from /opt/homebrew/opt/llvm/lib/c++")
+        set(_llvm_prefix "/opt/homebrew/opt/llvm")
+        string(APPEND CMAKE_CXX_FLAGS " -stdlib=libc++")
+        string(APPEND CMAKE_EXE_LINKER_FLAGS " -L${_llvm_prefix}/lib/c++")
+        link_directories("${_llvm_prefix}/lib/c++")
+        list(APPEND CMAKE_BUILD_RPATH "${_llvm_prefix}/lib/c++")
+        message(STATUS "Using Homebrew LLVM libc++ from ${_llvm_prefix}/lib/c++")
     endif()
 else()
-    MESSAGE(FATAL_ERROR "GCTA can only compile with GCC or Clang")
+    message(FATAL_ERROR "GCTA can only compile with GCC or Clang")
 endif()
 
 if(UNIX AND NOT APPLE)
@@ -37,21 +36,13 @@ endif()
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE RELEASE)
-    message("Setting to release build")
+    message(STATUS "Defaulting to Release build")
 endif()
 
-# Set optimization flags for Release builds
+# Native arch optimisations: Apple Silicon uses -mcpu, x86_64 uses -march
 if(CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
-    if(APPLE)
-        # Apple Silicon optimizations
-        set(CMAKE_CXX_FLAGS_RELEASE "-O3 -mcpu=native -pipe ${CMAKE_CXX_FLAGS_RELEASE}")
-        set(CMAKE_C_FLAGS_RELEASE "-O3 -mcpu=native -pipe ${CMAKE_C_FLAGS_RELEASE}")
-    else()
-        # x86_64 optimizations
-        set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -pipe ${CMAKE_CXX_FLAGS_RELEASE}")
-        set(CMAKE_C_FLAGS_RELEASE "-O3 -march=native -pipe ${CMAKE_C_FLAGS_RELEASE}")
-    endif()
-    message(STATUS "Release optimization flags: ${CMAKE_CXX_FLAGS_RELEASE}")
+    set(_arch_flag $<IF:$<BOOL:${APPLE}>,-mcpu=native,-march=native>)
+    add_compile_options(-O3 ${_arch_flag} -pipe)
 endif()
 
 set(GCTA_BLAS_BACKEND "Auto" CACHE STRING "BLAS/LAPACK backend: Auto, MKL, OpenBLAS, or Accelerate")
@@ -394,17 +385,20 @@ foreach(target IN LISTS GCTA_TARGETS)
     target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
 endforeach()
 
-# Thin LTO for GCC on Linux (Clang handles LTO via INTERPROCEDURAL_OPTIMIZATION)
-if(CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND LINUX)
-    target_compile_options(gcta64 PRIVATE -flto=thin)
-    target_link_options(gcta64 PRIVATE -flto=thin)
+# Explicit LTO flags per compiler (supplements INTERPROCEDURAL_OPTIMIZATION)
+if(CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # Thin LTO: most of the benefit of full LTO at a fraction of link time
+        target_compile_options(gcta64 PRIVATE -flto=thin)
+        target_link_options(gcta64 PRIVATE -flto=thin)
+    elseif(CMAKE_COMPILER_IS_GNUCC)
+        # -flto=auto uses the same job count as make, no need to query core count
+        target_compile_options(gcta64 PRIVATE -flto=auto)
+        target_link_options(gcta64 PRIVATE -flto=auto)
+    endif()
 endif()
 
 add_subdirectory(third_party)
-
-target_include_directories(gcta64 PRIVATE
-    ${COMMON_INCLUDES}
-    ${GCTA_BLAS_INCLUDE_DIRS})
 
 target_include_directories(Pgenlib PRIVATE ${GCTA_ZLIB_INCLUDE_DIRS})
 
@@ -440,21 +434,18 @@ foreach(target IN LISTS GCTA_TARGETS)
     endif()
 endforeach()
 
-# Testing has some problems currently
-#enable_testing()
-#ADD_SUBDIRECTORY(test)
+# TODO: testing disabled pending fixes
+# enable_testing()
+# add_subdirectory(test)
 
 
 # List all targets (verbose, only if requested)
 if(CMAKE_VERBOSE_MAKEFILE OR GCTA_LIST_TARGETS)
-    get_property(imported_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY IMPORTED_TARGETS)
-    foreach(target IN LISTS imported_targets)
-        message(STATUS "imported target: ${target}")
-    endforeach()
-
-    get_property(local_targets DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY BUILDSYSTEM_TARGETS)
-    foreach(t IN LISTS local_targets)
-        message(STATUS "built target: ${t}")
+    foreach(prop IN ITEMS IMPORTED_TARGETS BUILDSYSTEM_TARGETS)
+        get_property(_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY ${prop})
+        foreach(t IN LISTS _targets)
+            message(STATUS "${prop}: ${t}")
+        endforeach()
     endforeach()
 endif()
 
@@ -477,9 +468,11 @@ endif()
 if(LINUX)
     install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.desktop
         DESTINATION share/applications)
-    install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.png
+    install(FILES
+        ${CMAKE_SOURCE_DIR}/resources/gcta64.png
         DESTINATION share/icons/hicolor/256x256/apps)
-    install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.svg
+    install(FILES
+        ${CMAKE_SOURCE_DIR}/resources/gcta64.svg
         DESTINATION share/icons/hicolor/scalable/apps)
 elseif(WIN32)
     install(TARGETS gcta64 mainV1 DESTINATION bin)
