@@ -354,20 +354,20 @@ void gcta::fit_reml(std::string grm_file, std::string phen_file, std::string qco
         else kp = _keep;
         (_A[0]) = eigenMatrix::Zero(_n, _n);
 
-        #pragma omp parallel for
-        for (int i = 0; i < _n; i++) {
-            for (int j = 0; j <= i; j++) (_A[0])(j, i) = (_A[0])(i, j) = _grm(kp[i], kp[j]);
+        {
+            eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
+            Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+            (_A[0]) = grm_sym(kp_idx, kp_idx);
         }
         if (_reml_diag_one) {
             double diag_mean = (_A[0]).diagonal().mean();
             LOGGER << "Mean of diagonal elements of the GRM = " << diag_mean << std::endl;
             //pragma omp parallel for private(j)
-            #pragma omp parallel for
-            for (int i = 0; i < _n; i++) {
-                for (int j = 0; j <= i; j++) {
-                    (_A[0])(i, j) /= (_A[0])(i, i);
-                    (_A[0])(j, i) = (_A[0])(i, j);
-                }
+            {
+                eigenVector diag_inv = (_A[0]).diagonal().cwiseInverse();
+                (_A[0]) = ((_A[0]).array().colwise() / diag_inv.array()).matrix();
+                (_A[0]).triangularView<Eigen::StrictlyUpper>() =
+                    (_A[0]).triangularView<Eigen::StrictlyLower>().transpose();
             }
         }
 
@@ -389,24 +389,20 @@ void gcta::fit_reml(std::string grm_file, std::string phen_file, std::string qco
             StrFunc::match(uni_id, grm_id, kp);
             (_A[pos]) = eigenMatrix::Zero(_n, _n);
 
-            #pragma omp parallel for
-            for (int j = 0; j < _n; j++) {
-                for (int k = 0; k <= j; k++) {
-                    if (kp[j] >= kp[k]) (_A[pos])(k, j) = (_A[pos])(j, k) = _grm(kp[j], kp[k]);
-                    else (_A[pos])(k, j) = (_A[pos])(j, k) = _grm(kp[k], kp[j]);
-                }
+            {
+                eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
+                Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+                (_A[pos]) = grm_sym(kp_idx, kp_idx);
             }
 
             if (_reml_diag_one) {
                 double diag_mean = (_A[pos]).diagonal().mean();
                 LOGGER << "Mean of diagonal elements of the GRM = " << diag_mean << std::endl;
-                #pragma omp parallel for
-                for (int j = 0; j < _n; j++) {
-                    //(_A[pos])(j,j)=diag_mean;
-                    for (int k = 0; k <= j; k++) {
-                        (_A[pos])(j, k) /= (_A[pos])(j, j);
-                        (_A[pos])(k, j) = (_A[pos])(j, k);
-                    }
+                {
+                    eigenVector diag_inv = (_A[pos]).diagonal().cwiseInverse();
+                    (_A[pos]) = ((_A[pos]).array().colwise() / diag_inv.array()).matrix();
+                    (_A[pos]).triangularView<Eigen::StrictlyUpper>() =
+                        (_A[pos]).triangularView<Eigen::StrictlyLower>().transpose();
                 }
             }
 
@@ -1388,13 +1384,13 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
 
 
 /*
-        if (!comput_inverse_logdet_LDLT_mkl(Vi, logdet)) {
+        if (!comput_inverse_logdet_LDLT(Vi, logdet)) {
             LOGGER<<"Warning: the variance-covaraince matrix V is non-positive definite." << std::endl;
             if(_reml_diagV_adj == 1){
                 LOGGER<<"Warning: the variance-covaraince matrix is invertible. A small positive value is added to the diagonals. The results might not be reliable!"<<std::endl;
                 double d_buf = Vi.diagonal().mean() * _reml_diag_mul;
                 for(j = 0; j < _n ; j++) Vi(j,j) += d_buf;
-                if(!comput_inverse_logdet_LDLT_mkl(Vi, logdet)){
+                if(!comput_inverse_logdet_LDLT(Vi, logdet)){
                     LOGGER << "Still can't be inverted. Try --reml-alg-inv 2 " << std::endl;
                     return false;  
                 }
@@ -1413,7 +1409,7 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
 
 /*
         if (_V_inv_mtd == 0) {
-            if (!comput_inverse_logdet_LDLT_mkl(Vi, logdet)) {
+            if (!comput_inverse_logdet_LDLT(Vi, logdet)) {
                 if(_reml_force_inv) {
                     LOGGER<<"Warning: the variance-covaraince matrix V is non-positive definite." << std::endl;
                     _V_inv_mtd = 1;
@@ -1423,7 +1419,7 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
                         LOGGER<<"Warning: the variance-covaraince matrix is invertible. A small positive value is added to the diagonals. The results might not be reliable!"<<std::endl;
                         double d_buf = Vi.diagonal().mean() * 0.01;
                         for(j = 0; j < _n ; j++) Vi(j,j) += d_buf;
-                        if(!comput_inverse_logdet_LDLT_mkl(Vi, logdet)) return false;  
+                        if(!comput_inverse_logdet_LDLT(Vi, logdet)) return false;  
                     } 
                     else LOGGER.e(0, "the variance-covariance matrix V is not positive definite.");
                 }
@@ -1434,12 +1430,12 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
        /*if (_V_inv_mtd == 2) {
             if(!_reml_force_converge){
                 LOGGER << "Switching from Cholesky to LU decomposition approach. The results might not be reliable!" << std::endl;
-                if (!comput_inverse_logdet_LU_mkl(Vi, logdet)){
+                if (!comput_inverse_logdet_LU(Vi, logdet)){
                     if(_reml_no_converge){
                         LOGGER<<"Warning: the variance-covaraince matrix is invertible. A small positive value is added to the diagonals. The results might not be reliable!"<<std::endl;
                         double d_buf = Vi.diagonal().mean() * 0.01;
                         for(j = 0; j < _n ; j++) Vi(j,j) += d_buf;
-                        if(!comput_inverse_logdet_LDLT_mkl(Vi, logdet)) return false;  
+                        if(!comput_inverse_logdet_LDLT(Vi, logdet)) return false;  
                     } 
                     else LOGGER.e(0, "the variance-covariance matrix V is not invertible using LU decomposition.");
                 }
@@ -1448,7 +1444,7 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
                 LOGGER<<"Warning: the variance-covaraince matrix is invertible. A small positive value is added to the diagonals. The results might not be reliable!"<<std::endl;
                 double d_buf = Vi.diagonal().mean() * 0.01;
                 for(j = 0; j < _n ; j++) Vi(j,j) += d_buf;
-                comput_inverse_logdet_LU_mkl(Vi, logdet);
+                comput_inverse_logdet_LU(Vi, logdet);
             }
         }*/
     }
@@ -1506,47 +1502,6 @@ bool gcta::bending_eigenval(eigenVector &eval) {
     return true;
 }
 
-bool gcta::comput_inverse_logdet_LDLT(eigenMatrix &Vi, double &logdet) {
-    int i = 0, n = Vi.cols();
-    Eigen::LDLT<eigenMatrix> ldlt(Vi);
-    eigenVector d = ldlt.vectorD();
-
-    if (d.minCoeff() < 0) return false;
-    else {
-        logdet = 0.0;
-        for (i = 0; i < n; i++) logdet += log(d[i]);
-        Vi.setIdentity();
-        ldlt.solveInPlace(Vi);
-    }
-    return true;
-}
-
-bool gcta::comput_inverse_logdet_PLU(eigenMatrix &Vi, double &logdet)
-{
-    int n = Vi.cols();
-
-    Eigen::PartialPivLU<eigenMatrix> lu(Vi);
-    if (lu.determinant()<1e-6) return false;
-    eigenVector u = lu.matrixLU().diagonal();
-    logdet = 0.0;
-    for (int i = 0; i < n; i++) logdet += log(fabs(u[i]));
-    Vi = lu.inverse();
-    return true;
-}
-
-bool gcta::comput_inverse_logdet_LU(eigenMatrix &Vi, double &logdet)
-{
-    int n = Vi.cols();
-
-    Eigen::FullPivLU<eigenMatrix> lu(Vi);
-    if (!lu.isInvertible()) return false;
-    eigenVector u = lu.matrixLU().diagonal();
-    logdet = 0.0;
-    for (int i = 0; i < n; i++) logdet += log(fabs(u[i]));
-    Vi = lu.inverse();
-    return true;
-}
-
 bool gcta::inverse_H(eigenMatrix &H)
 {    
     double d_buf = 0.0;
@@ -1556,12 +1511,12 @@ bool gcta::inverse_H(eigenMatrix &H)
     /*{
         if(_reml_force_inv) {
             LOGGER<<"Warning: the information matrix is non-positive definite. Switching from Cholesky to LU decomposition approach. The results might not be reliable!"<<std::endl;
-            if (!comput_inverse_logdet_LU_mkl(H, d_buf)){
+            if (!comput_inverse_logdet_LU(H, d_buf)){
                 LOGGER<<"Warning: the information matrix is invertible. A small positive value is added to the diagonals. The results might not be reliable!"<<std::endl;
                 int i = 0;
                 d_buf = H.diagonal().mean() * 0.001;
                 for(i = 0; i < H.rows(); i++) H(i,i) += d_buf;
-                if (!comput_inverse_logdet_LU_mkl(H, d_buf)) return false;
+                if (!comput_inverse_logdet_LU(H, d_buf)) return false;
             }
         }
         else return false;
