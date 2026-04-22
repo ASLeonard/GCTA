@@ -1,4 +1,4 @@
-CMAKE_MINIMUM_REQUIRED(VERSION 3.16)
+CMAKE_MINIMUM_REQUIRED(VERSION 3.28)
 
 project(GCTA2 LANGUAGES C CXX)
 
@@ -84,19 +84,13 @@ endif()
 # Fetch 3rd parties
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
-set(CMAKE_DISABLE_FIND_PACKAGE_CLANG_FORMAT ON CACHE BOOL "" FORCE)
-
-set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
-set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(ZSTD_BUILD_SHARED ON CACHE BOOL "" FORCE)
-set(BOOST_ENABLE_CMAKE ON CACHE BOOL "" FORCE)
-set(BOOST_INCLUDE_LIBRARIES "algorithm;math;crc;iostreams" CACHE STRING "" FORCE)
 
 FetchContent_Declare(
     zlib
     URL https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    EXCLUDE_FROM_ALL
+    FIND_PACKAGE_ARGS NAMES ZLIB)
 FetchContent_Declare(
     eigen
     URL https://github.com/eigen-mirror/eigen/archive/refs/tags/5.0.1.tar.gz
@@ -109,53 +103,93 @@ FetchContent_Declare(
     zstd
     URL https://github.com/facebook/zstd/archive/refs/tags/v1.5.7.tar.gz
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    SOURCE_SUBDIR "build/cmake")
+    SOURCE_SUBDIR "build/cmake"
+    EXCLUDE_FROM_ALL
+    FIND_PACKAGE_ARGS NAMES zstd)
 FetchContent_Declare(
     Boost
     URL https://github.com/boostorg/boost/releases/download/boost-1.90.0/boost-1.90.0-cmake.tar.xz
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    EXCLUDE_FROM_ALL)
 FetchContent_Declare(
     sqlite
     URL https://www.sqlite.org/2026/sqlite-amalgamation-3510200.zip
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    EXCLUDE_FROM_ALL)
 
-set(SPECTRA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-set(CMAKE_SKIP_INSTALL_RULES ON)
+# zlib must be fetched before Boost so Boost iostreams can find it at configure time.
+# Kept outside block() so zlib_POPULATED and zlib_SOURCE_DIR are visible in parent scope.
+set(ZLIB_BUILD_EXAMPLES OFF)
+FetchContent_MakeAvailable(zlib)
 
-# Prefer system zlib; fall back to FetchContent so Boost iostreams can find its headers
-find_package(ZLIB QUIET)
-if(NOT ZLIB_FOUND)
-    message(STATUS "System zlib not found, fetching...")
-    FetchContent_MakeAvailable(zlib)
+# After zlib is available, set hints so Boost iostreams links against it correctly.
+if(zlib_POPULATED)
     set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR}" CACHE PATH "" FORCE)
     if(UNIX)
         set(ZLIB_LIBRARY "${zlib_BINARY_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}z${CMAKE_STATIC_LIBRARY_SUFFIX}" CACHE FILEPATH "" FORCE)
     else()
         set(ZLIB_LIBRARY "${zlib_BINARY_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}zlibstatic${CMAKE_STATIC_LIBRARY_SUFFIX}" CACHE FILEPATH "" FORCE)
     endif()
-    set(ZLIB_FOUND TRUE CACHE BOOL "" FORCE)
+endif()
+
+block()
+    set(ZSTD_BUILD_PROGRAMS OFF)
+    set(ZSTD_BUILD_TESTS OFF)
+    set(ZSTD_BUILD_SHARED ON)
+    set(BOOST_ENABLE_CMAKE ON)
+    set(BOOST_INCLUDE_LIBRARIES "algorithm;math;crc;iostreams")
+    set(SPECTRA_BUILD_TESTS OFF)
+    set(BUILD_TESTING OFF)
+    # Explicitly enable zlib support in Boost iostreams and point it at our zlib.
+    # Without this Boost may silently disable the zlib filter if it doesn't find
+    # zlib on its own, producing the missing zlib_error::check link error later.
+    set(BOOST_IOSTREAMS_ENABLE_ZLIB ON)
+    if(zlib_POPULATED)
+        set(ZLIB_ROOT "${zlib_BINARY_DIR}" CACHE PATH "" FORCE)
+        set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}" CACHE PATH "" FORCE)
+    endif()
+    FetchContent_MakeAvailable(zstd Boost)
+endblock()
+
+# Eigen and Spectra have entangled install rules (Spectra exports reference
+# Eigen targets) that break with EXCLUDE_FROM_ALL. Suppress via
+# CMAKE_SKIP_INSTALL_RULES instead, which must be set in the parent scope.
+set(CMAKE_SKIP_INSTALL_RULES ON)
+FetchContent_MakeAvailable(eigen spectra)
+set(CMAKE_SKIP_INSTALL_RULES OFF)
+
+# sqlite has no options to isolate, and sqlite_SOURCE_DIR must be visible
+# in the parent scope for the add_library(sqlite3) call below.
+FetchContent_MakeAvailable(sqlite)
+
+# Ensure a consistent ZLIB::ZLIB target exists for downstream linking.
+# - System zlib: find_package (via FIND_PACKAGE_ARGS) already created ZLIB::ZLIB
+# - Fetched zlib: alias the real build target so the library is built before use
+if(zlib_POPULATED)
     set(GCTA_ZLIB_INCLUDE_DIRS "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
+    if(NOT TARGET ZLIB::ZLIB)
+        # zlib's CMakeLists creates 'zlib' (shared) and 'zlibstatic' on all platforms,
+        # and 'zlib' (static, same name) on UNIX. Alias whichever is available.
+        if(TARGET zlibstatic)
+            add_library(ZLIB::ZLIB ALIAS zlibstatic)
+        elseif(TARGET zlib)
+            add_library(ZLIB::ZLIB ALIAS zlib)
+        endif()
+    endif()
 else()
-    message(STATUS "Using system zlib: ${ZLIB_INCLUDE_DIRS}")
+    # System zlib — find_package already created ZLIB::ZLIB
     set(GCTA_ZLIB_INCLUDE_DIRS "${ZLIB_INCLUDE_DIRS}")
 endif()
 
-# Prefer system zstd; fall back to FetchContent
-find_package(zstd QUIET)
-if(NOT zstd_FOUND)
-    message(STATUS "System zstd not found, fetching...")
-    FetchContent_MakeAvailable(eigen spectra zstd Boost sqlite)
+# Resolve zstd link target — imported name differs between system and fetched.
+if(zstd_POPULATED AND NOT zstd_FOUND)
     set(GCTA_ZSTD_INCLUDE_DIRS "${zstd_SOURCE_DIR}/lib")
     set(GCTA_ZSTD_LIBS libzstd)
 else()
-    message(STATUS "Using system zstd")
-    FetchContent_MakeAvailable(eigen spectra Boost sqlite)
     set(GCTA_ZSTD_INCLUDE_DIRS "")
     set(GCTA_ZSTD_LIBS zstd::libzstd_shared)
 endif()
 
-set(CMAKE_SKIP_INSTALL_RULES OFF)
 add_library(sqlite3 STATIC ${sqlite_SOURCE_DIR}/sqlite3.c)
 target_include_directories(sqlite3 PUBLIC ${sqlite_SOURCE_DIR})
 
@@ -294,7 +328,7 @@ message(STATUS "BLAS/LAPACK provider: ${GCTA_BLAS_PROVIDER}")
 set(COMMON_INCLUDES ${CMAKE_SOURCE_DIR}/include)
 set(MAIN_SOURCE "${CMAKE_SOURCE_DIR}/src/main.cpp")
 
-file(GLOB SRCS "${CMAKE_SOURCE_DIR}/src/*.cpp")
+file(GLOB SRCS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/*.cpp")
 list(REMOVE_ITEM SRCS "${MAIN_SOURCE}")
 
 # acat.c is pure C — keep it in its own small library so the C++ PCH
@@ -347,26 +381,16 @@ foreach(target IN LISTS GCTA_TARGETS)
     set_target_properties(${target} PROPERTIES
         UNITY_BUILD ${GCTA_UNITY_BUILD}
         INTERPROCEDURAL_OPTIMIZATION ${GCTA_IPO_ENABLED})
-endforeach()
-
-# Apply common includes and definitions to all targets
-foreach(target IN LISTS GCTA_TARGETS)
     target_include_directories(${target} PRIVATE
         ${GCTA_ZSTD_INCLUDE_DIRS}
         ${GCTA_ZLIB_INCLUDE_DIRS}
-        ${GCTA_BLAS_INCLUDE_DIRS})
-    target_compile_definitions(${target} PRIVATE ${GCTA_BLAS_DEFINES}
+        ${GCTA_BLAS_INCLUDE_DIRS}
+        $<$<NOT:$<BOOL:${WIN32}>>:${GSL_INCLUDE_DIRS}>)
+    target_compile_definitions(${target} PRIVATE
+        ${GCTA_BLAS_DEFINES}
         GCTA_BLAS_BACKEND_STR="${GCTA_BLAS_PROVIDER}")
-    if(APPLE)
-        target_compile_options(${target} PRIVATE -Wno-nullability-completeness)
-    endif()
-    if(NOT WIN32)
-        target_include_directories(${target} PRIVATE ${GSL_INCLUDE_DIRS})
-    endif()
-endforeach()
-
-# Link OpenMP to all targets
-foreach(target IN LISTS GCTA_TARGETS)
+    target_compile_options(${target} PRIVATE
+        $<$<BOOL:${APPLE}>:-Wno-nullability-completeness>)
     target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
 endforeach()
 
@@ -437,16 +461,20 @@ endif()
 # Installation
 if(LINUX)
     set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
+elseif(APPLE)
+    set(CMAKE_INSTALL_RPATH "@executable_path/../lib")
+endif()
+
+if(LINUX OR APPLE)
     set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
-
-    # Targets
     install(TARGETS gcta64 mainV1
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)
+endif()
 
-    # Resource
+if(LINUX)
     install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.desktop
         DESTINATION share/applications)
     install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.png
@@ -466,17 +494,6 @@ elseif(WIN32)
         ${MKL_ROOT}/bin/mkl_core.2.dll
         ${MKL_ROOT}/../../compiler/latest/bin/libiomp5md.dll
         DESTINATION bin)
-elseif(APPLE)
-    set(CMAKE_INSTALL_RPATH "@executable_path/../lib")
-    set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
-    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
-
-    # Install target executables and libraries
-    install(TARGETS gcta64 mainV1
-        RUNTIME DESTINATION bin
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib)
-
 endif()
 
 # Build configuration summary
