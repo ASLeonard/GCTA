@@ -19,6 +19,7 @@
 #include "GRM.h"
 #include "Logger.h"
 #include "cpu.h"
+#include <Eigen/Dense>
 #include <iterator>
 #include <algorithm>
 #include <ranges>
@@ -966,13 +967,16 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
         sd.push_back(gbufitems[validIndexBuf[i]].sd);
     }
 
-    static const double alpha = 1.0, beta = 1.0;
+    static const double alpha = 1.0;
     if(part_keep_indices.first == 0){
-        cblas_dsyrk(CblasColMajor, CblasLower, CblasNoTrans, grm_n, curNumValidMarkers, alpha, stdGeno, stdGenoLD, beta, grm, grm_m);
+        Eigen::Map<Eigen::MatrixXd, 0, Eigen::OuterStride<>> A(stdGeno, grm_n, curNumValidMarkers, Eigen::OuterStride<>(stdGenoLD));
+        Eigen::Map<Eigen::MatrixXd>(grm, grm_n, grm_n).selfadjointView<Eigen::Lower>().rankUpdate(A, alpha);
     }else{
-        cblas_dgemm(CblasColMajor, CblasNoTrans, CblasTrans, grm_m, grm_s_n, curNumValidMarkers, alpha, stdGeno + part_keep_indices.first, stdGenoLD, stdGeno, stdGenoLD, beta, grm, grm_m);
+        Eigen::Map<Eigen::MatrixXd, 0, Eigen::OuterStride<>> A_top(stdGeno, grm_s_n, curNumValidMarkers, Eigen::OuterStride<>(stdGenoLD));
+        Eigen::Map<Eigen::MatrixXd, 0, Eigen::OuterStride<>> A_bot(stdGeno + part_keep_indices.first, grm_m, curNumValidMarkers, Eigen::OuterStride<>(stdGenoLD));
+        Eigen::Map<Eigen::MatrixXd>(grm, grm_m, grm_s_n).noalias() += alpha * (A_bot * A_top.transpose());
         double *grm_start = grm + (uint64_t)grm_s_n * grm_m;
-        cblas_dsyrk(CblasColMajor, CblasLower, CblasNoTrans, grm_m, curNumValidMarkers, alpha, stdGeno + part_keep_indices.first, stdGenoLD, beta, grm_start, grm_m);
+        Eigen::Map<Eigen::MatrixXd>(grm_start, grm_m, grm_m).selfadjointView<Eigen::Lower>().rankUpdate(A_bot, alpha);
     }
 
     const int markerPerN = sizeof(uintptr_t) * CHAR_BIT;

@@ -1336,14 +1336,7 @@ void FastFAM::conditionCovarReg(VectorXd &y, VectorXd &condPheno){
 }
 
 void FastFAM::conditionCovarBinReg(Eigen::Ref<VectorXd> y){
-    std::vector<double> Hy(num_indi);
-    const double a1 = 1.0;
-    const double a2 = -1.0;
-    const double b1 = 0;
-    const double b2 = 1.0;
-    const int incr = 1;
-    cblas_dgemv(CblasColMajor, CblasNoTrans, (int)num_covar, (int)numi_indi, a1, H.data(), (int)num_covar, y.data(), incr, b1, Hy.data(), incr);
-    cblas_dgemv(CblasColMajor, CblasNoTrans, (int)numi_indi, (int)num_covar, a2, covar.data(), (int)numi_indi, Hy.data(), incr, b2, y.data(), incr);
+    y -= covar * (H * y);
 }
 
 void FastFAM::conditionCovarReg(Eigen::Ref<VectorXd> y){
