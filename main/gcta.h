@@ -328,7 +328,7 @@ private:
     void reml(bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, std::vector<double> &reml_priors, std::vector<double> &reml_priors_var, double prevalence, double prevalence2, bool no_constrain, bool no_lrt, bool mlmassoc = false);
     double reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatrix &Hi, eigenVector &Py, eigenVector &varcmp, bool prior_var_flag, bool no_constrain, bool reml_bivar_fix_rg = false);
     void init_varcomp(std::vector<double> &reml_priors_var, std::vector<double> &reml_priors, eigenVector &varcmp);
-    bool calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, int &iter);
+    bool calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, int &iter, bool factorize_only = false);
     bool inverse_H(eigenMatrix &H);
     bool comput_inverse_logdet_LDLT(eigenMatrix &Vi, double &logdet);
     void bend_V(eigenMatrix &Vi);
@@ -602,6 +602,8 @@ private:
     std::vector<eigenMatrix> _A;
     eigenVector _y;
     eigenMatrix _Vi;
+    Eigen::LLT<eigenMatrix> _Vi_llt;  // Cholesky factor of V (skip-P / Hutch++ path)
+    bool _Vi_use_llt = false;          // true when _Vi_llt is valid and _Vi is empty
     eigenMatrix _Vi_X;        // cached V^{-1} X for implicit P matvecs
     eigenMatrix _Xt_Vi_X_i;   // cached (X' V^{-1} X)^{-1} for implicit P matvecs
     eigenMatrix _P;

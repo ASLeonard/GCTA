@@ -260,6 +260,7 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     
     _P.resize(0,0);
     _A.clear();
+    //TODO: better logging
     std::cout << "\nRegression coefficient(s) (e.g., general mean): " <<_b <<std::endl;
 
     std::vector<float> y(n);
@@ -687,8 +688,14 @@ void gcta::save_reml_state(std::string filename, bool no_adj_covar)
     outfile.write(reinterpret_cast<const char*>(&num_varcmp), sizeof(int));
     outfile.write(reinterpret_cast<const char*>(&num_r_indx), sizeof(int));
 
-    // _Vi (row-major) — bulk write via a float buffer
+    // _Vi (row-major) — bulk write via a float buffer.
+    // When the LLT-only path was used (_Vi_use_llt), _Vi is empty; recover V^{-1}
+    // by solving L L^T X = I (n RHS triangular solves, O(n^2) per column).
     {
+        if (_Vi_use_llt) {
+            _Vi = _Vi_llt.solve(eigenMatrix::Identity(n, n));
+            _Vi_use_llt = false;
+        }
         size_t vi_floats = static_cast<size_t>(n) * n;
         std::vector<float> vi_buf(vi_floats);
         for(int i = 0; i < n; i++)

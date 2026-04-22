@@ -1128,7 +1128,10 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
         if (_bivar_reml) calcu_Vi_bivar(_Vi, prev_varcmp, logdet, iter); // Calculate Vi, bivariate analysis //very slow
         else if (_within_family) calcu_Vi_within_family(_Vi, prev_varcmp, logdet, iter); // within-family REML
         else {
-            if (!calcu_Vi(_Vi, prev_varcmp, logdet, iter)){ // Calculate Vi
+            // When using Hutch++ with AI-REML or EM-REML, skip the n×n P materialisation.
+            // Fisher scoring (mtd 1) always needs the full P for calcu_Hi every iteration.
+            const bool skip_P_this_iter = _reml_trace_approx && _reml_mtd != 1;
+            if (!calcu_Vi(_Vi, prev_varcmp, logdet, iter, skip_P_this_iter)){ // Calculate Vi
                 LOGGER<<"Warning: V matrix is not positive-definite.\n";
                 varcmp = prev_prev_varcmp;
                 if(!calcu_Vi(_Vi, varcmp, logdet, iter)) LOGGER.e(0, "V matrix is not positive-definite.");
@@ -1303,8 +1306,9 @@ void gcta::calcu_sum_hsq(double Vp, double VarVp, double &sum_hsq, double &var_s
     var_sum_hsq = (V1/Vp)*(V1/Vp)*(VarV1/(V1*V1)+VarVp/(Vp*Vp)-(2*Cov12)/(V1*Vp));
 }
 
-bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, int &iter)
+bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, int &iter, bool factorize_only)
 {
+    _Vi_use_llt = false;  // reset on every entry
     Vi.resize(_n, _n);
     if (_r_indx.size() == 1) {
         Vi.diagonal() = eigenVector::Constant(_n, 1.0 / prev_varcmp[0]);
@@ -1325,6 +1329,23 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
             #pragma omp parallel for schedule(static)
             for (int j = 0; j < _n; j++)
                 Vi.col(j).tail(_n - j) += s * Ai.col(j).tail(_n - j);
+        }
+
+        // LLT-only path: factorize V but skip dpotri — used when the explicit V^{-1}
+        // matrix is not needed (Hutch++ / skip_P mode).  V is assembled in the lower
+        // triangle; Eigen::LLT<Lower> reads only that half.
+        if (factorize_only && !_reml_diagV_adj) {
+            Eigen::LLT<eigenMatrix> llt(Vi.selfadjointView<Eigen::Lower>());
+            if (llt.info() == Eigen::Success) {
+                // log|det(V)| = 2 * sum(log(diag(L)))
+                logdet = 2.0 * llt.matrixLLT().diagonal().array().log().sum();
+                _Vi_llt = std::move(llt);
+                _Vi_use_llt = true;
+                Vi.resize(0, 0);  // release n×n memory; V^{-1} not needed
+                return true;
+            }
+            // V not positive-definite: fall through to full inversion below.
+            // Eigen::LLT does not modify Vi, so it still holds V.
         }
 
         constexpr bool use_lu = false;
@@ -1560,9 +1581,13 @@ double gcta::calcu_P_nomatrix(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &X
 
 double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatrix *P)
 {
-    // Vi is symmetric; selfadjointView<Lower> routes to BLAS dsymm which reads only the
-    // lower triangle of the n×n matrix — halves memory bandwidth vs a general dgemm.
-    Vi_X.noalias() = Vi.selfadjointView<Eigen::Lower>() * _X;
+    // Vi_X = V^{-1} X: use Cholesky triangular solve when available (skip-P path),
+    // otherwise fall back to a symmetric matrix-vector product with the explicit V^{-1}.
+    if (_Vi_use_llt) {
+        Vi_X = _Vi_llt.solve(_X);   // k forward+back-substitutions, k = n_covariates
+    } else {
+        Vi_X.noalias() = Vi.selfadjointView<Eigen::Lower>() * _X;
+    }
     Xt_Vi_X_i.noalias() = _X.transpose() * Vi_X;
 
     double logdet_Xt_Vi_X = 0.0;
@@ -1742,7 +1767,7 @@ void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, ei
     // threads inside dsymv are not competing with an outer OMP parallel region.
     eigenVector R(_r_indx.size());
     eigenVector tmp(_n);
-    for (int i = 0; i < (int)_r_indx.size(); i++) {
+    for (auto i = 0; i < (int)_r_indx.size(); i++) {
         if (_bivar_reml || _within_family)
             R(i) = Py.dot(_Asp[_r_indx[i]] * Py);
         else {
@@ -1764,8 +1789,11 @@ void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, ei
 // Uses cached _Vi, _Vi_X, _Xt_Vi_X_i from calcu_P.
 eigenVector gcta::applyP_vec(const eigenVector &v) const
 {
-    // w = V^{-1} v   (dsymv on lower triangle)
-    eigenVector w = _Vi.selfadjointView<Eigen::Lower>() * v;
+    // w = V^{-1} v: use Cholesky triangular solve when available (skip-P path),
+    // otherwise use the precomputed explicit V^{-1} (dsymv on lower triangle).
+    eigenVector w = _Vi_use_llt
+        ? _Vi_llt.solve(v)
+        : eigenVector(_Vi.selfadjointView<Eigen::Lower>() * v);
     // a = X' w = X' V^{-1} v   (dgemv, c-dimensional)
     eigenVector a = _Vi_X.transpose() * v;
     // b = (X' V^{-1} X)^{-1} a   (tiny c×c symmetric solve)
