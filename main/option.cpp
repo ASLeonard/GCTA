@@ -82,7 +82,7 @@ void option(int option_num, char* option_str[])
     // GRM
     bool ibc = false, ibc_all = false, grm_flag = false, grm_bin_flag = true, m_grm_flag = false, m_grm_bin_flag = true, make_grm_flag = false, make_grm_inbred_flag = false, dominance_flag = false, make_grm_xchar_flag = false, grm_out_bin_flag = true, make_grm_f3_flag = false;
     bool align_grm_flag = false;
-    bool pca_flag = false, pcl_flag = false, pca_approx_flag = true;
+    bool pca_flag = false, pcl_flag = false, pca_approx_flag = false;
     bool project_flag = false;
     double grm_adj_fac = -2.0, grm_cutoff = -2.0, rm_high_ld_cutoff = -1.0, bK_threshold = -10.0;
     int dosage_compen = -2, out_pc_num = 20, make_grm_mtd = 0;
