@@ -354,20 +354,20 @@ void gcta::fit_reml(std::string grm_file, std::string phen_file, std::string qco
         else kp = _keep;
         (_A[0]) = eigenMatrix::Zero(_n, _n);
 
-        #pragma omp parallel for
-        for (int i = 0; i < _n; i++) {
-            for (int j = 0; j <= i; j++) (_A[0])(j, i) = (_A[0])(i, j) = _grm(kp[i], kp[j]);
+        {
+            eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
+            Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+            (_A[0]) = grm_sym(kp_idx, kp_idx);
         }
         if (_reml_diag_one) {
             double diag_mean = (_A[0]).diagonal().mean();
             LOGGER << "Mean of diagonal elements of the GRM = " << diag_mean << std::endl;
             //pragma omp parallel for private(j)
-            #pragma omp parallel for
-            for (int i = 0; i < _n; i++) {
-                for (int j = 0; j <= i; j++) {
-                    (_A[0])(i, j) /= (_A[0])(i, i);
-                    (_A[0])(j, i) = (_A[0])(i, j);
-                }
+            {
+                eigenVector diag_inv = (_A[0]).diagonal().cwiseInverse();
+                (_A[0]) = ((_A[0]).array().colwise() / diag_inv.array()).matrix();
+                (_A[0]).triangularView<Eigen::StrictlyUpper>() =
+                    (_A[0]).triangularView<Eigen::StrictlyLower>().transpose();
             }
         }
 
@@ -389,24 +389,20 @@ void gcta::fit_reml(std::string grm_file, std::string phen_file, std::string qco
             StrFunc::match(uni_id, grm_id, kp);
             (_A[pos]) = eigenMatrix::Zero(_n, _n);
 
-            #pragma omp parallel for
-            for (int j = 0; j < _n; j++) {
-                for (int k = 0; k <= j; k++) {
-                    if (kp[j] >= kp[k]) (_A[pos])(k, j) = (_A[pos])(j, k) = _grm(kp[j], kp[k]);
-                    else (_A[pos])(k, j) = (_A[pos])(j, k) = _grm(kp[k], kp[j]);
-                }
+            {
+                eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
+                Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+                (_A[pos]) = grm_sym(kp_idx, kp_idx);
             }
 
             if (_reml_diag_one) {
                 double diag_mean = (_A[pos]).diagonal().mean();
                 LOGGER << "Mean of diagonal elements of the GRM = " << diag_mean << std::endl;
-                #pragma omp parallel for
-                for (int j = 0; j < _n; j++) {
-                    //(_A[pos])(j,j)=diag_mean;
-                    for (int k = 0; k <= j; k++) {
-                        (_A[pos])(j, k) /= (_A[pos])(j, j);
-                        (_A[pos])(k, j) = (_A[pos])(j, k);
-                    }
+                {
+                    eigenVector diag_inv = (_A[pos]).diagonal().cwiseInverse();
+                    (_A[pos]) = ((_A[pos]).array().colwise() / diag_inv.array()).matrix();
+                    (_A[pos]).triangularView<Eigen::StrictlyUpper>() =
+                        (_A[pos]).triangularView<Eigen::StrictlyLower>().transpose();
                 }
             }
 

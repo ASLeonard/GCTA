@@ -449,12 +449,12 @@ void gcta::mbat_gene(std::string mbat_sAssoc_file, std::string mbat_gAnno_file, 
 void gcta::mbat(std::string mbat_sAssoc_file, std::string snpset_file, double mbat_svd_gamma, double sbat_ld_cutoff, bool mbat_write_snpset, bool GC, double GC_val,bool mbat_print_all_p)
 {
     /////////////////////////////////////////
-    // Step 1. read snp std::set file and ma file.
+    // Step 1. read snp set file and ma file.
     /////////////////////////////////////////
     int i = 0, j = 0;
     int snp_count;
 
-    // read SNP std::set file
+    // read SNP set file
     std::vector<std::string> set_name;
     std::vector< std::vector<std::string> > snpset;
     sbat_read_snpset(snpset_file, set_name, snpset);

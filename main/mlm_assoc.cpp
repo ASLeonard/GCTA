@@ -115,31 +115,29 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
 
             StrFunc::match(uni_id, grm_id, kp);
             (_A[0]).resize(_n, _n);
-            Eigen::MatrixXf A_N_buf(_n, _n);
-            #pragma omp parallel for private(k)
-            for (j = 0; j < _n; j++) {
-                for (k = 0; k <= j; k++) {
-                    if (kp[j] >= kp[k]){
-                        (_A[0])(k, j) = (_A[0])(j, k) = _grm(kp[j], kp[k]);
-                        A_N_buf(k, j) = A_N_buf(j, k) = _grm_N(kp[j], kp[k]);
-                    }
-                    else{
-                        (_A[0])(k, j) = (_A[0])(j, k) = _grm(kp[k], kp[j]);
-                        A_N_buf(k, j) = A_N_buf(j, k) = _grm_N(kp[k], kp[j]);
-                    }
-                }
+            eigenMatrix A_N_buf(_n, _n);
+            {
+                eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
+                Eigen::MatrixXf grm_N_sym_f(_grm_N.selfadjointView<Eigen::Lower>());
+                eigenMatrix grm_N_sym = grm_N_sym_f.cast<double>();
+                Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+                (_A[0]) = grm_sym(kp_idx, kp_idx);
+                A_N_buf = grm_N_sym(kp_idx, kp_idx);
             }
 
             LOGGER << "\nReading the secondary GRM from [" << grm_files[0] << "] ..." << std::endl;
             read_grm(grm_files[0], grm_id, true, false, false);
             LOGGER<<"\nSubtracting [" << grm_files[1] << "] from [" << grm_files[0] << "] ..." << std::endl;
             StrFunc::match(uni_id, grm_id, kp);
-            #pragma omp parallel for private(k)
-            for (j = 0; j < _n; j++) {
-                for (k = 0; k <= j; k++) {
-                    if (kp[j] >= kp[k]) (_A[0])(k, j) = (_A[0])(j, k) = ((_A[0])(j, k) * A_N_buf(j, k)  - _grm(kp[j], kp[k]) * _grm_N(kp[j], kp[k])) / (A_N_buf(j, k) - _grm_N(kp[j], kp[k]));
-                    else (_A[0])(k, j) = (_A[0])(j, k) = ((_A[0])(j, k) * A_N_buf(j, k) - _grm(kp[k], kp[j]) * _grm_N(kp[k], kp[j])) / (A_N_buf(j, k) - _grm_N(kp[k], kp[j]));
-                }
+            {
+                eigenMatrix grm2_sym(_grm.selfadjointView<Eigen::Lower>());
+                Eigen::MatrixXf grm2_N_sym_f(_grm_N.selfadjointView<Eigen::Lower>());
+                eigenMatrix grm2_N_sym = grm2_N_sym_f.cast<double>();
+                Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+                eigenMatrix grm2_slice = grm2_sym(kp_idx, kp_idx);
+                eigenMatrix grm2_N_slice = grm2_N_sym(kp_idx, kp_idx);
+                _A[0] = ((_A[0].array() * A_N_buf.array()) - (grm2_slice.array() * grm2_N_slice.array()))
+                         / (A_N_buf.array() - grm2_N_slice.array());
             }
             _grm.resize(0,0);
             _grm_N.resize(0,0);
@@ -150,10 +148,10 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
             _A.resize(_r_indx.size());
             if(grm_flag){
                 StrFunc::match(uni_id, grm_id, kp);
-                (_A[0]).resize(_n, _n);
-                #pragma omp parallel for private(j)
-                for(i=0; i<_n; i++){
-                    for(j=0; j<=i; j++) (_A[0])(j,i)=(_A[0])(i,j)=_grm(kp[i],kp[j]);
+                {
+                    eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
+                    Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+                    (_A[0]) = grm_sym(kp_idx, kp_idx);
                 }
                 _grm.resize(0,0);
             }
@@ -163,22 +161,19 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
                     LOGGER << "Reading the GRM from the " << i + 1 << "th file ..." << std::endl;
                     read_grm(grm_files[i], grm_id, true, false, true);
                     StrFunc::match(uni_id, grm_id, kp);
-                    (_A[i]).resize(_n, _n);
-                    #pragma omp parallel for private(k)
-                    for (j = 0; j < _n; j++) {
-                        for (k = 0; k <= j; k++) {
-                            if (kp[j] >= kp[k]) (_A[i])(k, j) = (_A[i])(j, k) = _grm(kp[j], kp[k]);
-                            else (_A[i])(k, j) = (_A[i])(j, k) = _grm(kp[k], kp[j]);
-                        }
+                    {
+                        eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
+                        Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+                        (_A[i]) = grm_sym(kp_idx, kp_idx);
                     }
                 }
             }
             else{
                 StrFunc::match(uni_id, grm_id, kp);
-                (_A[0]).resize(_n, _n);
-                #pragma omp parallel for private(j)
-                for(i=0; i<_n; i++){
-                    for(j=0; j<=i; j++) (_A[0])(j,i)=(_A[0])(i,j)=_grm(kp[i],kp[j]);
+                {
+                    eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
+                    Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+                    (_A[0]) = grm_sym(kp_idx, kp_idx);
                 }
                 _grm.resize(0,0);
             }
@@ -591,26 +586,18 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
         LOGGER<<"\n-----------------------------------\n#Chr "<<chrs[c1]<<":"<<std::endl;
         extract_chr(chrs[c1], chrs[c1]);
         
-        _A[0]=eigenMatrix::Zero(_n, _n);
-        double d_buf=0;
-        for(c2=0; c2<chrs.size(); c2++){
-            if(chrs[c1]==chrs[c2]) continue;
-            #pragma omp parallel for private(j)
-            for(i=0; i<_n; i++){
-                for(j=0; j<=i; j++){
-                    (_A[0])(i,j)+=grm_chrs[c2](kp[i],kp[j])*m_chrs_f[c2];
-                }
-            }
-            d_buf+=m_chrs_f[c2];
-        }
-        
-        #pragma omp parallel for private(j)
-        for(i=0; i<_n; i++){
-            for(j=0; j<=i; j++){
-                (_A[0])(i,j)/=d_buf;
-                (_A[0])(j,i)=(_A[0])(i,j);
+        _A[0] = eigenMatrix::Zero(_n, _n);
+        double d_buf = 0;
+        {
+            Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+            for(c2=0; c2<chrs.size(); c2++){
+                if(chrs[c1]==chrs[c2]) continue;
+                eigenMatrix grm_sym(grm_chrs[c2].selfadjointView<Eigen::Lower>());
+                _A[0] += grm_sym(kp_idx, kp_idx) * static_cast<double>(m_chrs_f[c2]);
+                d_buf += m_chrs_f[c2];
             }
         }
+        _A[0] /= d_buf;
         
         // run REML algorithm
         reml(false, true, true, reml_priors, reml_priors_var, -2.0, -2.0, no_constrain, true, true);
