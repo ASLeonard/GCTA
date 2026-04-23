@@ -354,20 +354,20 @@ void gcta::fit_reml(std::string grm_file, std::string phen_file, std::string qco
         else kp = _keep;
         (_A[0]) = eigenMatrix::Zero(_n, _n);
 
-        #pragma omp parallel for
-        for (int i = 0; i < _n; i++) {
-            for (int j = 0; j <= i; j++) (_A[0])(j, i) = (_A[0])(i, j) = _grm(kp[i], kp[j]);
+        {
+            eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
+            Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+            (_A[0]) = grm_sym(kp_idx, kp_idx);
         }
         if (_reml_diag_one) {
             double diag_mean = (_A[0]).diagonal().mean();
             LOGGER << "Mean of diagonal elements of the GRM = " << diag_mean << std::endl;
             //pragma omp parallel for private(j)
-            #pragma omp parallel for
-            for (int i = 0; i < _n; i++) {
-                for (int j = 0; j <= i; j++) {
-                    (_A[0])(i, j) /= (_A[0])(i, i);
-                    (_A[0])(j, i) = (_A[0])(i, j);
-                }
+            {
+                eigenVector diag_inv = (_A[0]).diagonal().cwiseInverse();
+                (_A[0]) = ((_A[0]).array().colwise() / diag_inv.array()).matrix();
+                (_A[0]).triangularView<Eigen::StrictlyUpper>() =
+                    (_A[0]).triangularView<Eigen::StrictlyLower>().transpose();
             }
         }
 
@@ -389,24 +389,20 @@ void gcta::fit_reml(std::string grm_file, std::string phen_file, std::string qco
             StrFunc::match(uni_id, grm_id, kp);
             (_A[pos]) = eigenMatrix::Zero(_n, _n);
 
-            #pragma omp parallel for
-            for (int j = 0; j < _n; j++) {
-                for (int k = 0; k <= j; k++) {
-                    if (kp[j] >= kp[k]) (_A[pos])(k, j) = (_A[pos])(j, k) = _grm(kp[j], kp[k]);
-                    else (_A[pos])(k, j) = (_A[pos])(j, k) = _grm(kp[k], kp[j]);
-                }
+            {
+                eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
+                Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+                (_A[pos]) = grm_sym(kp_idx, kp_idx);
             }
 
             if (_reml_diag_one) {
                 double diag_mean = (_A[pos]).diagonal().mean();
                 LOGGER << "Mean of diagonal elements of the GRM = " << diag_mean << std::endl;
-                #pragma omp parallel for
-                for (int j = 0; j < _n; j++) {
-                    //(_A[pos])(j,j)=diag_mean;
-                    for (int k = 0; k <= j; k++) {
-                        (_A[pos])(j, k) /= (_A[pos])(j, j);
-                        (_A[pos])(k, j) = (_A[pos])(j, k);
-                    }
+                {
+                    eigenVector diag_inv = (_A[pos]).diagonal().cwiseInverse();
+                    (_A[pos]) = ((_A[pos]).array().colwise() / diag_inv.array()).matrix();
+                    (_A[pos]).triangularView<Eigen::StrictlyUpper>() =
+                        (_A[pos]).triangularView<Eigen::StrictlyLower>().transpose();
                 }
             }
 
@@ -1125,11 +1121,13 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
             for (i = 0; i < _r_indx.size(); i++) LOGGER << _var_name[_r_indx[i]] << "\t";
             LOGGER << std::endl;
         }
-        //LOGGER << "Iter " << iter << std::endl;
         if (_bivar_reml) calcu_Vi_bivar(_Vi, prev_varcmp, logdet, iter); // Calculate Vi, bivariate analysis //very slow
         else if (_within_family) calcu_Vi_within_family(_Vi, prev_varcmp, logdet, iter); // within-family REML
         else {
-            if (!calcu_Vi(_Vi, prev_varcmp, logdet, iter)){ // Calculate Vi
+            // When using Hutch++ with AI-REML or EM-REML, skip the n×n P materialisation.
+            // Fisher scoring (mtd 1) always needs the full P for calcu_Hi every iteration.
+            const bool skip_P_this_iter = _reml_trace_approx && _reml_mtd != 1;
+            if (!calcu_Vi(_Vi, prev_varcmp, logdet, iter, skip_P_this_iter)){ // Calculate Vi
                 LOGGER<<"Warning: V matrix is not positive-definite.\n";
                 varcmp = prev_prev_varcmp;
                 if(!calcu_Vi(_Vi, varcmp, logdet, iter)) LOGGER.e(0, "V matrix is not positive-definite.");
@@ -1304,8 +1302,9 @@ void gcta::calcu_sum_hsq(double Vp, double VarVp, double &sum_hsq, double &var_s
     var_sum_hsq = (V1/Vp)*(V1/Vp)*(VarV1/(V1*V1)+VarVp/(Vp*Vp)-(2*Cov12)/(V1*Vp));
 }
 
-bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, int &iter)
+bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, int &iter, bool factorize_only)
 {
+    _Vi_use_llt = false;  // reset on every entry
     Vi.resize(_n, _n);
     if (_r_indx.size() == 1) {
         Vi.diagonal() = eigenVector::Constant(_n, 1.0 / prev_varcmp[0]);
@@ -1318,17 +1317,31 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
         // after dpotri, so the upper never needs to be filled during assembly.
         const int num_comp = _r_indx.size();
 
-        // Only the lower triangle is written: dpotrf reads only lower, and _LLT
-        // symmetrises from lower afterward.  Writing the upper triangle here was
-        // redundant (it gets overwritten by dpotri/symmetrize anyway).
-        #pragma omp parallel for collapse(2)
-        for (int j = 0; j < _n; j++) {
-            for (int k = 0; k <= j; k++) {
-                double val = 0.0;
-                for (int ci = 0; ci < num_comp; ci++)
-                    val += (_A[_r_indx[ci]])(j, k) * prev_varcmp[ci];
-                Vi(j, k) = val;
+        // V = sum_i sigma_i^2 * A_i  (lower triangle only; dpotrf reads only lower).
+        Vi.triangularView<Eigen::Lower>().setZero();
+        for (int ci = 0; ci < num_comp; ci++) {
+            const double s = prev_varcmp[ci];
+            const eigenMatrix &Ai = _A[_r_indx[ci]];
+            #pragma omp parallel for schedule(static)
+            for (int j = 0; j < _n; j++)
+                Vi.col(j).tail(_n - j) += s * Ai.col(j).tail(_n - j);
+        }
+
+        // LLT-only path: factorize V but skip dpotri — used when the explicit V^{-1}
+        // matrix is not needed (Hutch++ / skip_P mode).  V is assembled in the lower
+        // triangle; Eigen::LLT<Lower> reads only that half.
+        if (factorize_only && !_reml_diagV_adj) {
+            Eigen::LLT<eigenMatrix> llt(Vi.selfadjointView<Eigen::Lower>());
+            if (llt.info() == Eigen::Success) {
+                // log|det(V)| = 2 * sum(log(diag(L)))
+                logdet = 2.0 * llt.matrixLLT().diagonal().array().log().sum();
+                _Vi_llt = std::move(llt);
+                _Vi_use_llt = true;
+                Vi.resize(0, 0);  // release n×n memory; V^{-1} not needed
+                return true;
             }
+            // V not positive-definite: fall through to full inversion below.
+            // Eigen::LLT does not modify Vi, so it still holds V.
         }
 
         constexpr bool use_lu = false;
@@ -1371,13 +1384,13 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
 
 
 /*
-        if (!comput_inverse_logdet_LDLT_mkl(Vi, logdet)) {
+        if (!comput_inverse_logdet_LDLT(Vi, logdet)) {
             LOGGER<<"Warning: the variance-covaraince matrix V is non-positive definite." << std::endl;
             if(_reml_diagV_adj == 1){
                 LOGGER<<"Warning: the variance-covaraince matrix is invertible. A small positive value is added to the diagonals. The results might not be reliable!"<<std::endl;
                 double d_buf = Vi.diagonal().mean() * _reml_diag_mul;
                 for(j = 0; j < _n ; j++) Vi(j,j) += d_buf;
-                if(!comput_inverse_logdet_LDLT_mkl(Vi, logdet)){
+                if(!comput_inverse_logdet_LDLT(Vi, logdet)){
                     LOGGER << "Still can't be inverted. Try --reml-alg-inv 2 " << std::endl;
                     return false;  
                 }
@@ -1396,7 +1409,7 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
 
 /*
         if (_V_inv_mtd == 0) {
-            if (!comput_inverse_logdet_LDLT_mkl(Vi, logdet)) {
+            if (!comput_inverse_logdet_LDLT(Vi, logdet)) {
                 if(_reml_force_inv) {
                     LOGGER<<"Warning: the variance-covaraince matrix V is non-positive definite." << std::endl;
                     _V_inv_mtd = 1;
@@ -1406,7 +1419,7 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
                         LOGGER<<"Warning: the variance-covaraince matrix is invertible. A small positive value is added to the diagonals. The results might not be reliable!"<<std::endl;
                         double d_buf = Vi.diagonal().mean() * 0.01;
                         for(j = 0; j < _n ; j++) Vi(j,j) += d_buf;
-                        if(!comput_inverse_logdet_LDLT_mkl(Vi, logdet)) return false;  
+                        if(!comput_inverse_logdet_LDLT(Vi, logdet)) return false;  
                     } 
                     else LOGGER.e(0, "the variance-covariance matrix V is not positive definite.");
                 }
@@ -1417,12 +1430,12 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
        /*if (_V_inv_mtd == 2) {
             if(!_reml_force_converge){
                 LOGGER << "Switching from Cholesky to LU decomposition approach. The results might not be reliable!" << std::endl;
-                if (!comput_inverse_logdet_LU_mkl(Vi, logdet)){
+                if (!comput_inverse_logdet_LU(Vi, logdet)){
                     if(_reml_no_converge){
                         LOGGER<<"Warning: the variance-covaraince matrix is invertible. A small positive value is added to the diagonals. The results might not be reliable!"<<std::endl;
                         double d_buf = Vi.diagonal().mean() * 0.01;
                         for(j = 0; j < _n ; j++) Vi(j,j) += d_buf;
-                        if(!comput_inverse_logdet_LDLT_mkl(Vi, logdet)) return false;  
+                        if(!comput_inverse_logdet_LDLT(Vi, logdet)) return false;  
                     } 
                     else LOGGER.e(0, "the variance-covariance matrix V is not invertible using LU decomposition.");
                 }
@@ -1431,7 +1444,7 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
                 LOGGER<<"Warning: the variance-covaraince matrix is invertible. A small positive value is added to the diagonals. The results might not be reliable!"<<std::endl;
                 double d_buf = Vi.diagonal().mean() * 0.01;
                 for(j = 0; j < _n ; j++) Vi(j,j) += d_buf;
-                comput_inverse_logdet_LU_mkl(Vi, logdet);
+                comput_inverse_logdet_LU(Vi, logdet);
             }
         }*/
     }
@@ -1489,47 +1502,6 @@ bool gcta::bending_eigenval(eigenVector &eval) {
     return true;
 }
 
-bool gcta::comput_inverse_logdet_LDLT(eigenMatrix &Vi, double &logdet) {
-    int i = 0, n = Vi.cols();
-    Eigen::LDLT<eigenMatrix> ldlt(Vi);
-    eigenVector d = ldlt.vectorD();
-
-    if (d.minCoeff() < 0) return false;
-    else {
-        logdet = 0.0;
-        for (i = 0; i < n; i++) logdet += log(d[i]);
-        Vi.setIdentity();
-        ldlt.solveInPlace(Vi);
-    }
-    return true;
-}
-
-bool gcta::comput_inverse_logdet_PLU(eigenMatrix &Vi, double &logdet)
-{
-    int n = Vi.cols();
-
-    Eigen::PartialPivLU<eigenMatrix> lu(Vi);
-    if (lu.determinant()<1e-6) return false;
-    eigenVector u = lu.matrixLU().diagonal();
-    logdet = 0.0;
-    for (int i = 0; i < n; i++) logdet += log(fabs(u[i]));
-    Vi = lu.inverse();
-    return true;
-}
-
-bool gcta::comput_inverse_logdet_LU(eigenMatrix &Vi, double &logdet)
-{
-    int n = Vi.cols();
-
-    Eigen::FullPivLU<eigenMatrix> lu(Vi);
-    if (!lu.isInvertible()) return false;
-    eigenVector u = lu.matrixLU().diagonal();
-    logdet = 0.0;
-    for (int i = 0; i < n; i++) logdet += log(fabs(u[i]));
-    Vi = lu.inverse();
-    return true;
-}
-
 bool gcta::inverse_H(eigenMatrix &H)
 {    
     double d_buf = 0.0;
@@ -1539,12 +1511,12 @@ bool gcta::inverse_H(eigenMatrix &H)
     /*{
         if(_reml_force_inv) {
             LOGGER<<"Warning: the information matrix is non-positive definite. Switching from Cholesky to LU decomposition approach. The results might not be reliable!"<<std::endl;
-            if (!comput_inverse_logdet_LU_mkl(H, d_buf)){
+            if (!comput_inverse_logdet_LU(H, d_buf)){
                 LOGGER<<"Warning: the information matrix is invertible. A small positive value is added to the diagonals. The results might not be reliable!"<<std::endl;
                 int i = 0;
                 d_buf = H.diagonal().mean() * 0.001;
                 for(i = 0; i < H.rows(); i++) H(i,i) += d_buf;
-                if (!comput_inverse_logdet_LU_mkl(H, d_buf)) return false;
+                if (!comput_inverse_logdet_LU(H, d_buf)) return false;
             }
         }
         else return false;
@@ -1564,9 +1536,13 @@ double gcta::calcu_P_nomatrix(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &X
 
 double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatrix *P)
 {
-    // Vi is symmetric; selfadjointView<Lower> routes to BLAS dsymm which reads only the
-    // lower triangle of the n×n matrix — halves memory bandwidth vs a general dgemm.
-    Vi_X.noalias() = Vi.selfadjointView<Eigen::Lower>() * _X;
+    // Vi_X = V^{-1} X: use Cholesky triangular solve when available (skip-P path),
+    // otherwise fall back to a symmetric matrix-vector product with the explicit V^{-1}.
+    if (_Vi_use_llt) {
+        Vi_X = _Vi_llt.solve(_X);   // k forward+back-substitutions, k = n_covariates
+    } else {
+        Vi_X.noalias() = Vi.selfadjointView<Eigen::Lower>() * _X;
+    }
     Xt_Vi_X_i.noalias() = _X.transpose() * Vi_X;
 
     double logdet_Xt_Vi_X = 0.0;
@@ -1609,7 +1585,6 @@ double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi
 // input P, calculate PA and Hi
 void gcta::calcu_Hi(eigenMatrix &P, eigenMatrix &Hi)
 {
-    double d_buf = 0.0;
     //LOGGER << "Before calcu_Hi: " << getVMemKB() << " " << getMemKB() << ", "; 
 
     // Calculate PA
@@ -1621,21 +1596,12 @@ void gcta::calcu_Hi(eigenMatrix &P, eigenMatrix &Hi)
     }
 
 
-    // Calculate Hi
-    //double d_bufs[_n];
-    double *d_bufs = new double[_n];
-    for (int i = 0; i < _r_indx.size(); i++) {
+    // tr(PA_i * PA_j) = sum_{k,l} PA_i(k,l) * PA_j(l,k)
+    //                 = PA_i ⊙ PA_j^T  (Frobenius inner product)
+    // Eigen maps this to a single BLAS ddot-equivalent, no temporaries needed.
+    for (int i = 0; i < (int)_r_indx.size(); i++) {
         for (int j = 0; j <= i; j++) {
-            memset(d_bufs, 0, _n * sizeof(double));
-            d_buf = 0.0;
-            #pragma omp parallel for 
-            for (int k = 0; k < _n; k++) {
-                for (int l = 0; l < _n; l++) d_bufs[k] += (PA[i])(k, l)*(PA[j])(l, k);
-            }
-            for(int k = 0; k < _n; k++){
-                d_buf += d_bufs[k];
-            }
-            Hi(i, j) = Hi(j, i) = d_buf;
+            Hi(i, j) = Hi(j, i) = PA[i].cwiseProduct(PA[j].transpose()).sum();
         }
     }
 
@@ -1646,7 +1612,6 @@ void gcta::calcu_Hi(eigenMatrix &P, eigenMatrix &Hi)
         }
         else LOGGER.e(0, "the information matrix is not invertible.");
     }
-    delete[] d_bufs;
 }
 
 // use Fisher-scoring to estimate variance component
@@ -1685,30 +1650,30 @@ void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector
     //eigenVector cvec(_n);
     eigenMatrix APy(_n, _r_indx.size());
     //LOGGER << "AI reml 1 start" << std::endl;
-    #pragma omp parallel for
-    for (int i = 0; i < _r_indx.size(); i++) {
-        if (_bivar_reml || _within_family) (APy.col(i)) = (_Asp[_r_indx[i]]) * Py;
-        else (APy.col(i)) = (_A[_r_indx[i]]) * Py;
+    for (int i = 0; i < (int)_r_indx.size(); i++) {
+        if (_bivar_reml || _within_family)
+            APy.col(i).noalias() = _Asp[_r_indx[i]] * Py;
+        else
+            APy.col(i).noalias() = _A[_r_indx[i]].selfadjointView<Eigen::Lower>() * Py;
     }
 
     //LOGGER << "AI reml 2 start" << std::endl;
     // Calculate Hi
     eigenVector R(_r_indx.size());
     if (use_approx) {
-        #pragma omp parallel for
-        for (int i = 0; i < _r_indx.size(); i++) {
-            R(i) = (Py.transpose()*(APy.col(i)))(0, 0);
+        for (int i = 0; i < (int)_r_indx.size(); i++) {
+            R(i) = Py.dot(APy.col(i));
             eigenVector cvec = applyP_vec(APy.col(i));
-            Hi(i, i) = ((APy.col(i)).transpose() * cvec)(0, 0);
-            for (int j = 0; j < i; j++) Hi(j, i) = Hi(i, j) = ((APy.col(j)).transpose() * cvec)(0, 0);
+            Hi(i, i) = APy.col(i).dot(cvec);
+            for (int j = 0; j < i; j++) Hi(j, i) = Hi(i, j) = APy.col(j).dot(cvec);
         }
     } else {
-        #pragma omp parallel for
-        for (int i = 0; i < _r_indx.size(); i++) {
-            R(i) = (Py.transpose()*(APy.col(i)))(0, 0);
-            eigenVector cvec = P.selfadjointView<Eigen::Lower>() * APy.col(i);
-            Hi(i, i) = ((APy.col(i)).transpose() * cvec)(0, 0);
-            for (int j = 0; j < i; j++) Hi(j, i) = Hi(i, j) = ((APy.col(j)).transpose() * cvec)(0, 0);
+        for (int i = 0; i < (int)_r_indx.size(); i++) {
+            R(i) = Py.dot(APy.col(i));
+            eigenVector cvec(_n);
+            cvec.noalias() = P.selfadjointView<Eigen::Lower>() * APy.col(i);
+            Hi(i, i) = APy.col(i).dot(cvec);
+            for (int j = 0; j < i; j++) Hi(j, i) = Hi(i, j) = APy.col(j).dot(cvec);
         }
     }
     //LOGGER << "AI reml 2 end" << std::endl;
@@ -1752,15 +1717,19 @@ void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, ei
         // lower triangle — halves memory bandwidth vs a general dgemv.
         Py.noalias() = P.selfadjointView<Eigen::Lower>() * _y;
     }
+    // R(i) = Py' * A_i * Py  — computed as a dsymv + dot to avoid forming the
+    // n×n outer product.  Sequential over components (typically 2–3) so BLAS
+    // threads inside dsymv are not competing with an outer OMP parallel region.
     eigenVector R(_r_indx.size());
-
-    #pragma omp parallel for
-    for (int i = 0; i < _r_indx.size(); i++) {
-        //LOGGER << "EM reml " << i << std::endl;
-        if (_bivar_reml || _within_family) R(i) = (Py.transpose()*(_Asp[_r_indx[i]]) * Py)(0, 0);
-        else R(i) = (Py.transpose()*(_A[_r_indx[i]]) * Py)(0, 0);
-        // Calculate Variance component;
-        varcmp(i) = prev_varcmp(i) - prev_varcmp(i) * prev_varcmp(i) * (tr_PA(i) -  R(i)) / _n;
+    eigenVector tmp(_n);
+    for (auto i = 0; i < (int)_r_indx.size(); i++) {
+        if (_bivar_reml || _within_family)
+            R(i) = Py.dot(_Asp[_r_indx[i]] * Py);
+        else {
+            tmp.noalias() = _A[_r_indx[i]].selfadjointView<Eigen::Lower>() * Py;
+            R(i) = Py.dot(tmp);
+        }
+        varcmp(i) = prev_varcmp(i) - prev_varcmp(i) * prev_varcmp(i) * (tr_PA(i) - R(i)) / _n;
     }
 
 
@@ -1775,8 +1744,11 @@ void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, ei
 // Uses cached _Vi, _Vi_X, _Xt_Vi_X_i from calcu_P.
 eigenVector gcta::applyP_vec(const eigenVector &v) const
 {
-    // w = V^{-1} v   (dsymv on lower triangle)
-    eigenVector w = _Vi.selfadjointView<Eigen::Lower>() * v;
+    // w = V^{-1} v: use Cholesky triangular solve when available (skip-P path),
+    // otherwise use the precomputed explicit V^{-1} (dsymv on lower triangle).
+    eigenVector w = _Vi_use_llt
+        ? _Vi_llt.solve(v)
+        : eigenVector(_Vi.selfadjointView<Eigen::Lower>() * v);
     // a = X' w = X' V^{-1} v   (dgemv, c-dimensional)
     eigenVector a = _Vi_X.transpose() * v;
     // b = (X' V^{-1} X)^{-1} a   (tiny c×c symmetric solve)

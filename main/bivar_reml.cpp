@@ -348,18 +348,18 @@ bool gcta::calcu_Vi_bivar(eigenMatrix &Vi, eigenVector &prev_varcmp, double &log
     //LOGGER << " calcu_Vi_bivar finished" << std::endl;
 
     if (_V_inv_mtd == 0) {
-        if (!comput_inverse_logdet_LDLT_mkl(Vi, logdet)) {
+        if (!comput_inverse_logdet_LDLT(Vi, logdet)) {
             //LOGGER<<"Note: the variance-covaraince matrix V is non-positive definite. Switching to Cholesky to LU decomposition approach."<<std::endl;
             _V_inv_mtd = 1;
         }
     }
     if (_V_inv_mtd == 1) {
-        if (!comput_inverse_logdet_LU_mkl(Vi, logdet)) LOGGER.e(0, "the variance-covariance matrix V is not invertible.");
+        if (!comput_inverse_logdet_LU(Vi, logdet)) LOGGER.e(0, "the variance-covariance matrix V is not invertible.");
     }
     //LOGGER << "Chop decomposition finished" << std::endl;
     return true;
 
-    /*    if(!comput_inverse_logdet_LDLT_mkl(Vi, logdet)){
+    /*    if(!comput_inverse_logdet_LDLT(Vi, logdet)){
             if(_reml_have_bend_A) LOGGER.e(0, errmsg);
             LOGGER<<"Warning: the variance-covaraince matrix V is negative-definite."<<std::endl;
             bend_A();

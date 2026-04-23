@@ -658,7 +658,7 @@ void Geno::preGenoDouble_bed(){
     compressFormats.clear();
     rawCountSamples.clear();
     rawCountSNPs.clear();
- 
+
     for(int i = 0; i < geno_files.size(); i++){
         MarkerParam curParam = marker->getMarkerParams(i); 
         compressFormats.push_back(curParam.compressFormat);
@@ -673,22 +673,22 @@ void Geno::preGenoDouble_bed(){
     if(!asyncBuf64->init_status()){
         LOGGER.e(0, "can't allocate enough memory to read genotype.");
     }
- 
+
 
     maskPtrSize = PgenReader::GetSubsetMaskSize(raw_sample_ct);
-    keepMaskPtr = new uintptr_t[maskPtrSize]; 
-    keepMaskInterPtr = new uintptr_t[maskPtrSize];
+    size_t maskAllocBytes = static_cast<size_t>(maskPtrSize) * sizeof(uintptr_t);
+    posix_memalign(reinterpret_cast<void**>(&keepMaskPtr),     32, maskAllocBytes);
+    posix_memalign(reinterpret_cast<void**>(&keepMaskInterPtr), 32, maskAllocBytes);
     PgenReader::SetSampleSubsets(sampleKeepIndex, raw_sample_ct, keepMaskPtr, keepMaskInterPtr);
 
-    sexMaskPtr = new uintptr_t[maskPtrSize];
-    sexMaskInterPtr = new uintptr_t[maskPtrSize];
+    posix_memalign(reinterpret_cast<void**>(&sexMaskPtr),      32, maskAllocBytes);
+    posix_memalign(reinterpret_cast<void**>(&sexMaskInterPtr),  32, maskAllocBytes);
     PgenReader::SetSampleSubsets(keepSexIndex, raw_sample_ct, sexMaskPtr, sexMaskInterPtr);
 
-    maleMaskPtr = new uintptr_t[maskPtrSize];
-    maleMaskInterPtr = new uintptr_t[maskPtrSize];
+    posix_memalign(reinterpret_cast<void**>(&maleMaskPtr),     32, maskAllocBytes);
+    posix_memalign(reinterpret_cast<void**>(&maleMaskInterPtr), 32, maskAllocBytes);
     PgenReader::SetSampleSubsets(keepMaleIndex, raw_sample_ct, maleMaskPtr, maleMaskInterPtr);
 
-    // for missing pointer size of 1 genotype
 }
 
 void Geno::preGenoDouble_bgen(){
@@ -1468,13 +1468,12 @@ void Geno::setGRMMode(bool grm, bool dominace){
 
 void Geno::endGenoDouble_bed(){
     delete asyncBuf64;
-    delete[] keepMaskPtr;
-    delete[] keepMaskInterPtr;
-
-    delete[] sexMaskPtr;
-    delete[] sexMaskInterPtr;
-    delete[] maleMaskPtr;
-    delete[] maleMaskInterPtr;
+    posix_mem_free(keepMaskPtr);      keepMaskPtr = NULL;
+    posix_mem_free(keepMaskInterPtr); keepMaskInterPtr = NULL;
+    posix_mem_free(sexMaskPtr);       sexMaskPtr = NULL;
+    posix_mem_free(sexMaskInterPtr);  sexMaskInterPtr = NULL;
+    posix_mem_free(maleMaskPtr);      maleMaskPtr = NULL;
+    posix_mem_free(maleMaskInterPtr); maleMaskInterPtr = NULL;
 }
 
 void Geno::endGenoDouble(){
@@ -1498,9 +1497,7 @@ void Geno::loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf, bo
    
     preGenoDouble(numMarkerBuf, bMakeGeno, bGenoCenter, bGenoStd, bMakeMiss);
     thread read_thread([this, &extractIndex](){this->readGeno(extractIndex);});
-    read_thread.detach();
     // main loop
-    
     LOGGER.ts("LOOP_GENO_PRE");
     LOGGER.ts("LOOP_GENO_TOT");
     int nTMarker = extractIndex.size();
@@ -1558,6 +1555,7 @@ void Geno::loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf, bo
         LOGGER.i(1, ss.str());
         LOGGER << nFinishedMarker << " SNPs have been processed." << std::endl;
     }
+    read_thread.join();
     endGenoDouble();
 }
 

@@ -4,6 +4,7 @@
 #include "utils.hpp"
 #include "StatLib.h"
 #include "cpu.h"
+#include <Eigen/Dense>
 #include <numeric>
 #include <string>
 #include <functional>
@@ -55,14 +56,12 @@ void LD::calcLD(){
     }else{
         cacl_index_buffer = cur_buffer;
     }
-    char trans = 'T', notrans = 'N', uplo = 'L';
-    double zero = 0.0;
     int nr = num_indi;
     int nc1 = cur_buffer_offset[cacl_index_buffer] / nr;
     double alpha = 1.0 / (nr - 1);
     double *ptr1 = geno_buffer[cacl_index_buffer].get();
-    std::vector<double> res1(static_cast<size_t>(nc1) * nc1);
-    cblas_dsyrk(CblasColMajor, CblasLower, CblasTrans, nc1, nr, alpha, ptr1, nr, zero, res1.data(), nc1);
+    Eigen::Map<Eigen::MatrixXd> A1(ptr1, nr, nc1);
+    Eigen::MatrixXd res1 = alpha * (A1.transpose() * A1);
 
     std::vector<double> res2;
     // is previous buffer active?
@@ -72,7 +71,8 @@ void LD::calcLD(){
         nc2 = cur_buffer_offset[!cacl_index_buffer] / nr;
         double *ptr2 = geno_buffer[!cacl_index_buffer].get();
         res2.resize(static_cast<size_t>(nc2) * nc1);
-        cblas_dgemm(CblasColMajor, CblasTrans, CblasNoTrans, nc2, nc1, nr, alpha, ptr2, nr, ptr1, nr, zero, res2.data(), nc2);
+        Eigen::Map<Eigen::MatrixXd> A2(ptr2, nr, nc2);
+        Eigen::Map<Eigen::MatrixXd>(res2.data(), nc2, nc1).noalias() = alpha * (A2.transpose() * A1);
     }
     
     for(int i = 0; i < nc1; i++){

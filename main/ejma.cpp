@@ -432,10 +432,10 @@ void gcta::ecojo_blup(double lambda)
     double diag_val=1.0+_e_include.size()*(1.0/lambda-1.0)/d_n;
     for(i=0; i<_e_include.size(); i++) _ecojo_wholeR(i,i)=diag_val;
     double logdet=0.0;
-    if (!comput_inverse_logdet_LDLT_mkl(_ecojo_wholeR, logdet)) {
+    if (!comput_inverse_logdet_LDLT(_ecojo_wholeR, logdet)) {
         LOGGER<<"Note: no solution to LDLT decomposition. Switching to LU decomposition."<<std::endl;
         _ecojo_wholeR = _ecojo_wholeR.lu().solve(eigenMatrix::Identity(_e_include.size(), _e_include.size()));
-        //if (!comput_inverse_logdet_LU_mkl(_ecojo_wholeR, logdet)) LOGGER.e(0, "\n  the correlation matrix is not invertible.");
+        //if (!comput_inverse_logdet_LU(_ecojo_wholeR, logdet)) LOGGER.e(0, "\n  the correlation matrix is not invertible.");
     }
     eigenVector bJ=_ecojo_wholeR*_ecojo_b;
 
@@ -455,7 +455,7 @@ void gcta::ecojo_inv_R() {
     std::string errmsg = "\n  the correlation matrix is not invertible.";
 
     double logdet=0.0;
-    if (!comput_inverse_logdet_LDLT_mkl(_ecojo_R, logdet)) {
+    if (!comput_inverse_logdet_LDLT(_ecojo_R, logdet)) {
         LOGGER<<"Note: no solution to LDLT decomposition. Switching to LU decomposition."<<std::endl;
         _ecojo_R = _ecojo_R.lu().solve(eigenMatrix::Identity(_ecojo_R.cols(), _ecojo_R.cols()));
     }

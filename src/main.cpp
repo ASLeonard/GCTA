@@ -243,6 +243,17 @@ int main(int argc, char *argv[]){
     #endif
     omp_set_num_threads(thread_num);
 
+    // Make OMP worker threads sleep immediately after a parallel region ends,
+    // rather than spin-waiting. Spinning threads consume memory bandwidth and
+    // starve BLAS (MKL/OpenBLAS) calls that follow parallel regions.
+    // KMP_BLOCKTIME covers Intel OMP (MKL); GOMP_SPINCOUNT covers GCC libgomp.
+    #ifdef _WIN32
+        _putenv_s("KMP_BLOCKTIME", "0");
+        _putenv_s("GOMP_SPINCOUNT", "0");
+    #elif defined __linux__ || defined __APPLE__
+        setenv("KMP_BLOCKTIME", "0", 0);   // 0 = don't override user setting
+        setenv("GOMP_SPINCOUNT", "0", 0);
+    #endif
 
     // end thread;
     map<string, vector<string>> options_total = options;

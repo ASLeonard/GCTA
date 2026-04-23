@@ -13,6 +13,7 @@
 */
 #ifndef GCTA2_ASYNCBUFFER_H
 #define GCTA2_ASYNCBUFFER_H
+#include <atomic>
 #include <mutex>
 #include <condition_variable>
 #include <tuple>
@@ -26,12 +27,21 @@ using std::tuple;
 using std::tie;
 
 struct BufferStat{
-    uint8_t write_count[3] = {0, 0, 0};
-    uint8_t read_count[3] = {0, 0, 0};
-    uint8_t nextBufferRead = 0;
-    uint8_t nextBufferWrite = 0;
-    bool eof[3] = {false, false, false};
-    bool accessed[3] = {true, true, true};
+    std::atomic<uint8_t> write_count[3];
+    std::atomic<uint8_t> read_count[3];
+    std::atomic<uint8_t> nextBufferRead;
+    std::atomic<uint8_t> nextBufferWrite;
+    std::atomic<bool> eof[3];
+    std::atomic<bool> accessed[3];
+
+    BufferStat() : nextBufferRead(0), nextBufferWrite(0) {
+        for(int i = 0; i < 3; i++){
+            write_count[i].store(0, std::memory_order_relaxed);
+            read_count[i].store(0, std::memory_order_relaxed);
+            eof[i].store(false, std::memory_order_relaxed);
+            accessed[i].store(true, std::memory_order_relaxed);
+        }
+    }
 };
 
 template <typename T>

@@ -144,6 +144,7 @@ private:
     int grm_m = 0;               // part_keep_indices.second - part_keep_indices.first + 1
     int grm_s_n = 0;             // grm_n - grm_m
     int grm_bytes_std_geno = 0;  // sizeof(double) * grm_n
+    int stdGenoLD = 0;           // leading dimension of stdGeno: grm_n rounded up to multiple of 8 (64-byte column alignment)
 
     // Pre-allocated scratch buffers reused across calculate_GRM_blas calls
     std::vector<int> validIndexBuf;

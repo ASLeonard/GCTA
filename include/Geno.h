@@ -66,20 +66,20 @@ typedef struct GenoBuffer{
 
 typedef struct GenoBufItem{
     // in
-    uint32_t extractedMarkerIndex;   // for allele lookup
+    uint32_t extractedMarkerIndex = 0;   // for allele lookup
 
     // out
-    bool valid;
+    bool valid = false;
   //  int refAllele; //0 as 1, 1 as GCTA
-    uint8_t isSexXY;   // 0: no, 1: X, 2: Y
+    uint8_t isSexXY = 0;   // 0: no, 1: X, 2: Y
     vector<double> geno;
     vector<uintptr_t> missing;
-    double af;
-    double mean;
-    double sd; //std^2
-    double info;
-    uint32_t nValidN;
-    uint32_t nValidAllele;
+    double af = 0.0;
+    double mean = 0.0;
+    double sd = 0.0; //std^2
+    double info = 0.0;
+    uint32_t nValidN = 0;
+    uint32_t nValidAllele = 0;
 } GenoBufItem;
 
 
