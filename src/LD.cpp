@@ -106,14 +106,22 @@ void LD::calcLD(){
     fflush(h_ld);
 }
 
-void LD::readGeno(uint64_t *buf, int num_marker){
+void LD::readGeno(uintptr_t *buf, const vector<uint32_t> &markerIndex){
+    int num_marker = static_cast<int>(markerIndex.size());
     double * ptr = geno_buffer[cur_buffer].get();
     uint64_t cur_offset = cur_buffer_offset[cur_buffer];
     ptr += cur_offset;
 
-    #pragma omp parallel for schedule(dynamic) 
+    #pragma omp parallel for schedule(dynamic)
     for(int i = 0; i < num_marker; i++){
-        geno->makeMarkerX(buf, i, ptr + i * num_indi, true, true);
+        GenoBufItem item;
+        item.extractedMarkerIndex = markerIndex[i];
+        geno->getGenoDouble(buf, i, &item);
+        if(item.valid){
+            std::copy(item.geno.begin(), item.geno.end(), ptr + i * num_indi);
+        } else {
+            std::fill(ptr + i * num_indi, ptr + (i + 1) * num_indi, 0.0);
+        }
     }
     cur_buffer_offset[cur_buffer] += (uint64_t) num_marker * num_indi;
 }
@@ -164,38 +172,37 @@ int LD::registerOption(map<string, vector<string>>& options_in){
 
 
 void LD::processMain(){
-    vector<function<void (uint64_t *, int)>> callBacks;
     for(auto &process_function : processFunctions){
         if(process_function == "ld_matrix"){
             Pheno pheno;
             Marker marker;
             Geno geno(&pheno, &marker);
-            if(!geno.filterMAF()){
-                callBacks.push_back(std::bind(&Geno::freq64, &geno, _1, _2));
-            }
- 
+            geno.filterMAF();
+
             LD ld(&geno);
 
             LOGGER.i(0, "Generating LD matrix...");
             uint32_t window = options_i["LD_window"] * 1000;
-            uint32_t total_num_marker = marker.count_extract(); 
+            uint32_t total_num_marker = marker.count_extract();
             uint32_t cur_index_marker = 0;
-           callBacks.push_back(std::bind(&LD::readGeno, &ld, _1, _2));
+
+            vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks;
+            callBacks.push_back(std::bind(&LD::readGeno, &ld, _1, _2));
 
             while(cur_index_marker < total_num_marker){
                 cur_buffer = !cur_buffer;
                 bool isX;
-                vector<uint32_t> indices1 = marker.getNextWindowIndex(cur_index_marker, window, chr_ends, isX);
+                // retRaw=false: returns extract-list positions, which is what loopDouble expects
+                vector<uint32_t> indices1 = marker.getNextWindowIndex(cur_index_marker, window, chr_ends, isX, false);
                 geno_buffer[cur_buffer].reset(new double[indices1.size() * num_indi]);
                 cur_buffer_offset[cur_buffer] = 0;
-                geno.loop_64block(indices1, callBacks, false);
+                geno.loopDouble(indices1, static_cast<int>(indices1.size()), true, true, true, false, callBacks, false);
                 cur_index_marker += indices1.size();
 
-                // if another buffer is NA,  not chr ends and still in range;
+                // if another buffer is NA, not chr ends and still in range;
                 if((!geno_buffer[!cur_buffer]) && (!chr_ends)){
                     continue;
                 }
-                //ld.deduceLD();
                 ld.calcLD();
                 LOGGER.p(0, to_string_precision(cur_index_marker * 100.0 / total_num_marker, 2) + "% finished.");
             }

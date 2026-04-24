@@ -113,6 +113,12 @@ FetchContent_Declare(
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     EXCLUDE_FROM_ALL)
 
+FetchContent_Declare(
+    stdexec
+    URL https://github.com/NVIDIA/stdexec/archive/refs/tags/nvhpc-25.09.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    EXCLUDE_FROM_ALL)
+
 # zlib must be fetched before Boost so Boost iostreams can find it at configure time.
 # Kept outside block() so zlib_POPULATED and zlib_SOURCE_DIR are visible in parent scope.
 set(ZLIB_BUILD_EXAMPLES OFF)
@@ -157,6 +163,7 @@ set(CMAKE_SKIP_INSTALL_RULES OFF)
 # sqlite has no options to isolate, and sqlite_SOURCE_DIR must be visible
 # in the parent scope for the add_library(sqlite3) call below.
 FetchContent_MakeAvailable(sqlite)
+FetchContent_MakeAvailable(stdexec)
 
 # Ensure a consistent ZLIB::ZLIB target exists for downstream linking.
 # - System zlib: find_package (via FIND_PACKAGE_ARGS) already created ZLIB::ZLIB
@@ -279,6 +286,22 @@ if(NOT APPLE AND _GCTA_BLAS STREQUAL "Accelerate")
     message(FATAL_ERROR "Accelerate is only available on macOS. Use MKL or OpenBLAS.")
 endif()
 
+# Map our backend choice to FindBLAS/LAPACK vendor names so find_package
+# can prefer the requested vendor when possible.
+if(_GCTA_BLAS STREQUAL "Accelerate")
+    set(_BLA_VENDOR_NAME "Apple")
+elseif(_GCTA_BLAS STREQUAL "OpenBLAS")
+    set(_BLA_VENDOR_NAME "OpenBLAS")
+elseif(_GCTA_BLAS STREQUAL "MKL")
+    set(_BLA_VENDOR_NAME "Intel")
+endif()
+
+if(DEFINED _BLA_VENDOR_NAME)
+    set(BLA_VENDOR ${_BLA_VENDOR_NAME} CACHE STRING "Preferred BLAS/LAPACK vendor" FORCE)
+    message(STATUS "Setting BLA_VENDOR=${_BLA_VENDOR_NAME} to prefer requested BLAS vendor")
+endif()
+
+#TODO: Should this also have EIGEN_USE_LAPACKE?
 if(_GCTA_BLAS STREQUAL "Accelerate")
     find_library(ACCELERATE_LIBRARY Accelerate REQUIRED)
     list(APPEND GCTA_BLAS_LIBS ${ACCELERATE_LIBRARY})
@@ -294,6 +317,7 @@ if(_GCTA_BLAS STREQUAL "Accelerate")
     set(VECLIB_INCLUDE_DIR "${CMAKE_OSX_SYSROOT}/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework/Headers")
     list(APPEND GCTA_BLAS_INCLUDE_DIRS ${VECLIB_INCLUDE_DIR})
 
+#TODO: if the openblas directory also contains mkl, it overrides?
 elseif(_GCTA_BLAS STREQUAL "OpenBLAS")
     # Check Homebrew path first (macOS), then fall back to find_package
     set(_openblas_prefix "/opt/homebrew/opt/openblas")
@@ -362,6 +386,9 @@ set(SRCS
     ${CMAKE_SOURCE_DIR}/src/FastFAM.cpp
     ${CMAKE_SOURCE_DIR}/src/GRM.cpp
     ${CMAKE_SOURCE_DIR}/src/Geno.cpp
+    ${CMAKE_SOURCE_DIR}/src/BedBackend.cpp
+    ${CMAKE_SOURCE_DIR}/src/BgenBackend.cpp
+    ${CMAKE_SOURCE_DIR}/src/PgenBackend.cpp
     ${CMAKE_SOURCE_DIR}/src/LD.cpp
     ${CMAKE_SOURCE_DIR}/src/Logger.cpp
     ${CMAKE_SOURCE_DIR}/src/Marker.cpp
@@ -393,6 +420,7 @@ target_link_libraries(gcta64 PRIVATE
     Boost::algorithm Boost::math Boost::crc Boost::iostreams
     Eigen3::Eigen
     Spectra
+    STDEXEC::stdexec
     ${GCTA_ZSTD_LIBS})
 
 target_precompile_headers(gcta64 PRIVATE

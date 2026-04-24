@@ -109,7 +109,7 @@ void Logger::Log(int level, Type type, const string& prompt, const string& messa
     (*m_pThis) << spaces << type << prompt << INFO << message << endl;
 }
 
-void Logger::e(int level, const string& message, const string& title){
+[[noreturn]] void Logger::e(int level, const string& message, const string& title){
     string head = title.empty() ? "Error: " : (title+" ");
     m_pThis->Log(level, ERROR, head, message);
     m_pThis->Log(level, INFO, "", "An error occurs, please check the options or data");

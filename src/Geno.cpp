@@ -31,7 +31,7 @@
 #include <iomanip>
 #include "utils.hpp"
 #include "omp.h"
-#include "ThreadPool.h"
+#include "GenoBackendFactory.h"
 #include <cstring>
 #include <boost/algorithm/string.hpp>
 #include "OptionIO.h"
@@ -163,7 +163,6 @@ Geno::Geno(Pheno* pheno, Marker* marker) {
     }
 
     //open and check genotype files
-    openGFiles();
 
     this->pheno = pheno;
     this->marker = marker;
@@ -171,44 +170,15 @@ Geno::Geno(Pheno* pheno, Marker* marker) {
     //this->sampleKeepIndex = pheno->get_index_keep();
 
     //register format handlers
-    preProcessFuncs["BED"] = &Geno::preProcess_bed;
-    preProcessFuncs["BGEN"] = &Geno::preProcess_bgen;
 
-    getGenoArrayFuncs["BED"] = &Geno::getGenoArray_bed;
-    getGenoArrayFuncs["BGEN"] = &Geno::getGenoArray_bgen;
 
-    endProcessFuncs["BED"] = &Geno::endProcess_bed;
-    endProcessFuncs["BGEN"] = &Geno::endProcess_bgen;
 
-    // register format handlers subset manner
-    preGenoDoubleFuncs["BED"] = &Geno::preGenoDouble_bed;
-    preGenoDoubleFuncs["PGEN"] = &Geno::preGenoDouble_bed;
-    preGenoDoubleFuncs["BGEN"] = &Geno::preGenoDouble_bgen;
-
-    getGenoDoubleFuncs["BED"] = &Geno::getGenoDouble_bed;
-    getGenoDoubleFuncs["PGEN"] = &Geno::getGenoDouble_bed;
+    // register getGenoDouble dispatch (fix PGEN bug: was aliased to BED)
+    getGenoDoubleFuncs["BED"]  = &Geno::getGenoDouble_bed;
+    getGenoDoubleFuncs["PGEN"] = &Geno::getGenoDouble_pgen;
     getGenoDoubleFuncs["BGEN"] = &Geno::getGenoDouble_bgen;
-
-    endGenoDoubleFuncs["BED"] = &Geno::endGenoDouble_bed;
-    endGenoDoubleFuncs["PGEN"] = &Geno::endGenoDouble_bed;
-    endGenoDoubleFuncs["BGEN"] = &Geno::endGenoDouble_bgen;
-
-    readGenoFuncs["BED"] = &Geno::readGeno_bed;
-    readGenoFuncs["PGEN"] = &Geno::readGeno_bed;
-    readGenoFuncs["BGEN"] = &Geno::readGeno_bgen;
-    
-    //BED legacy codes
-    num_raw_sample = pheno->count_raw();
-    num_byte_per_marker = (num_raw_sample + 3) / 4;
-    num_byte_buffer = num_byte_per_marker * Constants::NUM_MARKER_READ;
-    last_byte_NA_sample = (4 - (num_raw_sample % 4)) % 4;
-
-    /*
-    if(options.find("bed_file") != options.end()
-            || options.find("m_file") != options.end()){
-        check_bed();
-    }
-    */
+    // preGenoDouble*/endGenoDouble*/readGeno* maps removed:
+    // those are now handled by BedBackend / BgenBackend / PgenBackend.
 
     string alleleFileName = "";
     if(options.find("update_freq_file") != options.end()){
@@ -268,31 +238,6 @@ Geno::Geno(Pheno* pheno, Marker* marker) {
 }
 
 Geno::~Geno(){
-    if(asyncBuffer)delete asyncBuffer;
-    if(keep_mask)delete[] keep_mask;
-    if(keep_male_mask) delete[] keep_male_mask;
-}
-
-void Geno::init_keep(){
-    num_keep_sample = pheno->count_keep();
-    total_markers = 2 * num_keep_sample;
-    num_byte_keep_geno1 = (num_keep_sample + 3) / 4;
-    num_item_1geno = (num_keep_sample + 31) / 32;
-    num_item_geno_buffer = num_item_1geno * Constants::NUM_MARKER_READ;
-
-    if(keep_mask) delete[] keep_mask;
-    keep_mask = new uint64_t[(num_raw_sample + 63)/64]();
-    pheno->getMaskBit(keep_mask);
-
-    isX = false;
-    if(keep_male_mask) delete[] keep_male_mask;
-    if(options.find("sex") != options.end()){
-        isX = true;
-        num_male_keep_sample = pheno->count_male();
-        total_markers -= pheno->count_male();
-        keep_male_mask = new uint64_t[(num_keep_sample + 63)/64]();
-        pheno->getMaskBitMale(keep_male_mask);
-    }
 }
 
 uint32_t Geno::getTotalMarker(){
@@ -310,69 +255,75 @@ void Geno::setSexMode(){
 
 
 //
-//true:  filtered; flase: not neccesory to filter
+//true:  filtered; false: not necessary to filter
 bool Geno::filterMAF(){
     if((options_d["min_maf"] != 0.0) || (options_d["max_maf"] != 0.5)){
         LOGGER.i(0, "Computing allele frequencies...");
-        vector<function<void (uint64_t *, int)>> callBacks;
-        callBacks.push_back(bind(&Geno::freq64, this, _1, _2));
-        loop_64block(this->marker->get_extract_index(), callBacks);
-        // We adopt the EPSILON from plink, because the double value may have some precision issue;
-        double min_maf = options_d["min_maf"] * (1.0 - Constants::SMALL_EPSILON);
-        double max_maf = options_d["max_maf"] * (1.0 + Constants::SMALL_EPSILON);
-        LOGGER.d(0, "min_maf: " + to_string(min_maf) + " max_maf: " + to_string(max_maf));
+
+        int N = static_cast<int>(marker->count_extract());
+        AFA1.assign(N, 0.0);
+        countMarkers.assign(N, 0);
+        vector<uint32_t> extractIdx(N);
+        std::iota(extractIdx.begin(), extractIdx.end(), 0);
+
+        // Temporarily open all filters so getGenoDouble computes AF for every
+        // marker regardless of MAF/missingness thresholds.
+        double sv_min = min_maf, sv_max = max_maf, sv_miss = dFilterMiss;
+        min_maf = 0.0; max_maf = 1.0; dFilterMiss = 0.0;
+
+        loopDouble(extractIdx, Constants::NUM_MARKER_READ, false, false, false, false,
+            {[this](uintptr_t *buf, const vector<uint32_t> &exIdx) {
+                int n = static_cast<int>(exIdx.size());
+                #pragma omp parallel for schedule(static)
+                for(int i = 0; i < n; ++i){
+                    GenoBufItem item;
+                    item.extractedMarkerIndex = exIdx[i];
+                    getGenoDouble(buf, i, &item);
+                    if(item.valid){
+                        AFA1[exIdx[i]]         = item.af;
+                        countMarkers[exIdx[i]] = item.nValidAllele;
+                    }
+                }
+            }}, false);
+
+        min_maf = sv_min; max_maf = sv_max; dFilterMiss = sv_miss;
+
+        // Apply MAF filter
+        double min_maf_eps = options_d["min_maf"] * (1.0 - Constants::SMALL_EPSILON);
+        double max_maf_eps = options_d["max_maf"] * (1.0 + Constants::SMALL_EPSILON);
+        LOGGER.d(0, "min_maf: " + to_string(min_maf_eps) + " max_maf: " + to_string(max_maf_eps));
         vector<uint32_t> extract_index;
         double cur_AF;
 
-        for(int index = 0; index != AFA1.size(); index++){
+        for(int index = 0; index != static_cast<int>(AFA1.size()); index++){
             cur_AF = AFA1[index];
             if(cur_AF > 0.5) cur_AF = 1.0 - cur_AF;
-            if((cur_AF > min_maf) && (cur_AF < max_maf)){
+            if((cur_AF > min_maf_eps) && (cur_AF < max_maf_eps)){
                 extract_index.push_back(index);
                 LOGGER.d(0, to_string(index) + ": " + to_string(cur_AF));
             }
         }
 
         vector<double> AFA1o = AFA1;
-        //vector<uint32_t> countA1A1o = countA1A1;
-        //vector<uint32_t> countA1A2o = countA1A2;
-        //vector<uint32_t> countA2A2o = countA2A2;
         vector<uint32_t> countMarkerso = countMarkers;
-        //vector<double> RDevo = RDev;
 
         AFA1.resize(extract_index.size());
-        //countA1A1.resize(extract_index.size());
-        //countA1A2.resize(extract_index.size());
-        //countA2A2.resize(extract_index.size());
         countMarkers.resize(extract_index.size());
-        //RDev.resize(extract_index.size());
 
         #pragma omp parallel for
         for(uint32_t index = 0; index < extract_index.size(); index++){
             uint32_t cur_index = extract_index[index];
-            AFA1[index] = AFA1o[cur_index];
-            //countA1A1[index] = countA1A1[cur_index];
-            //countA1A2[index] = countA1A2[cur_index];
-            //countA2A2[index] = countA2A2[cur_index];
+            AFA1[index]        = AFA1o[cur_index];
             countMarkers[index] = countMarkerso[cur_index];
-            //RDev[index] = RDevo[cur_index];
         }
 
         marker->keep_extracted_index(extract_index);
 
-        //init_AsyncBuffer();
-        num_blocks = marker->count_extract() / Constants::NUM_MARKER_READ +
-                     (marker->count_extract() % Constants::NUM_MARKER_READ != 0);
-        //LOGGER << "num_blocks: " << num_blocks << ", count extract: " << marker->count_extract() << std::endl;
         LOGGER.i(0, to_string(extract_index.size()) + " SNPs remain from --maf or --max-maf,  ");
-        num_marker_freq = extract_index.size();
-        bFreqFiltered = true;
-        num_finished_markers = 0;
         return true;
     }else{
         return false;
     }
-
 }
 
 void Geno::init_AF(string alleleFileName) {
@@ -433,21 +384,7 @@ void Geno::init_AF(string alleleFileName) {
         if(filterByMaf)LOGGER << "  " << extract_index.size() << " SNPs remain after MAF filtering." << std::endl;
         bHasPreAF = true;
     }
-
-    //init_AsyncBuffer();
-    num_blocks = marker->count_extract() / Constants::NUM_MARKER_READ +
-        (marker->count_extract() % Constants::NUM_MARKER_READ != 0);
-
-    
 }
-
-void Geno::init_AsyncBuffer(){
-    if(asyncBuffer){
-        delete asyncBuffer;
-    }
-    asyncBuffer = new AsyncBuffer<uint8_t>(num_byte_buffer);
-}
-
 
 void Geno::out_freq(string filename){
     string name_frq = filename + ".frq";
@@ -466,365 +403,43 @@ void Geno::out_freq(string filename){
     LOGGER.i(0, "Allele frequencies of " + to_string(AFA1.size()) + " SNPs have been saved in the file [" + name_frq + "]");
 }
 
-bool Geno::check_bed(){
-    bool has_error = false;
-    FILE *pFile;
-    uint64_t f_size;
-    uint8_t buffer[3];
-    string message;
-    uint32_t previous_size  = 0;
-
-    for(int i = 0; i < geno_files.size(); i++){
-        string bed_file = geno_files[i];
-        uint32_t cur_size =  marker->count_raw(i);
-
-        pFile = fopen(bed_file.c_str(), "rb");
-        if(pFile == NULL){
-            has_error = true;
-            message += "Can't open [" + bed_file + "] to read.\n";
-            previous_size = cur_size;
-            continue;
-        }
-        fseek(pFile, 0, SEEK_END);
-        f_size = ftell(pFile);
-        rewind(pFile);
-
-        if((f_size - 3) != ((uint64_t)num_byte_per_marker) * (cur_size - previous_size)){
-            has_error = true;
-            message += "Invalid bed file [" + bed_file +
-                "]. The sample and SNP number in bed file are different from bim and fam file.\n";
-            previous_size = cur_size;
-            continue;
-        }
-
-        size_t read_count = fread(buffer, 1, 3, pFile);
-        fclose(pFile);
-        if((read_count != 3) &&
-                (*buffer != 0x6c) &&
-                (*(buffer+1) != 0x1b) &&
-                (*(buffer+2) != 0x01)){
-            has_error = true;
-            message += "Invalid bed file [" + bed_file +
-                "], please convert it into new format (SNP major).\n";
-        }
-        previous_size = cur_size;
-    }
-
-    //delete[] buffer;
-    if(has_error){
-        LOGGER.e(0, message);
-    }else{
-        LOGGER.i(0, "BED file(s) check OK.");
-    }
-    return has_error;
+bool Geno::getGenoHasInfo(){
+    return hasInfo;
 }
 
-void Geno::read_bed(const vector<uint32_t> &raw_marker_index){
-
-    // init start index for each file
-    vector<int32_t> pos;
-    pos.push_back(-1);
-    for(int i = 0; i != geno_files.size() - 1; i++){
-        pos.push_back(marker->count_raw(i) - 1);
-    }
-
-    //init files handles;
-    vector<FILE *> pFiles;
-    for(auto & cur_bed_file : geno_files){
-        FILE *pFile = fopen(cur_bed_file.c_str(), "rb");
-        if(pFile == NULL){
-            LOGGER.e(0, "can't open [" + cur_bed_file + "] to read.");
-        }
-
-        fseek(pFile, 3, SEEK_SET);
-        pFiles.push_back(pFile);
-    }
-
-    uint8_t *w_buf = NULL;
-    int num_marker_read = 0;
-    bool bNewWrite = true;
-    for(auto & cur_marker_index : raw_marker_index){
-        if(bNewWrite){
-            w_buf = asyncBuffer->start_write();
-            bNewWrite = false;
-        }
-        int cur_file_index = marker->getMIndex(cur_marker_index);
-        FILE * pFile = pFiles[cur_file_index];
-        int32_t lag_index = cur_marker_index - pos[cur_file_index];
-        //very arbitary number to skip
-        if(lag_index > 10){
-            fseek(pFile, ((uint64_t)lag_index - 1) * num_byte_per_marker, SEEK_CUR);
-        }else{
-            for(int32_t ab_index = 1; ab_index < lag_index; ab_index++){
-                if(fread(w_buf, 1, num_byte_per_marker, pFile) != num_byte_per_marker){
-                    LOGGER.e(0, "error in reading data from [" + geno_files[cur_file_index] + "].\nThere might be some problems with your storage, or have you changed the files?");
-                }
-            }
-        }
-
-
-        size_t read_count = fread(w_buf, 1, num_byte_per_marker, pFile);
-        if(read_count != num_byte_per_marker){
-            LOGGER.e(0, "error in reading data from [" + geno_files[cur_file_index] + "].\nThere might be some problems with your storage, or the files have been changed?");
-        }
-        w_buf += num_byte_per_marker;
-        pos[cur_file_index] = cur_marker_index;
-
-        num_marker_read += 1;
-        if(num_marker_read == Constants::NUM_MARKER_READ){
-            asyncBuffer->end_write();
-            bNewWrite = true;
-            num_marker_read = 0;
-        }
-    }
-
-    if(!bNewWrite){
-        asyncBuffer->end_write();
-    }
-
-    for(auto & pFile : pFiles){
-        fclose(pFile);
-    }
-
+void Geno::setGRMMode(bool grm, bool dominace){
+    this->bGRM = grm;
+    this->bGRMDom = dominace;
 }
 
-void Geno::preGenoDouble(int numMarkerBuf, bool bMakeGeno, bool bGenoCenter, bool bGenoStd, bool bMakeMiss){
-    sampleKeepIndex = pheno->get_index_keep();
-    keepSampleCT = sampleKeepIndex.size();
-    rawSampleCT = pheno->count_raw();
-    numMarkerBlock = numMarkerBuf;
-    //sex mode
-    keepSexIndex = pheno->getSexValidRawIndex();
-    keepMaleIndex = pheno->getMaleRawIndex();
-    keepMaleExtractIndex = pheno->getMaleExtractIndex();
-    keepSexSampleCT = keepSexIndex.size();
-    keepMaleSampleCT = keepMaleIndex.size();
-
-    this->bMakeGeno = bMakeGeno;
-    this->bGenoCenter = bGenoCenter;
-    this->bGenoStd = bGenoStd;
-    this->bMakeMiss = bMakeMiss;
-
-    numMarkersReadBlocks.resize(3);
-    isMarkersSexXYs.resize(3);
-    fileIndexBuf.resize(3);
- 
-    (this->*preGenoDoubleFuncs[genoFormat])();
-    
-    //init base SNP each file for read
-    baseIndexLookup.clear();
-    baseIndexLookup.push_back(0);
-    int32_t sumIndex = 0;
-    for(int i = 0; i < geno_files.size() - 1; i++){
-        sumIndex += rawCountSNPs[i];
-        baseIndexLookup.push_back(sumIndex);
-    }
-
-    missPtrSize = PgenReader::GetSubsetMaskSize(keepSampleCT);
-}
-
-//void Geno::loopDouble(const vector<uint32_t> &extractIndex, )
-
-void Geno::preGenoDouble_pgen(){
-    hasInfo = false;
-    compressFormats.clear();
-    rawCountSamples.clear();
-    rawCountSNPs.clear();
- 
-    for(int i = 0; i < geno_files.size(); i++){
-        MarkerParam curParam = marker->getMarkerParams(i); 
-        compressFormats.push_back(curParam.compressFormat);
-        rawCountSamples.push_back(rawSampleCT);
-        rawCountSNPs.push_back(curParam.rawCountSNP);
-    }
-
-    // raw genotype buffer size, alligned
-    pgenGenoPtrSize = (PgenReader::GetGenoBufPtrSize(keepSampleCT) + 63) / 64 * 64;
-    pgenDosageMainPtrSize = (PgenReader::GetDosageMainSize(keepSampleCT) + 63)/64 * 64; 
-    pgenDosagePresentPtrSize = (PgenReader::GetDosagePresentSize(keepSampleCT) + 63)/64 * 64;
-
-    pgenGenoBuf1PtrSize = (pgenGenoPtrSize + pgenDosageMainPtrSize + pgenDosagePresentPtrSize + 1 + 63) /64 * 64;
-    asyncBuf64 = new AsyncBuffer<uintptr_t>(pgenGenoBuf1PtrSize * numMarkerBlock);
-    if(!asyncBuf64->init_status()){
-        LOGGER.e(0, "can't allocate enough memory to read genotype.");
-    }
-}
-
-void Geno::preGenoDouble_bed(){
-    hasInfo = false;
-    numBytePerMarker = (rawSampleCT + 3) / 4; 
-    //checking the bed files
-
-    compressFormats.clear();
-    rawCountSamples.clear();
-    rawCountSNPs.clear();
-
-    for(int i = 0; i < geno_files.size(); i++){
-        MarkerParam curParam = marker->getMarkerParams(i); 
-        compressFormats.push_back(curParam.compressFormat);
-        rawCountSamples.push_back(rawSampleCT);
-        rawCountSNPs.push_back(curParam.rawCountSNP);
-    }
-
-    // raw genotype buffer size
-    uint32_t raw_sample_ct = rawSampleCT;
-    bedRawGenoBuf1PtrSize = PgenReader::GetGenoBufPtrSize(raw_sample_ct);
-    asyncBuf64 = new AsyncBuffer<uintptr_t>(bedRawGenoBuf1PtrSize * numMarkerBlock);
-    if(!asyncBuf64->init_status()){
-        LOGGER.e(0, "can't allocate enough memory to read genotype.");
-    }
-
-
-    maskPtrSize = PgenReader::GetSubsetMaskSize(raw_sample_ct);
-    size_t maskAllocBytes = static_cast<size_t>(maskPtrSize) * sizeof(uintptr_t);
-    posix_memalign(reinterpret_cast<void**>(&keepMaskPtr),     32, maskAllocBytes);
-    posix_memalign(reinterpret_cast<void**>(&keepMaskInterPtr), 32, maskAllocBytes);
-    PgenReader::SetSampleSubsets(sampleKeepIndex, raw_sample_ct, keepMaskPtr, keepMaskInterPtr);
-
-    posix_memalign(reinterpret_cast<void**>(&sexMaskPtr),      32, maskAllocBytes);
-    posix_memalign(reinterpret_cast<void**>(&sexMaskInterPtr),  32, maskAllocBytes);
-    PgenReader::SetSampleSubsets(keepSexIndex, raw_sample_ct, sexMaskPtr, sexMaskInterPtr);
-
-    posix_memalign(reinterpret_cast<void**>(&maleMaskPtr),     32, maskAllocBytes);
-    posix_memalign(reinterpret_cast<void**>(&maleMaskInterPtr), 32, maskAllocBytes);
-    PgenReader::SetSampleSubsets(keepMaleIndex, raw_sample_ct, maleMaskPtr, maleMaskInterPtr);
-
-}
-
-void Geno::preGenoDouble_bgen(){
-    hasInfo = true;
-
-    compressFormats.clear();
-    rawCountSamples.clear();
-    rawCountSNPs.clear();
-    for(int i = 0; i < geno_files.size(); i++){
-        MarkerParam curParam = marker->getMarkerParams(i); 
-        if(curParam.rawCountSample != pheno->count_raw()){
-            LOGGER.e(0, "inconsistent sample sizes between the .bgen file [" + geno_files[i] + "] and the .sample file (specified by --sample).");
-        }
-        compressFormats.push_back(curParam.compressFormat);
-        rawCountSamples.push_back(curParam.rawCountSample);
-        rawCountSNPs.push_back(curParam.rawCountSNP);
-    }
-
-
-    bgenRawGenoBuf1PtrSize = marker->getMaxGenoMarkerUptrSize();
-    asyncBuf64 = new AsyncBuffer<uintptr_t>(bgenRawGenoBuf1PtrSize * numMarkerBlock);
-    if(!asyncBuf64->init_status()){
-        LOGGER.e(0, "can't allocate enough memory to read genotype.");
-    }
- 
-
-}
-
-int nextBufIndex(int curIndex){
-    return (curIndex + 1) % 3;
-}
-
-
-void Geno::readGeno(const vector<uint32_t> &extractIndex){
-    (this->*readGenoFuncs[genoFormat])(extractIndex);
-}
-
-void Geno::readGeno_bed(const vector<uint32_t> &extractIndex){
-    const vector<uint32_t> raw_marker_index = marker->get_extract_index();
-    vector<uint32_t> rawIndices(extractIndex.size());
-    std::transform(extractIndex.begin(), extractIndex.end(), rawIndices.begin(), 
-            [&raw_marker_index](size_t pos){return raw_marker_index[pos];});
-
-    uintptr_t *g_buf = NULL;
-    uint32_t numMarker = extractIndex.size();
-    uint32_t finishedMarker = 0;
-    uint32_t nextSize;
-    int preFileIndex = -1;
-    int fileIndex = 0;
-    int base_index = baseIndexLookup[fileIndex];
-    PgenReader reader;
-    bool chr_ends;
-    uint8_t isSexXY;
-    int curWriteBufIndex = 0;
-    //std::ofstream oidx("rawidx.snplist");
-    while(finishedMarker != numMarker && (nextSize = marker->getNextSize(rawIndices, finishedMarker, numMarkerBlock,fileIndex, chr_ends, isSexXY)) != 0){
-        g_buf = asyncBuf64->start_write();
-        for(int i = 0; i < nextSize; i++){
-            int processIndex = finishedMarker + i;
-            int rawIndex = rawIndices[processIndex];
-            //oidx << rawIndex << "\n";
-            int curExtractIndex = extractIndex[processIndex];
-            if(preFileIndex != fileIndex){
-                //LOGGER << "reading " << fileIndex << ", sample: " << rawCountSamples[fileIndex] << ", marker: " << rawCountSNPs[fileIndex] << std::endl;
-                reader.Load(geno_files[fileIndex], &rawCountSamples[fileIndex], &rawCountSNPs[fileIndex], sampleKeepIndex);
-                base_index = baseIndexLookup[fileIndex];
-                preFileIndex = fileIndex;
-            }
-            int lag_index = rawIndex - base_index;
-            //int al_idx = marker->isEffecRevRaw(rawIndex) ? 0 : 1;
-            reader.ReadRawFullHard(g_buf, lag_index);
-
-            g_buf += bedRawGenoBuf1PtrSize;
-        }
-
-        finishedMarker += nextSize;
-        numMarkersReadBlocks[curWriteBufIndex] = nextSize;
-        isMarkersSexXYs[curWriteBufIndex] = isSexXY;
-        fileIndexBuf[curWriteBufIndex] = fileIndex;
-        asyncBuf64->end_write();
-        curWriteBufIndex = nextBufIndex(curWriteBufIndex);
-    }
-    //oidx.close();
-}
-
-void Geno::readGeno_pgen(const vector<uint32_t> &extractIndex){
-    const vector<uint32_t> raw_marker_index = marker->get_extract_index();
-    vector<uint32_t> rawIndices(extractIndex.size());
-    std::transform(extractIndex.begin(), extractIndex.end(), rawIndices.begin(), 
-            [&raw_marker_index](size_t pos){return raw_marker_index[pos];});
-
-    uintptr_t *g_buf = NULL;
-    uint32_t numMarker = extractIndex.size();
-    uint32_t finishedMarker = 0;
-    uint32_t nextSize;
-    int preFileIndex = -1;
-    int fileIndex = 0;
-    int base_index = baseIndexLookup[fileIndex];
-    PgenReader reader;
-    bool chr_ends;
-    uint8_t isSexXY;
-    int curWriteBufIndex = 0;
-    while((finishedMarker != numMarker) && (nextSize = marker->getNextSize(rawIndices, finishedMarker, numMarkerBlock,fileIndex, chr_ends, isSexXY)) != 0){
-        g_buf = asyncBuf64->start_write();
-        //LOGGER << "before: " << (void*)g_buf << std::endl;
-        for(int i = 0; i < nextSize; i++){
-            int processIndex = finishedMarker + i;
-            int rawIndex = rawIndices[processIndex];
-            int curExtractIndex = extractIndex[processIndex];
-            if(preFileIndex != fileIndex){
-                reader.Load(geno_files[fileIndex], &rawCountSamples[fileIndex], &rawCountSNPs[fileIndex], sampleKeepIndex);
-                base_index = baseIndexLookup[fileIndex];
-                preFileIndex = fileIndex;
-            }
-            int lag_index = rawIndex - base_index;
-            int al_idx = marker->isEffecRevRaw(rawIndex) ? 0 : 1;
-            reader.ReadDosage(g_buf, lag_index, al_idx);
-            g_buf += pgenGenoBuf1PtrSize;
-        }
-
-        finishedMarker += nextSize;
-        numMarkersReadBlocks[curWriteBufIndex] = nextSize;
-        isMarkersSexXYs[curWriteBufIndex] = isSexXY;
-        fileIndexBuf[curWriteBufIndex] = fileIndex;
-        asyncBuf64->end_write();
-        curWriteBufIndex = nextBufIndex(curWriteBufIndex);
-    }
+void Geno::setGenoItemSize(uint32_t &genoSize, uint32_t &missSize){
+    genoSize = keepSampleCT;
+    missSize = missPtrSize;
 }
 
 void Geno::getGenoDouble(uintptr_t *buf, int bufIndex, GenoBufItem* gbuf){
     (this->*getGenoDoubleFuncs[genoFormat])(buf, bufIndex, gbuf);
 }
 
-void Geno::setGenoItemSize(uint32_t &genoSize, uint32_t &missSize){
-    genoSize = keepSampleCT;
-    missSize = missPtrSize;
+void Geno::setMaleWeight(double &weight, bool &needWeight){
+    weight = 1.0;
+    if(bGRM){
+        weight = sqrt(0.5);
+        if(iGRMdc == 1){
+            weight *= sqrt(2.0);
+        }else if(iGRMdc == 0){
+            weight *= sqrt(0.5);
+        }
+    }else{
+        if(iDC == 0){
+            weight = 0.5;
+        }
+    }
+    if(std::abs(weight - 1.0) > 1e-6){
+        needWeight = true;
+    }else{
+        needWeight = false;
+    }
 }
 
 void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
@@ -862,8 +477,6 @@ void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
         gbuf->sd = std;
 
         if(bMakeGeno){
-            // get get genotype in lookup table
-            
             if(isSexXY == 1){
                 double weight;
                 bool needWeight;
@@ -878,7 +491,6 @@ void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
         if(bMakeMiss){
             gbuf->missing.resize(missPtrSize, 0);
         }
-
     }
 }
 
@@ -892,12 +504,6 @@ void Geno::getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf){
     }else{
         string errmsg;
         hasNoHET = PgenReader::CountHardFreqMissExtX(cur_buf, keepMaskInterPtr, maleMaskInterPtr, rawSampleCT, keepSampleCT, keepMaleSampleCT, &snpinfo, errmsg, iDC==1, f_std);
-        /*
-            if(errmsg == "het"){
-                LOGGER.e(0, "found heterozygote coding (=1) on ChrX (23) for male samples. GCTA treats ChrX (23) as non-PAR and codes male genotype on ChrX as either 0 or 2. \nPlease check the gender information in your genotype file, or use PLINK --split-x to separate the ChrX into non-PAR (chr23) and PAR (chr25) regions for further analysis.\nThe non-PAR region is assumed to have the dosage compensation issue, and you can specify it with the --dc flag, with 0: no compensation, and 1: dosage compensation (the default is 1 in GCTA).");
-            }
-        }
-        */
     }
     uint32_t curExtractIndex = gbuf->extractedMarkerIndex;
     bool isEffRev = marker->isEffecRev(curExtractIndex);
@@ -957,7 +563,7 @@ void Geno::getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                     na = (mu - center_value) * rdev;
                }else{
                    double psq = 0.5 * mu * mu;
-                   if(bGenoCenter)center_value = psq; // psq
+                   if(bGenoCenter)center_value = psq;
                    if(bGenoStd){
                        rdev = 1.0 / sd;
                    }
@@ -981,18 +587,7 @@ void Geno::getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                     pmiss = gbuf->missing.data();
                 }
                 PgenReader::ExtractDoubleExt(cur_buf, keepMaskPtr, rawSampleCT, keepSampleCT, lookup, gbuf->geno.data(), pmiss); 
-                // adjust for chr X;
                 if(isSexXY == 1){
-                    /* don't set to missing
-                    if(!hasNoHET){
-                        for(int i = 0 ; i < keepMaleSampleCT; i++){
-                            uint32_t curMaleIndex = keepMaleExtractIndex[i];
-                            if(gbuf->geno[curMaleIndex] == a1){
-                                gbuf->geno[curMaleIndex] = na;
-                            }
-                        }
-                    }
-                    */
                     double weight;
                     bool needWeight;
                     setMaleWeight(weight, needWeight);
@@ -1010,88 +605,12 @@ void Geno::getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                             }
                         }
                     }
-
-                    
                 }
             }
             return;
         }
     }
     gbuf->valid = false;
-}
-
-void Geno::readGeno_bgen(const vector<uint32_t> &extractIndex){
-    const vector<uint32_t> raw_marker_index = marker->get_extract_index();
-    vector<uint32_t> rawIndices(extractIndex.size());
-    std::transform(extractIndex.begin(), extractIndex.end(), rawIndices.begin(), 
-            [&raw_marker_index](size_t pos){return raw_marker_index[pos];});
-
-    openGFiles();
-
-    uintptr_t *g_buf = NULL;
-    uint32_t numMarker = extractIndex.size();
-    uint32_t finishedMarker = 0;
-    uint32_t nextSize;
-    int fileIndex = 0;
-    bool chr_ends;
-    uint8_t isSexXY;
-    int curWriteBufIndex = 0;
-    while(finishedMarker != numMarker && (nextSize = marker->getNextSize(rawIndices, finishedMarker, numMarkerBlock,fileIndex, chr_ends, isSexXY)) != 0){
-        g_buf = asyncBuf64->start_write();
-        FILE *bgenFile = gFiles[fileIndex];
-        for(int i = 0; i < nextSize; i++){
-            int processIndex = finishedMarker + i;
-            int rawIndex = rawIndices[processIndex];
-
-            uint64_t pos, size;
-            marker->getStartPosSize(rawIndex, pos, size);
-            fseek(bgenFile, pos, SEEK_SET);
-            if(fread(g_buf, sizeof(char), size, bgenFile) != size){
-                int lag_index = rawIndex - baseIndexLookup[fileIndex];
-                LOGGER.e(0, "can't read " + to_string(lag_index) + "th SNP in [" + geno_files[fileIndex] + "].");
-            }
-            g_buf += bgenRawGenoBuf1PtrSize;
-        }
-
-        finishedMarker += nextSize;
-        numMarkersReadBlocks[curWriteBufIndex] = nextSize;
-        isMarkersSexXYs[curWriteBufIndex] = isSexXY;
-        fileIndexBuf[curWriteBufIndex] = fileIndex;
-        asyncBuf64->end_write();
-        curWriteBufIndex = nextBufIndex(curWriteBufIndex);
-    }
-}
-
-void Geno::setMaleWeight(double &weight, bool &needWeight){
-    weight = 1.0;
-    if(bGRM){ // GRM 
-        weight = sqrt(0.5);
-        if(iGRMdc == 1){
-            weight *= sqrt(2.0);
-        }else if(iGRMdc == 0){
-            weight *= sqrt(0.5);
-        }
-    }else{
-        if(iDC == 0){
-            weight = 0.5;
-        }
-        /*
-           if(!bGenoStd){
-           if(iDC == 0){
-           weight = 0.5;
-           }
-           }else{
-           if(iDC == 0){
-           weight = sqrt(0.5);
-           }
-           }
-           */
-    }
-    if(std::abs(weight - 1.0) > 1e-6){
-        needWeight = true;
-    }else{
-        needWeight = false;
-    }
 }
 
 void calDosage_bgen(uint32_t prob1, uint32_t prob2, uint64_t &dosage, uint32_t &prob1d){
@@ -1104,11 +623,9 @@ void calDosagePhase_bgen(uint32_t prob1, uint32_t prob2, uint64_t &dosage, uint3
     prob1d = 2 * prob1 * prob2;
 }
 
-
 void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
     SNPInfo snpinfo;
     uintptr_t *cur_buf = buf + idx * bgenRawGenoBuf1PtrSize;
-    // skip the header
     uint8_t *curbuf = (uint8_t*)cur_buf;
     int fileIndex = fileIndexBuf[curBufferIndex];
 
@@ -1116,22 +633,13 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
 
     uint16_t L16;
     uint32_t L32;
-    //skip Lid
     memcpy(&L16, curbuf, sizeof(L16));
     curbuf += sizeof(L16) + L16;
-
-    //skip rs
     memcpy(&L16, curbuf, sizeof(L16));
     curbuf += sizeof(L16) + L16;
-
-    //skip chr
     memcpy(&L16, curbuf, sizeof(L16));
     curbuf += sizeof(L16) + L16;
-
-    //skip pos
     curbuf += sizeof(uint32_t);
-
-        // skip n allels
     memcpy(&L16, curbuf, sizeof(L16));
     curbuf += sizeof(L16);
     for(int i = 0; i < L16; i++){
@@ -1163,7 +671,6 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                 LOGGER.e(0, "decompressing genotype data error in " + error_promp); 
             }
         }else if(compressFormat == 2){
-            //zstd  
             uint64_t const rSize = ZSTD_getFrameContentSize((void*)curbuf, curCompSize);
             switch(rSize){
                 case ZSTD_CONTENTSIZE_ERROR:
@@ -1177,7 +684,6 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                 LOGGER.e(0, "size stated in the compressed file is different from " + error_promp);
             }
             size_t const dSize = ZSTD_decompress((void *)dec_data, len_decomp, (void*)curbuf, curCompSize); 
-
             if(ZSTD_isError(dSize)){
                 LOGGER.e(0, "decompressing genotype error: " + string(ZSTD_getErrorName(dSize)) + " in " + error_promp);
             }
@@ -1197,10 +703,9 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
         LOGGER.e(0, "multi-allelic SNPs detected in " + error_promp);
     }
 
-    uint8_t min_ploidy = *(uint8_t *)(dec_data + 6);//2
-    uint8_t max_ploidy = *(uint8_t *)(dec_data + 7); //2
+    uint8_t min_ploidy = *(uint8_t *)(dec_data + 6);
+    uint8_t max_ploidy = *(uint8_t *)(dec_data + 7);
     uint8_t * sample_ploidy = (uint8_t *)(dec_data + 8);
-    //check all ploidy are 2 or not
     if(min_ploidy != 2){
         LOGGER.e(0, "multiploidy detected in " + error_promp);
     }
@@ -1232,12 +737,6 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
 
     uint32_t curSampleCT = keepSampleCT;
     vector<uint32_t> *curSampleIndexPtr = &sampleKeepIndex;
-    /* // use default female mode
-    if(isSexXY == 1){
-        curSampleCT = keepSexSampleCT;
-        curSampleIndexPtr = &keepSexIndex;
-    }
-    */
 
     for(int j = 0; j < curSampleCT; j++){
         uint32_t sindex = (*curSampleIndexPtr)[j];
@@ -1253,19 +752,12 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
             geno_temp = geno_temp >> (start_bits % CHAR_BIT);
             uint32_t prob1 = geno_temp & mask;
             uint32_t prob2 = (geno_temp >> bits_prob) & mask;
-            /*
-            uint32_t prob1d = prob1 * 2;
-            uint64_t dosage = prob1d + prob2;
-            */
             uint32_t prob1d;
             uint64_t dosage;
             calFunc(prob1, prob2, dosage, prob1d);
             dosages[j] = dosage;
             dosage_sum += dosage;
             dosage2_sum += dosage * dosage;
-
-            //uint64_t fij = dosage + prob1d;
-            //fij_sum += fij;
             fij_sum += prob1d;
             validN++;
             validAllele += 2;
@@ -1274,7 +766,6 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
         }
     }
 
-    
     double dosage_sum_half = dosage_sum;
     double dosage2_sum_half = dosage2_sum;
     if(isSexXY == 1){
@@ -1288,32 +779,20 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                 geno_temp = geno_temp >> (start_bits % CHAR_BIT);
                 uint32_t prob1 = geno_temp & mask;
                 uint32_t prob2 = (geno_temp >> bits_prob) & mask;
-                // check prob2 equal to 0 in male?
-                /*
-                uint32_t prob1d = prob1 * 2;
-                uint64_t dosage = prob1d + prob2;
-                */
-                //dosages[j] = dosage;
                 uint32_t prob1d;
                 uint64_t dosage;
                 calFunc(prob1, prob2, dosage, prob1d);
                 uint32_t prob1_true = prob1d / 2;
                 dosage_sum_half -= prob1_true;
                 dosage2_sum_half -= (dosage * dosage - (uint64_t)prob1_true * prob1_true);
-                //dosage_sum -= (prob1 + prob2);
-                //dosage2_sum -= (dosage * dosage - (uint64_t)prob1 * prob1);
-                //
-                //fij_sum -= prob1_true;
                 validAllele--;
             }
         }
     }
 
-
     if(compressFormat != 0){
         delete[] dec_data;
     }
-
 
     double maskd = (double)mask;
     double af = (double)dosage_sum_half / maskd / validAllele;
@@ -1349,13 +828,11 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
             mean = dos_double / validN;
             std = ((double)dosage2_sum_half / mask2 - dos_double * mean)/(validN - 1);
         }
- 
     }
 
     double maf = std::min(af, 1.0 - af);
     if(maf >= min_maf && maf <= max_maf){
         double nMissRate = 1.0*validN / curSampleCT;
-        //LOGGER << "dFilterMiss: " << dFilterMiss << "*" << nMissRate << ", info: " << dFilterInfo << "*" << info << ", " << std << std::endl; 
         if(nMissRate >= dFilterMiss && info >= dFilterInfo){
             gbuf->valid = true;
             gbuf->af = af;
@@ -1381,14 +858,13 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                     if(bGenoStd){
                         rdev = sqrt(1.0 / std);
                     }
-
                     for(uint32_t i = 0; i < max_dos; i++){
                         double tdos = (double)i / mask;
                         tdos = bEffRev ? (2.0 - tdos) : tdos;
                         dos_lookup[i] = (tdos - center_value) *rdev;
                     }
                     dos_lookup[max_dos] = ( mu - center_value) * rdev;
-                }else{// dominance
+                }else{
                     uint32_t cut05 = ceil(0.5 * mask);
                     uint32_t cut15 = ceil(1.5 * mask);
                     double psq = 0.5 * mu * mu;
@@ -1397,7 +873,7 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                     double dos10 = bEffRev ? 0.0 : (2.0 * mu - 2.0);
                     double dosna = psq;
 
-                    if(bGenoCenter)center_value = psq; // psq
+                    if(bGenoCenter)center_value = psq;
                     if(bGenoStd){
                         rdev = 1.0 / std;
                     }
@@ -1415,7 +891,6 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                     for(uint32_t i = cut15; i < max_dos; i++){
                         dos_lookup[i] = a2;
                     }
-
                     dos_lookup[max_dos] = (dosna - center_value) * rdev;
                 }
 
@@ -1424,7 +899,6 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                     gbuf->geno[j] = dos_lookup[dosages[j]];
                 }
                 delete[] dos_lookup;
-                // adjust for chr X;
                 if(isSexXY == 1){
                     double weight;
                     bool needWeight;
@@ -1441,7 +915,6 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                                 gbuf->geno[curIndex] *= weight;
                                 gbuf->geno[curIndex] += correctWeight;
                             }
- 
                         }
                     }
                 }
@@ -1449,7 +922,7 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
             if(bMakeMiss){
                 gbuf->missing.resize(missPtrSize, 0); 
                 const int ptrsize = sizeof(uintptr_t) * CHAR_BIT;
-                for(int j = 0; j < miss_index.size(); j++){
+                for(int j = 0; j < (int)miss_index.size(); j++){
                     int cur_index = miss_index[j];
                     gbuf->missing[cur_index / ptrsize] |= (1UL << (cur_index % ptrsize));
                 }
@@ -1458,224 +931,125 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
         }
     }
     gbuf->valid = false;
- 
 }
 
-void Geno::setGRMMode(bool grm, bool dominace){
-    this->bGRM = grm;
-    this->bGRMDom = dominace;
-}
+void Geno::loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf,
+                      bool bMakeGeno, bool bGenoCenter, bool bGenoStd, bool bMakeMiss,
+                      vector<function<void(uintptr_t *buf, const vector<uint32_t> &exIndex)>> callbacks,
+                      bool showLog)
+{
+    // ── Common pre-logic (was in preGenoDouble) ──────────────────────────
+    sampleKeepIndex    = pheno->get_index_keep();
+    keepSampleCT       = sampleKeepIndex.size();
+    rawSampleCT        = pheno->count_raw();
+    numMarkerBlock     = numMarkerBuf;
+    keepSexIndex       = pheno->getSexValidRawIndex();
+    keepMaleIndex      = pheno->getMaleRawIndex();
+    keepMaleExtractIndex = pheno->getMaleExtractIndex();
+    keepSexSampleCT    = keepSexIndex.size();
+    keepMaleSampleCT   = keepMaleIndex.size();
+    this->bMakeGeno    = bMakeGeno;
+    this->bGenoCenter  = bGenoCenter;
+    this->bGenoStd     = bGenoStd;
+    this->bMakeMiss    = bMakeMiss;
 
-void Geno::endGenoDouble_bed(){
-    delete asyncBuf64;
-    posix_mem_free(keepMaskPtr);      keepMaskPtr = NULL;
-    posix_mem_free(keepMaskInterPtr); keepMaskInterPtr = NULL;
-    posix_mem_free(sexMaskPtr);       sexMaskPtr = NULL;
-    posix_mem_free(sexMaskInterPtr);  sexMaskInterPtr = NULL;
-    posix_mem_free(maleMaskPtr);      maleMaskPtr = NULL;
-    posix_mem_free(maleMaskInterPtr); maleMaskInterPtr = NULL;
-}
+    // ── Create format-specific backend (runs format pre-logic) ───────────
+    std::unique_ptr<GenoBackend> backend;
+    if (genoFormat == "BED") {
+        backend = makeBedBackend(*this);
+    } else if (genoFormat == "PGEN") {
+        backend = makePgenBackend(*this);
+    } else if (genoFormat == "BGEN") {
+        backend = makeBgenBackend(*this);
+    } else {
+        LOGGER.e(0, "loopDouble: unknown genotype format: " + genoFormat);
+    }
 
-void Geno::endGenoDouble(){
-    (this->*endGenoDoubleFuncs[genoFormat])();
-}
+    // ── Build baseIndexLookup (depends on rawCountSNPs set by backend) ───
+    baseIndexLookup.clear();
+    baseIndexLookup.push_back(0);
+    int32_t sumIndex = 0;
+    for (int i = 0; i < (int)geno_files.size() - 1; ++i) {
+        sumIndex += rawCountSNPs[i];
+        baseIndexLookup.push_back(sumIndex);
+    }
+    missPtrSize = PgenReader::GetSubsetMaskSize(keepSampleCT);
 
-
-void Geno::endGenoDouble_bgen(){
-    delete asyncBuf64;
-}
-
-void Geno::endGenoDouble_pgen(){
-    delete asyncBuf64;
-}
-
-bool Geno::getGenoHasInfo(){
-    return hasInfo;
-}
-
-void Geno::loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf, bool bMakeGeno, bool bGenoCenter, bool bGenoStd, bool bMakeMiss, vector<function<void (uintptr_t *buf, const vector<uint32_t> &exIndex)>> callbacks, bool showLog){
-   
-    preGenoDouble(numMarkerBuf, bMakeGeno, bGenoCenter, bGenoStd, bMakeMiss);
-    thread read_thread([this, &extractIndex](){this->readGeno(extractIndex);});
-    // main loop
-    LOGGER.ts("LOOP_GENO_PRE");
-    LOGGER.ts("LOOP_GENO_TOT");
-    int nTMarker = extractIndex.size();
-    uint32_t nFinishedMarker = 0;
-
-    int pre_block = 0;
+    // ── Single-slot block metadata (index 0 is always current block) ─────
+    isMarkersSexXYs.assign(1, 0);
+    fileIndexBuf.assign(1, 0);
     curBufferIndex = 0;
 
-    while(nFinishedMarker < nTMarker){
-       uintptr_t *r_buf = NULL;
-       bool isEOF = false;
-       std::tie(r_buf, isEOF) = asyncBuf64->start_read();
-       if(isEOF){
-           LOGGER.e(0, "the reading process reached to the end of the genotype file but couldn't finish.");
-       }
+    // ── Thread pools ──────────────────────────────────────────────────────
+    //    io_pool  : 1 thread — file handles and PgenReader are not thread-safe.
+    //    cpu_pool : 1 thread — Option A from the coroutine migration plan.
+    //      Callbacks use #pragma omp parallel for internally, so OMP expands
+    //      to omp_get_max_threads() workers inside each block.  The full
+    //      machine is therefore used; cpu_pool only acts as the scheduler
+    //      that launches each OMP region.
+    //
+    //    *** Do NOT raise cpu_pool above 1 without first removing or
+    //        nesting-guarding every OMP pragma in GRM.cpp and FastFAM.cpp.
+    //        Concurrent OMP regions from multiple cpu_pool threads would
+    //        oversubscribe the machine and degrade performance. ***
+    exec::static_thread_pool io_pool{1};
+    exec::static_thread_pool cpu_pool{1};   // OMP handles intra-block parallelism
 
-       int nMarker = numMarkersReadBlocks[curBufferIndex];
-       uint32_t endIndex = nFinishedMarker + nMarker;
-       endIndex = endIndex > nTMarker ? nTMarker : endIndex;
-       vector<uint32_t> curExtractIndex(extractIndex.begin() + nFinishedMarker, 
-              extractIndex.begin() + endIndex);
+    LOGGER.ts("LOOP_GENO_TOT");
+    LOGGER.ts("LOOP_GENO_PRE");
+    uint32_t nFinishedMarker = 0;
+    const uint32_t nTMarker  = static_cast<uint32_t>(extractIndex.size());
+    int pre_block = 0;
 
-       for(auto callback : callbacks){
-          callback(r_buf, curExtractIndex);
-       }
-       asyncBuf64->end_read();
+    // ── Adapter: GenoBlock → legacy (uintptr_t*, vector<uint32_t>) ───────
+    auto blockCallback = [&](GenoBlock &block) {
+        isMarkersSexXYs[0] = block.isSexXY;
+        fileIndexBuf[0]    = block.fileIndex;
+        curBufferIndex     = 0;
 
-       nFinishedMarker += nMarker;
-       curBufferIndex = nextBufIndex(curBufferIndex);
+        for (auto &cb : callbacks) {
+            cb(block.buf.data(), block.extractIndex);
+        }
 
-        // show progress
-       if(showLog){
-           int cur_block = nFinishedMarker >> 14;
-           if(cur_block > pre_block){
-               pre_block = cur_block;
-               float time_p = LOGGER.tp("LOOP_GENO_PRE");
-               if(time_p > 300){
-                   LOGGER.ts("LOOP_GENO_PRE");
-                   float elapse_time = LOGGER.tp("LOOP_GENO_TOT");
-                   float finished_percent = (float) nFinishedMarker / nTMarker;
-                   float remain_time = (1.0 / finished_percent - 1) * elapse_time / 60;
+        nFinishedMarker += block.numMarkers;
+        if (showLog) {
+            int cur_block = nFinishedMarker >> 14;
+            if (cur_block > pre_block) {
+                pre_block = cur_block;
+                float time_p = LOGGER.tp("LOOP_GENO_PRE");
+                if (time_p > 300) {
+                    LOGGER.ts("LOOP_GENO_PRE");
+                    float elapse_time      = LOGGER.tp("LOOP_GENO_TOT");
+                    float finished_percent = (float)nFinishedMarker / nTMarker;
+                    float remain_time      = (1.0f / finished_percent - 1) * elapse_time / 60;
+                    std::ostringstream ss;
+                    ss << std::fixed << std::setprecision(1)
+                       << finished_percent * 100
+                       << "% Estimated time remaining " << remain_time << " min";
+                    LOGGER.i(1, ss.str());
+                }
+            }
+        }
+    };
 
-                   std::ostringstream ss;
-                   ss << std::fixed << std::setprecision(1) << finished_percent * 100 << "% Estimated time remaining " << remain_time << " min"; 
+    // ── Run coroutine pipeline (blocks until all markers processed) ───────
+    stdexec::sync_wait(backend->stream(
+        io_pool.get_scheduler(),
+        cpu_pool.get_scheduler(),
+        extractIndex,
+        std::move(blockCallback)));
 
-                   LOGGER.i(1, ss.str());
-               }
-           }
-       }
-    }
-    //finished 
-    if(showLog){
+    if (showLog) {
         std::ostringstream ss;
-        ss << std::fixed << std::setprecision(1) << "100% finished in " << LOGGER.tp("LOOP_GENO_TOT") << " sec";
+        ss << std::fixed << std::setprecision(1)
+           << "100% finished in " << LOGGER.tp("LOOP_GENO_TOT") << " sec";
         LOGGER.i(1, ss.str());
         LOGGER << nFinishedMarker << " SNPs have been processed." << std::endl;
     }
-    read_thread.join();
-    endGenoDouble();
+    // backend destructor runs end-logic (masks freed, files closed).
 }
-
-
-
-void Geno::preProcess(GenoBuf *gbuf, int numMarkerBuf, vector<uint32_t> *rawMarkerIndex){
-   sampleKeepIndex = pheno->get_index_keep();
-   gbuf->n_sample = pheno->count_keep();
-   gbuf->n_marker = numMarkerBuf;
-   numMarkerBlock = gbuf->n_marker;
-   if(rawMarkerIndex != NULL){
-       asyncMode = true;
-       rawMarkerIndexProceed = *rawMarkerIndex;
-   }else{
-       asyncMode = false;
-   }
-       
-   openGFiles();
-   (this->*preProcessFuncs[genoFormat])(gbuf);
-   setGenoBufSize(gbuf, numMarkerBuf);
-}
-
-
-
-void Geno::endProcess(){
-    (this->*endProcessFuncs[genoFormat])();
-}
-
-void Geno::getGenoArray(const vector<uint32_t>& raw_marker_index, GenoBuf *gbuf){
-    (this->*getGenoArrayFuncs[genoFormat])(raw_marker_index, gbuf);
-}
-
-// this will fill the full buffer, exept chr end meet;
-void Geno::getGenoArrayExtractFull(const vector<uint32_t> & fullExtractIndex, uint32_t start, uint32_t num, vector<uint32_t> &keptIndex, uint32_t &totalReadMarker, GenoBuf *gbuf){
-
-    keptIndex.clear();
-    keptIndex.reserve(num);
-    uint32_t n_sample = gbuf->n_sample;
-    uint32_t nByteGeno = n_sample * 8;
-
-    bool chr_ends = false;
-    totalReadMarker = 0;
-    while(keptIndex.size() < num && (!chr_ends)){
-        uint32_t startIndex = fullExtractIndex[start + totalReadMarker];
-        bool isX;
-        vector<uint32_t> indices = marker->getNextSizeIndex(startIndex, num - keptIndex.size(), chr_ends, isX);
-        if(indices.size() == 0){
-            break;
-        }
-        gbuf->bSex = isX;
-        gbuf->indexStartMarker = keptIndex.size();
-        getGenoArrayExtract(indices, gbuf);
-        totalReadMarker += indices.size();
-        int move_dis = 0;
-        for(int i = gbuf->indexStartMarker; i < gbuf->indexStartMarker + indices.size(); i++){
-            if(gbuf->usedIndex[i]){
-                keptIndex.push_back(indices[i - gbuf->indexStartMarker]);
-                if(move_dis != 0){
-                    int moved_index = i - move_dis;
-                    gbuf->af[moved_index] = gbuf->af[i];
-                    gbuf->preAF[moved_index] = gbuf->preAF[i];
-                    gbuf->nValidN[moved_index] = gbuf->nValidN[i];
-                    gbuf->nValidAllele[moved_index] = gbuf->nValidAllele[i];
-                    if(gbuf->hasInfo)gbuf->info[moved_index] = gbuf->info[i];
-                    if(gbuf->saveGeno)memcpy(gbuf->geno.data() + moved_index * n_sample, 
-                            gbuf->geno.data() + i * n_sample, nByteGeno);
-                    if(gbuf->saveMiss)memcpy(gbuf->miss.data() + moved_index * gbuf->nBLMiss, 
-                            gbuf->miss.data() + i * gbuf->nBLMiss, gbuf->nBLMiss);
-                }
-            }else{
-                move_dis++;
-            }
-        }
-    }
-}
-
-void Geno::getGenoArrayExtract(const vector<uint32_t>& extract_index, GenoBuf *gbuf){
-    int cur_num_marker = extract_index.size();
-    uint32_t saveStartMarker = gbuf->indexStartMarker;
-    if((cur_num_marker + saveStartMarker) > gbuf->n_marker){
-        LOGGER.e(0, "the size of the extracted SNPs is larger than the buffer size.");
-    }
-    vector<uint32_t> raw_marker_index(cur_num_marker);
-    std::transform(extract_index.begin(), extract_index.end(), raw_marker_index.begin(), [this](uint32_t pos){
-        return this->marker->getRawIndex(pos);
-    });
-
-    if(bHasPreAF){
-        gbuf->bHasPreAF = true;
-        for(int i = 0; i < cur_num_marker; i++){
-            gbuf->preAF[saveStartMarker + i] = AFA1[extract_index[i]];
-        }
-    }else{
-        gbuf->bHasPreAF = false;
-    }
-
-    (this->*getGenoArrayFuncs[genoFormat])(raw_marker_index, gbuf);
-}
-
-
 
 //function for BGEN
-void Geno::preProcess_bgen(GenoBuf *gbuf){
-    //check bgen files
-    gbuf->hasInfo = true;
-    compressFormats.clear();
-    rawCountSamples.clear();
-    rawCountSNPs.clear();
-    for(int i = 0; i < gFiles.size(); i++){
-        MarkerParam curParam = marker->getMarkerParams(i); 
-        if(curParam.rawCountSample != pheno->count_raw()){
-            LOGGER.e(0, "inconsistent sample sizes between the .bgen file [" + geno_files[i] + "] and the .sample file (specified by --sample).");
-        }
-        compressFormats.push_back(curParam.compressFormat);
-        rawCountSamples.push_back(curParam.rawCountSample);
-        rawCountSNPs.push_back(curParam.rawCountSNP);
-    }
-}
-
-
 inline void bgen12ExtractVal(uint64_t val, uint8_t bit_prob, uint64_t mask, uint64_t &v1, uint64_t &v2){
     v1 = val & mask;
     v2 = (val >> bit_prob) & mask;
@@ -1711,274 +1085,6 @@ void hardCallFunc(uint32_t prob1, uint32_t prob2, uint64_t mask, uint32_t cutVal
         miss = true;
     }
 };
-
-
-
-void Geno::getGenoArray_bgen(const vector<uint32_t>& raw_marker_index, GenoBuf * gbuf){
-    uint32_t indexStartMarker = gbuf->indexStartMarker;
-    uint32_t n_res = gbuf->n_sample;
-    if(gbuf->saveMiss){
-        memset(((gbuf->miss).data() + indexStartMarker * gbuf->nBLMiss), 0, gbuf->nBLMiss * raw_marker_index.size() * 8);
-    }
-    // read bgen files
-    //vector<uint8_t *> snp_data;
-    int nMarker = raw_marker_index.size();
-    vector<uint32_t> compSizes(nMarker), decSizes(nMarker);
-    vector<int> compressMethods(nMarker), fileIDs(nMarker);
-    vector<uint64_t> readStarts(nMarker);
-    //vector<uint32_t> countSamples; 
-    vector<uint32_t> bufStarts(nMarker + 1);
-    vector<uint32_t> decDataStarts(nMarker + 1);
-    uint32_t sumStarts = 0, sumDecDataStart = 0;
-    bufStarts[0] = 0;
-    decDataStarts[0] = 0;
-    for(int i = 0; i < nMarker; i++){
-        uint32_t raw_index = raw_marker_index[i];
-        int fileID = marker->getMIndex(raw_index);
-        fileIDs[i] = fileID;
-        //countSamples.push_back(rawCountSamples[fileID]);
-
-        int compressFormat = compressFormats[fileID];
-        compressMethods[i] = compressFormat;
-
-        FILE * curBgen = gFiles[fileID];
-        uint64_t pos, size;
-        marker->getStartPosSize(raw_index, pos, size);
-        Marker::extractBgenMarkerInfo(curBgen, pos);
-        uint32_t len_comp = read1Byte<uint32_t>(curBgen);
-        uint32_t len_decomp;
-        if(compressFormat == 0){
-            len_decomp = len_comp;
-        }else{
-            len_comp -= 4;
-            len_decomp = read1Byte<uint32_t>(curBgen);
-        }
-        compSizes[i] = len_comp; 
-        sumStarts += len_comp;
-        bufStarts[i + 1] = sumStarts;
-        decSizes[i] = len_decomp;
-        sumDecDataStart += len_decomp + 8;
-        decDataStarts[i + 1] = sumDecDataStart;
-        readStarts[i] = ftell(curBgen);
-    }
-    
-    // read genotype
-    uint8_t * snp_data = new uint8_t[bufStarts[nMarker]];
-    for(int i = 0; i < nMarker; i++){
-        int fileID = fileIDs[i];
-        FILE * curBgen = gFiles[fileID];
-        fseek(curBgen, readStarts[i], SEEK_SET);
-        readBytes(curBgen, compSizes[i], snp_data + bufStarts[i]);
-    }
-        
-    // processing each SNP.
-    uint8_t *dec_data = new uint8_t[decDataStarts[nMarker]]; 
-    //strange check!
-    #pragma omp parallel for schedule(dynamic)
-    for(int i = 0; i < nMarker; i++){
-        uint32_t cur_raw_index = raw_marker_index[i];
-        uint32_t curFileID = fileIDs[i];
-        string error_promp = to_string(cur_raw_index) + "th SNP of "
-            + to_string(curFileID) + "th BGEN file.";
-
-        uint32_t len_decomp = decSizes[i];
-        int curCompressFormat = compressMethods[i];
-        uint8_t * cur_snp_data = snp_data + bufStarts[i];
-        uint8_t * cur_dec_data = dec_data + decDataStarts[i];
-        if(curCompressFormat == 0){
-            memcpy(cur_dec_data, cur_snp_data, compSizes[i]);
-        }else{
-            uint32_t curCompSize = compSizes[i];
-            if(curCompressFormat == 1){
-                int z_result = uncompress((Bytef*)cur_dec_data, (uLongf*)&len_decomp, (Bytef*)cur_snp_data, curCompSize);
-                if(z_result != Z_OK || len_decomp != decSizes[i]){
-                    LOGGER.e(0, "decompressing genotype data error in " + error_promp); 
-                }
-            }else if(curCompressFormat == 2){
-                //zstd
-                uint64_t const rSize = ZSTD_getFrameContentSize((void*)cur_snp_data, curCompSize);
-                switch(rSize){
-                case ZSTD_CONTENTSIZE_ERROR:
-                    LOGGER.e(0, "not compressed by zstd in " + error_promp);
-                    break;
-                case ZSTD_CONTENTSIZE_UNKNOWN:
-                    LOGGER.e(0, "original size unknown in " + error_promp);
-                    break;
-                }
-                if(rSize != len_decomp){
-                    LOGGER.e(0, "the size stated in compressed data is different from " + error_promp);
-                }
-                size_t const dSize = ZSTD_decompress((void *)cur_dec_data, len_decomp, (void*)cur_snp_data, curCompSize); 
-
-                if(ZSTD_isError(dSize)){
-                    LOGGER.e(0, "decompressing genotype error: " + string(ZSTD_getErrorName(dSize)) + " in " + error_promp);
-                }
-            }else{
-                LOGGER.e(0, "unknown compress format in " + error_promp);
-            }
-        }
-    }
-    delete[] snp_data;
-
-    #pragma omp parallel for schedule(dynamic)
-    for(int i = 0; i < nMarker; i++){
-        uint32_t cur_raw_index = raw_marker_index[i];
-        uint32_t curFileID = fileIDs[i];
-        string error_promp = to_string(cur_raw_index) + "th SNP of "
-            + to_string(curFileID) + "th BGEN file.";
-
-        //decompress data;
-        uint32_t len_decomp = decSizes[i];
-        //bool bFreeData = false;
-        uint8_t * cur_dec_data = dec_data + decDataStarts[i];
-
-        uint32_t n_sample = *(uint32_t *)cur_dec_data;
-        if(n_sample != rawCountSamples[curFileID]){
-            LOGGER.e(0, "inconsistent number of samples in " + error_promp );
-        }
-        uint16_t num_alleles = *(uint16_t *)(cur_dec_data + 4);
-        if(num_alleles != 2){
-            LOGGER.e(0, "multi-allelic SNPs detected in " + error_promp);
-        }
-
-        uint8_t min_ploidy = *(uint8_t *)(cur_dec_data + 6);//2
-        uint8_t max_ploidy = *(uint8_t *)(cur_dec_data + 7); //2
-        uint8_t * sample_ploidy = (uint8_t *)(cur_dec_data + 8);
-        //check all ploidy are 2 or not
-        if(min_ploidy != 2){
-            LOGGER.e(0, "multi-ploidy detected in " + error_promp);
-        }
-
-        uint8_t *geno_prob = sample_ploidy + n_sample;
-        uint8_t is_phased = *(geno_prob);
-        uint8_t bits_prob = *(geno_prob+1);
-        uint8_t* X_prob = geno_prob + 2;
-        uint32_t len_prob = len_decomp - n_sample - 10;
-        if(is_phased){
-            LOGGER.e(0, "the current version of GCTA does not support phased data in " + error_promp);
-        }
-
-        uint8_t double_bits_prob = bits_prob * 2;
-        vector<uint32_t> miss_index;
-
-        uint64_t mask = (1U << bits_prob) - 1;
-        uint64_t dosage_sum = 0, fij_sum = 0, dosage2_sum = 0;
-        uint32_t validN = 0;
-        vector<uint32_t> dosages(n_res);
-        uint32_t max_dos = mask * 2 + 1;
-        bool has_miss = false;
-        //LOGGER << "n_res: " << n_res << ", len_prob " << len_prob << ", bits " << (int)bits_prob << std::endl;
-        for(int j = 0; j < n_res; j++){
-            uint32_t sindex = sampleKeepIndex[j];
-            uint8_t item_ploidy = sample_ploidy[sindex];
-            if(item_ploidy > 128){
-                miss_index.push_back(sindex);
-                has_miss = true;
-                dosages[j] = max_dos;
-            }else if(item_ploidy == 2){
-                uint32_t start_bits = sindex * double_bits_prob;
-                uint64_t geno_temp;
-                //LOGGER << "j:" << sindex << ", bits: " << start_bits << ", byte: " << start_bits / CHAR_BIT << std::endl;
-                memcpy(&geno_temp, &(X_prob[start_bits/CHAR_BIT]), sizeof(uint64_t));
-                geno_temp = geno_temp >> (start_bits % CHAR_BIT);
-                uint32_t prob1 = geno_temp & mask;
-                uint32_t prob2 = (geno_temp >> bits_prob) & mask;
-                uint32_t prob1d = prob1 * 2;
-                uint64_t dosage = prob1d + prob2;
-                dosages[j] = dosage;
-                dosage_sum += dosage;
-                dosage2_sum += dosage * dosage;
-
-                uint64_t fij = dosage + prob1d;
-                fij_sum += fij;
-                validN++;
-            }else{
-               LOGGER.e(0, "multi-allelic SNPs detected in " + error_promp);
-            }
-        }
-
-
-        double af = (double)dosage_sum / mask / (2 * validN);
-        bool bEffRev = this->marker->isEffecRevRaw(cur_raw_index);
-        if(bEffRev){
-            af = 1.0 - af;
-        }
-        double std = 2.0 * af * (1.0 - af);
-        //double std = (1.0 * dosage2_sum - 1.0 * dosage_sum / validN * dosage_sum) /(validN - 1)/mask/mask;
-        //LOGGER << 2.0 * af * (1.0 - af) << "\t" << std << std::endl;
-        double info = 0.0;
-        if(std < 1e-50){
-            info = 1.0;
-        }else{
-            double dos2_fij_sum = (double)fij_sum / mask - (double)dosage2_sum/mask/mask; 
-            info = 1.0 - dos2_fij_sum / (std * validN);
-        }
-
-        int gbufIndex = indexStartMarker + i;
-        gbuf->af[gbufIndex] = af;
-        gbuf->info[gbufIndex] = info;
-        gbuf->nValidN[gbufIndex] = validN;
-        gbuf->nValidAllele[gbufIndex] = validN * 2;
-        //LOGGER << to_string(i) + "After AF calculation" << std::endl;
-
-        //use pre Allele
-        if(gbuf->bHasPreAF){
-            af = gbuf->preAF[gbufIndex];
-            std = 2.0 * af * (1.0 - af);
-        }
-
-        double maf = std::min(af, 1.0 - af);
-        bool keep_snp = false;
-        if(maf >= min_maf && maf <= max_maf){
-            if(info >= dFilterInfo && ((1.0*validN / n_sample) >= dFilterMiss)){
-                keep_snp = true;
-            }
-        }
-
-        gbuf->usedIndex[gbufIndex] = keep_snp;
-        //LOGGER << to_string(i) + "After filter" << std::endl;
-
-        if(keep_snp){
-            if(gbuf->saveGeno){
-                double *base_geno = (gbuf->geno).data() + gbufIndex * n_res;
-                
-                double mu = 0.0;
-                double rstd = 1.0;
-                if(gbuf->center){
-                    mu = 2.0 * af;
-                }
-                if(gbuf->std){
-                    rstd = (std < 1e-50) ? 0 : sqrt(1.0/std);
-                }
-                double* dos_lookup = new double[max_dos + 2];
-                for(uint32_t i = 0; i < max_dos; i++){
-                    double tdos = (double)i / mask;
-                    tdos = bEffRev ? (2.0 - tdos) : tdos;
-                    dos_lookup[i] = (tdos - mu) *rstd;
-                }
-                dos_lookup[max_dos] = ( 2.0 * af - mu) * rstd;
-
-                for(int j = 0; j < n_res; j++){
-                    base_geno[j] = dos_lookup[dosages[j]];
-                }
-                delete[] dos_lookup;
-            }
-            //LOGGER << to_string(i) + "geno typed" << std::endl;
-            if(has_miss){
-                if(gbuf->saveMiss){
-                    uint64_t* base_miss = (gbuf->miss).data() + gbufIndex * gbuf->nBLMiss; 
-                    for(int j = 0; j < miss_index.size(); j++){
-                        int cur_index = miss_index[j];
-                        base_miss[cur_index / 64] |= (1UL << (cur_index % 64));
-                    }
-                }
-            }
-            //LOGGER << to_string(i) + "after miss all done" << std::endl;
-        }
-     }
-     delete[] dec_data;
-
-}
         /* obsoleted functions hard calling
         uint8_t double_bits_prob = bits_prob * 2;
         uint32_t A1U = floor(mask * 1.5);
@@ -2072,684 +1178,6 @@ void Geno::getGenoArray_bgen(const vector<uint32_t>& raw_marker_index, GenoBuf *
         (gbuf->validN)[i] = n_valid;
         (gbuf->af)[i] = af;
         */
-        
-
-
-void Geno::endProcess_bgen(){
-    closeGFiles();
-    if(asyncMode){
-        if(asyncBufn) delete asyncBufn;
-    }
-}
-
-// functions for BED
-void Geno::preProcess_bed(GenoBuf *gbuf){
-    gbuf->hasInfo = false;
-    uint32_t rawCountSample = pheno->count_raw();
-    numBytePerMarker = (rawCountSample + 3) / 4; 
-    compressFormats.clear();
-    rawCountSamples.clear();
-    rawCountSNPs.clear();
-    //checking the bed files
-    bool has_error = false;
-    uint64_t f_size;
-    uint8_t buffer[3];
-    string message;
- 
-    for(int i = 0; i < gFiles.size(); i++){
-        MarkerParam curParam = marker->getMarkerParams(i); 
-        compressFormats.push_back(curParam.compressFormat);
-        rawCountSamples.push_back(rawCountSample);
-        rawCountSNPs.push_back(curParam.rawCountSNP);
-    }
-
-    bedIndexLookup.clear();
-    bedIndexLookup.push_back(0);
-    int32_t sumIndex = 0;
-    for(int i = 0; i < gFiles.size() - 1; i++){
-        sumIndex += rawCountSNPs[i];
-        bedIndexLookup.push_back(sumIndex);
-    }
-
-    //check all files
-    for(int i = 0; i < gFiles.size(); i++){
-        string bed_file = geno_files[i];
-        uint32_t cur_size = rawCountSNPs[i];
-
-        FILE *pFile = gFiles[i];
-        if(pFile == NULL){
-            has_error = true;
-            message += "Can't open [" + bed_file + "] to read.\n";
-            continue;
-        }
-        fseek(pFile, 0, SEEK_END);
-        f_size = ftell(pFile);
-        rewind(pFile);
-
-        if((f_size - 3) != ((uint64_t)numBytePerMarker) * cur_size){
-            has_error = true;
-            message += "Invalid bed file [" + bed_file +
-                "]. The sample and SNP number in bed file are different from bim and fam file.\n";
-            continue;
-        }
-
-        size_t read_count = fread(buffer, 1, 3, pFile);
-
-        if((read_count != 3) &&
-                (*buffer != 0x6c) &&
-                (*(buffer+1) != 0x1b) &&
-                (*(buffer+2) != 0x01)){
-            has_error = true;
-            message += "Invalid bed file [" + bed_file +
-                "], please convert it into new format (SNP major).\n";
-        }
-    }
-
-    //delete[] buffer;
-    if(has_error){
-        LOGGER.e(0, message);
-    }
-
-    bedGenoBuf1Size = (sampleKeepIndex.size() + 31) /32;
-    keepMask64 = new uint64_t[(rawCountSamples[0] + 63)/64](); 
-    pheno->getMaskBit(keepMask64); 
-    //if(gbuf->bSex){
-    maleMask64 = new uint64_t[(sampleKeepIndex.size() + 63) / 64](); 
-    pheno->getMaskBitMale(maleMask64); 
-    countMale = pheno->count_male();
-
-    if(asyncMode){
-        int n_marker = gbuf->n_marker;
-        asyncBufn = new AsyncBuffer<uint8_t>(numBytePerMarker * n_marker);
-   }
-    //}
-    //no improve
-    //bed_buf8 = new uint8_t[gbuf->n_marker * numBytePerMarker];
-    //bed_buf64 = new uint64_t[gbuf->n_marker * bedGenoBuf1Size];
-}
-
-void Geno::read_bed2(const vector<uint32_t> &raw_marker_index, int numMarkerBlock){
-    uint8_t *g_buf = NULL;
-    //read genotype
-    uint32_t numMarker = raw_marker_index.size();
-    bool bNewWrite = true;
-    int numMarkerRead = 0;
-    for(int i = 0; i < numMarker; i++){
-        if(bNewWrite){
-            g_buf = asyncBufn->start_write();
-            bNewWrite = false;
-        }
-        uint32_t curRawIndex = raw_marker_index[i];
-        int curFileID = marker->getMIndex(curRawIndex);
-        FILE *pFile = gFiles[curFileID];
-
-        int64_t lag_index = curRawIndex - bedIndexLookup[curFileID];
-        if(lag_index < 0)LOGGER.e(0, "strange index in " + to_string(curRawIndex) 
-                + "th SNP of " + to_string(curFileID)  + "th BED file.");
-
-        fseek(pFile, (uint64_t) lag_index * numBytePerMarker + 3, SEEK_SET);
-        if(fread(g_buf, 1, numBytePerMarker, pFile) != numBytePerMarker){
-            perror("Errors:");
-            LOGGER << "Error index: " << i << ", raw index: " << curRawIndex << std::endl;
-            LOGGER << "Error buffer:" << static_cast<void *>(g_buf) << std::endl;
-            LOGGER.e(0, "error in reading [" + geno_files[curFileID] + "].\nThere might be some problems with your storage, or the file has been changed.");
-        }
-        g_buf += numBytePerMarker;
-        numMarkerRead += 1;
-
-        if(numMarkerRead == numMarkerBlock){
-            asyncBufn->end_write();
-            bNewWrite = true;
-            numMarkerRead = 0;
-        }
-    }
-    if(!bNewWrite){
-        asyncBufn->end_write();
-    }
-}
-
-void Geno::bed64ToDouble(uint64_t * geno_buf, GenoBuf * gbuf, const vector<uint32_t> &raw_marker_index){
-    //freq
-    int indexStartMarker = gbuf->indexStartMarker;
-    uint32_t numMarker = raw_marker_index.size();
-    if((!gbuf->bHasPreAF) || dFilterMiss != 0){
-        if(!gbuf->bSex){
-            freq64_bed(geno_buf, raw_marker_index, gbuf);
-        }else{
-            freq64_bedX(geno_buf, raw_marker_index, gbuf);
-        }
-    }
-
-    vector<double> &AF = gbuf->bHasPreAF ? (gbuf->preAF) : (gbuf->af);
-    uint32_t n_actual_sample = (gbuf->n_sub_sample == 0) ? gbuf->n_sample : gbuf->n_sub_sample;
-    uint32_t num_item_n_sample = (n_actual_sample + 31) / 32;
-    uint32_t last_sample = (n_actual_sample % 32 == 0) ? 32 : (n_actual_sample % 32);
-    uint32_t last_8block = last_sample / 4;
-    uint32_t last_2block = last_sample % 4; 
-
-    static std::array<uint8_t, 65536> miss8_lookup16 = [](){
-        uint8_t g1_lookup[4];
-        g1_lookup[0] = 0;
-        g1_lookup[1] = 1;
-        g1_lookup[2] = 0;
-        g1_lookup[3] = 0;
-        uint16_t mask = 3;
-        std::array<uint8_t, 65536> miss8_lookup16;
-        for(uint32_t b = 0; b < 65536; b++){
-            miss8_lookup16[b] = 0;
-            for(int j = 0; j < 8; j++){
-                miss8_lookup16[b] |= g1_lookup[(b >> (j * 2)) & mask] << j;
-            }
-        }
-        return miss8_lookup16;
-    }();
-
-
-    //code each SNP
-    #pragma omp parallel for schedule(dynamic)
-    for(int i = 0; i < numMarker; i++){
-        int gbufIndex = indexStartMarker + i;
-        double af = AF[gbufIndex];
-        double maf = std::min(af, 1.0 - af);
-        bool keep_snp = false;
-        if(maf >= min_maf && maf <= max_maf){
-            if( (0.5 * gbuf->nValidAllele[gbufIndex] / gbuf->n_sample) >= dFilterMiss){
-                keep_snp = true;
-            }
-        }
-
-        gbuf->usedIndex[gbufIndex] = keep_snp;
-        if(keep_snp){
-            uint64_t *cur_buf = geno_buf + i * bedGenoBuf1Size;
-            bool bEffRev = this->marker->isEffecRevRaw(raw_marker_index[i]);
-            if(gbuf->saveGeno){
-                double mu = 2.0 * af;
-                double center_value = 0.0;
-                if(gbuf->center){
-                    center_value = mu;
-                }
-                double rdev = 1.0;
-                if(gbuf->std){
-                    double dev = mu * (1.0 - af);
-                    rdev = (dev < 1.0e-50) ? 0 : sqrt(1.0 / dev);
-                }
-
-                double g1_lookup[4];
-                g1_lookup[0] = ((bEffRev ? 0.0 : 2.0) - center_value) * rdev;
-                g1_lookup[1] = (mu - center_value) * rdev;
-                g1_lookup[2] = (1.0 - center_value) * rdev;
-                g1_lookup[3] = ((bEffRev ? 2.0 : 0.0)- center_value) * rdev;
-
-                double g_lookup[256][4];
-                for(uint16_t i = 0; i <= 255; i++){
-                    for(uint16_t j = 0; j < 4; j++){
-                        g_lookup[i][j] = g1_lookup[(i >> (2 * j)) & 3];
-                    }
-                }
-
-                int sub_index = 0;
-                uint32_t index = 0;
-                double *w_buf = gbuf->geno.data() + (gbufIndex) * gbuf->n_sample;
-
-                for(; index < num_item_n_sample - 1; index++){
-                    uint64_t geno = cur_buf[index];
-                    int move_bit = 0;
-                    for(int ri = 0; ri < 8; ri++){
-                        uint8_t geno_temp = (uint8_t) (geno >> move_bit);
-                        w_buf[sub_index] = g_lookup[geno_temp][0]; 
-                        w_buf[sub_index + 1] = g_lookup[geno_temp][1]; 
-                        w_buf[sub_index + 2] = g_lookup[geno_temp][2]; 
-                        w_buf[sub_index + 3] = g_lookup[geno_temp][3]; 
-                        move_bit += 8;
-                        sub_index += 4;
-                    }
-                }
-                //last geno
-                uint64_t geno = cur_buf[index];
-                int move_bit = 0;
-                for(int ri = 0; ri < last_8block; ri++){
-                    uint8_t geno_temp = (uint8_t) (geno >> move_bit);
-                    w_buf[sub_index] = g_lookup[geno_temp][0]; 
-                    w_buf[sub_index + 1] = g_lookup[geno_temp][1]; 
-                    w_buf[sub_index + 2] = g_lookup[geno_temp][2]; 
-                    w_buf[sub_index + 3] = g_lookup[geno_temp][3]; 
-                    move_bit += 8;
-                    sub_index += 4;
-                }
-                //last 4
-                uint8_t geno_temp = (uint8_t) (geno >> move_bit);
-                for(int ri = 0; ri < last_2block; ri++){
-                    w_buf[sub_index + ri] = g_lookup[geno_temp][ri];
-                }
-            }
-
-            if(gbuf->saveMiss){
-                uint16_t *g16buf = (uint16_t*)cur_buf;
-                uint8_t *curMiss8 = (uint8_t*)(gbuf->miss.data() + gbuf->nBLMiss * gbufIndex);
-                int miss8block = (n_actual_sample + 7) / 8;
-                int nLast8block = n_actual_sample % 8;
-                
-                for(int j = 0; j < miss8block; j++){
-                    *curMiss8 = miss8_lookup16[*g16buf];
-                    curMiss8++;
-                    g16buf++;
-                }
-                uint8_t final8Mask = (nLast8block == 0) ? ((1<<8) - 1) : ((1 << nLast8block) - 1);
-                *(--curMiss8) &= final8Mask;
-           }
-        }
-    }
- 
-}
-
-void Geno::getGenoArray_bed(const vector<uint32_t>& raw_marker_index, GenoBuf* gbuf){
-    int numMarker = raw_marker_index.size();
-    uint64_t *geno_buf = new uint64_t[bedGenoBuf1Size * numMarker];
-    if(asyncMode){
-        uint8_t *r_buf = NULL;
-        bool isEOF = false;
-        std::tie(r_buf, isEOF) = asyncBufn->start_read();
-        if(isEOF){
-            LOGGER.e(0, "the reading process reached to the end of the BED file but couldn't finish.");
-        }
-        move_geno(r_buf, keepMask64, rawCountSamples[0], gbuf->n_sample, numMarker, geno_buf); 
-        asyncBufn->end_read();
-    }else{
-        int indexStartMarker = gbuf->indexStartMarker;
-        if(gbuf->saveMiss){
-            memset(((gbuf->miss).data() + indexStartMarker * gbuf->nBLMiss), 0, gbuf->nBLMiss * raw_marker_index.size() * 8);
-        }
-
-        if(numMarker > (gbuf->n_marker)){
-            LOGGER.e(0, "requested marker number exceeded the buffer size.");
-        }
-        //uint8_t *g_buf = bed_buf8;
-        uint8_t *g_buf = new uint8_t[numMarker * numBytePerMarker];
-        //read genotype
-        for(int i = 0; i < numMarker; i++){
-            uint32_t curRawIndex = raw_marker_index[i];
-            int curFileID = marker->getMIndex(curRawIndex);
-            FILE *pFile = gFiles[curFileID];
-
-            int64_t lag_index = curRawIndex - bedIndexLookup[curFileID];
-            if(lag_index < 0)LOGGER.e(0, "strange index in " + to_string(curRawIndex) 
-                    + "th SNP of " + to_string(curFileID)  + "th BED file.");
-
-            fseek(pFile, (uint64_t) lag_index * numBytePerMarker + 3, SEEK_SET);
-            if(fread(g_buf + i * numBytePerMarker, 1, numBytePerMarker, pFile) != numBytePerMarker){
-                LOGGER.e(0, "error in reading [" + geno_files[curFileID] + "].\nThere might be some problems with your storage, or the file has been changed.");
-            }
-        }
-
-        move_geno(g_buf, keepMask64, rawCountSamples[0], gbuf->n_sample, numMarker, geno_buf); 
-        delete[] g_buf;
-    }
-
-    //avoid the removed samples
-    //uint64_t *geno_buf = bed_buf64;
-
-    /*
-    FILE *debug = fopen("test_gbuf1.bin", "wb");
-    uint64_t bsize = numMarker * numBytePerMarker;
-    fwrite((void *)g_buf, 1, bsize, debug);
-    fclose(debug);
-
-    FILE *masks = fopen("test_mask1.bin", "wb");
-    uint64_t msize = (rawCountSamples[0] + 63) / 64;
-    fwrite((void *)keepMask64, 8, msize, masks);
-    fclose(masks);
-    
-    LOGGER << "1.gbuf size: " << bsize << ", mask size: " << msize << ", raw ct: " << rawCountSamples[0] << ", keep ct: " << gbuf->n_sample << ", nMarker: " << numMarker << std::endl;
-    */
-
-     bed64ToDouble(geno_buf, gbuf, raw_marker_index);
-
-     delete[] geno_buf;
-}
-
-    
-void Geno::freq64_bed(uint64_t *buf, const vector<uint32_t> &markerIndex, GenoBuf *gbuf) {
-    const static uint64_t MASK = 6148914691236517205UL; 
-    int num_marker = markerIndex.size();
-
-    #pragma omp parallel for schedule(dynamic) 
-    for(int cur_marker_index = 0; cur_marker_index < num_marker; ++cur_marker_index){
-        //uint32_t curA1A1, curA1A2, curA2A2;
-        uint32_t even_ct = 0, odd_ct = 0, both_ct = 0;
-        uint64_t *p_buf = buf + cur_marker_index * bedGenoBuf1Size;
-        for(int index = 0; index < bedGenoBuf1Size ; index++){
-            uint64_t g_buf = p_buf[index];
-            uint64_t g_buf_h = MASK & (g_buf >> 1);
-            odd_ct += std::popcount(g_buf & MASK);
-            even_ct += std::popcount(g_buf_h);
-            both_ct += std::popcount(g_buf & g_buf_h);
-        }
-
-        //curA1A1 = num_keep_sample + both_ct - even_ct - odd_ct;
-        //curA1A2 = even_ct - both_ct;
-        //curA2A2 = both_ct;
-
-        //countA1A1[raw_index_marker] = curA1A1;
-        //countA1A2[raw_index_marker] = curA1A2;
-        //countA2A2[raw_index_marker] = curA2A2;
-        uint32_t cur_total_markers = (gbuf->n_sample - (odd_ct - both_ct)) * 2;
-        double cur_af = 1.0*(even_ct + both_ct) / cur_total_markers;
-        if(!marker->isEffecRevRaw(markerIndex[cur_marker_index])){
-            cur_af = 1.0 - cur_af;
-        }
-        int curGbufIndex = gbuf->indexStartMarker + cur_marker_index;
-        gbuf->af[curGbufIndex] = cur_af;
-        gbuf->nValidAllele[curGbufIndex] = cur_total_markers;
-        gbuf->nValidN[curGbufIndex] = cur_total_markers / 2;
-    }
-}
-
-void Geno::freq64_bedX(uint64_t *buf, const vector<uint32_t> &markerIndex, GenoBuf * gbuf){
-    const static uint64_t MASK = 6148914691236517205UL; 
-
-    int num_marker = markerIndex.size();
-    uint32_t *gender_mask = (uint32_t *)maleMask64;
-    uint32_t totalMakers = 2 * gbuf->n_sample - countMale;
-    
-    #pragma omp parallel for schedule(dynamic) 
-    for(int cur_marker_index = 0; cur_marker_index < num_marker; ++cur_marker_index){
-        uint32_t even_ct = 0, odd_ct = 0, both_ct = 0, odd_ct_m = 0, both_ct_m = 0;
-        uint64_t *p_buf = buf + cur_marker_index * bedGenoBuf1Size;
-        for(int index = 0; index < bedGenoBuf1Size; index++){
-            uint64_t mask_gender = *(gender_mask + index);
-            mask_gender = ~fill_inter_zero(mask_gender);
-
-            uint64_t g_buf = p_buf[index];
-            uint64_t g_buf_h = MASK & (g_buf >> 1);
-            uint64_t g_buf_l = g_buf & MASK;
-            uint64_t g_buf_b = g_buf & g_buf_h;
-            odd_ct += std::popcount(g_buf_l);
-            even_ct += std::popcount(g_buf_h);
-            both_ct += std::popcount(g_buf_b);
-
-            odd_ct_m += std::popcount(g_buf_l & mask_gender);
-            both_ct_m += std::popcount(g_buf_b & mask_gender);
-        }
-
-        uint32_t cur_total_markers = totalMakers - odd_ct_m - odd_ct + both_ct_m + both_ct;
-
-        double cur_af = 1.0 * (even_ct + both_ct_m) / cur_total_markers;
-        if(!marker->isEffecRevRaw(markerIndex[cur_marker_index])){
-            cur_af = 1.0 - cur_af;
-        }
-
-        int curGbufIndex = gbuf->indexStartMarker + cur_marker_index;
-        gbuf->af[curGbufIndex] = cur_af;
-        gbuf->nValidAllele[curGbufIndex] = cur_total_markers;
-        gbuf->nValidN[curGbufIndex] = cur_total_markers / 2;
-    }
-}
-
-
-void Geno::endProcess_bed(){
-    closeGFiles();
-    if(keepMask64)delete[] keepMask64;
-    if(maleMask64)delete[] maleMask64;
-    if(bed_buf8) delete[] bed_buf8;
-    if(bed_buf64) delete[] bed_buf64;
-    if(asyncMode){
-        if(asyncBufn) delete asyncBufn;
-    }
-}
-
-void Geno::openGFiles(){
-    closeGFiles();
-    gFiles.resize(geno_files.size());
-    for(int i = 0; i < geno_files.size(); i++){
-        string cur_filename = geno_files[i];
-        gFiles[i] = fopen(cur_filename.c_str(), "rb");
-        if(gFiles[i] == NULL) {
-            LOGGER.e(0, "failed to open genotype [" + cur_filename + "], " + string(strerror(errno)));
-        }
-    }
-}
-
-void Geno::closeGFiles(){
-    for(int i = 0; i < gFiles.size(); i++){
-        if(gFiles[i])fclose(gFiles[i]);
-    }
-    gFiles.resize(0);
-}
-
-
-/*
-void Geno::freq(uint8_t *buf, int num_marker){
-    if(num_marker_freq >= marker->count_extract()) return;
-    for(int cur_marker_index = 0; cur_marker_index < num_marker; ++cur_marker_index){
-        uint32_t curA1A1 = 0, curA1A2 = 0, curA2A2 = 0;
-        uint64_t *pbuf = (uint64_t *) (buf + cur_marker_index * num_byte_per_marker);
-        for(auto &index : pheno->keep_block_index){
-            uint64_t geno_temp = *(pbuf + index);
-            if(pheno->mask_add_items[index]){
-                geno_temp = (geno_temp & pheno->mask_items[index]) + pheno->mask_add_items[index];
-            }
-            vector<uint16_t> genos = {(uint16_t)(geno_temp), (uint16_t)(geno_temp >> 16), 
-                                       (uint16_t)(geno_temp >> 32), (uint16_t)(geno_temp >> 48)};
-            g_table.set_count(genos, curA1A1, curA1A2, curA2A2); 
-
-            int raw_index_marker = num_marker_freq + cur_marker_index;
-            countA1A1[raw_index_marker] = curA1A1;
-            countA1A2[raw_index_marker] = curA1A2;
-            countA2A2[raw_index_marker] = curA2A2;
-            AFA1[raw_index_marker] = (2.0 * curA1A1 + curA1A2) / (2.0 * (curA1A1 + curA1A2 + curA2A2));
-        }
-    }
-    num_marker_freq += num_marker;
-}
-*/
-
-/*
-void Geno::freq(uint8_t *buf, int num_marker) {
-    if(num_marker_freq >= marker->count_extract()) return;
-    //pheno->mask_geno_keep(buf, num_marker);
-    int cur_num_marker_read = num_marker;
-    static bool isLastTrunkSingle = (num_byte_per_marker % 2 != 0);
-    static int num_trunk_per_marker = num_byte_per_marker / 2 + isLastTrunkSingle;
-    uint16_t *p_buf;
-    uint16_t *trunk_buf;      
-    uint32_t curA1A1, curA1A2, curA2A2;
-    int raw_index_marker;
-    for(int cur_marker_index = 0; cur_marker_index < cur_num_marker_read; ++cur_marker_index){
-        //It will cause problems when memory in critical stage.
-        //However, other part of this program will also goes wrong in this situation.
-        p_buf = (uint16_t *) (buf + cur_marker_index * num_byte_per_marker);
-        trunk_buf = p_buf;
-        curA1A1 = 0;
-        curA1A2 = 0;
-        curA2A2 = 0;
-        for(int cur_trunk = 0; cur_trunk < num_trunk_per_marker - 1; ++cur_trunk){
-            curA1A1 += g_table.get(*trunk_buf, 0);
-            curA1A2 += g_table.get(*trunk_buf, 1);
-            curA2A2 += g_table.get(*trunk_buf, 2);
-            trunk_buf++;
-        }
-
-        uint16_t last_trunk = *trunk_buf;
-        if(isLastTrunkSingle){
-            last_trunk = last_trunk & 255;
-            curA1A1 += (g_table.get(last_trunk, 0) - 4 - last_byte_NA_sample);
-        }else{
-            curA1A1 += (g_table.get(last_trunk, 0) - last_byte_NA_sample); 
-        }
-
-        curA1A2 += g_table.get(last_trunk, 1);
-        curA2A2 += g_table.get(last_trunk, 2);
-
-        raw_index_marker = num_marker_freq + cur_marker_index;
-        
-
-        countA1A1[raw_index_marker] = curA1A1;
-        countA1A2[raw_index_marker] = curA1A2;
-        countA2A2[raw_index_marker] = curA2A2;
-        AFA1[raw_index_marker] = (2.0 * curA1A1 + curA1A2) / (2.0 * (curA1A1 + curA1A2 + curA2A2));
-    }
-    num_marker_freq += num_marker;
-}
-
-void Geno::freq2(uint8_t *buf, int num_marker) {
-    //pheno->mask_geno_keep(buf, num_marker);
-    const static uint64_t MASK = 6148914691236517205UL; 
-    static int pheno_count = pheno->count_keep();
-    static int num_trunk = num_byte_per_marker / 8;
-    static int remain_bit = (num_byte_per_marker % 8) * 8;
-    static int move_bit = 64 - remain_bit;
-
-    if(num_marker_freq >= marker->count_extract()) return;
-
-    int cur_num_marker_read = num_marker;
-    
-    #pragma omp parallel for schedule(dynamic) 
-    for(int cur_marker_index = 0; cur_marker_index < cur_num_marker_read; ++cur_marker_index){
-        uint32_t curA1A1, curA1A2, curA2A2;
-        uint32_t even_ct = 0, odd_ct = 0, both_ct = 0;
-        uint64_t *p_buf = (uint64_t *) (buf + cur_marker_index * num_byte_per_marker);
-        int index = 0;
-        for(; index < num_trunk ; index++){
-            uint64_t g_buf = p_buf[index];
-            uint64_t g_buf_h = MASK & (g_buf >> 1);
-            odd_ct += std::popcount(g_buf & MASK);
-            even_ct += std::popcount(g_buf_h);
-            both_ct += std::popcount(g_buf & g_buf_h);
-        }
-        if(remain_bit){
-            uint64_t g_buf = p_buf[index];
-            g_buf = (g_buf << move_bit) >> move_bit;
-            uint64_t g_buf_h = MASK & (g_buf >> 1);
-            odd_ct += std::popcount(g_buf & MASK);
-            even_ct += std::popcount(g_buf_h);
-            both_ct += std::popcount(g_buf & g_buf_h);
-        }
-
-        curA1A1 = pheno_count + both_ct - even_ct - odd_ct;
-        curA1A2 = even_ct - both_ct;
-        curA2A2 = both_ct;
-
-        int raw_index_marker = num_marker_freq + cur_marker_index;
-
-        countA1A1[raw_index_marker] = curA1A1;
-        countA1A2[raw_index_marker] = curA1A2;
-        countA2A2[raw_index_marker] = curA2A2;
-        AFA1[raw_index_marker] = (2.0 * curA1A1 + curA1A2) / (2.0 * (curA1A1 + curA1A2 + curA2A2));
-    }
-    num_marker_freq += num_marker;
-}
-*/
-
-void Geno::sum_geno_x(uint64_t *buf, int num_marker) {
-    static bool inited = false;
-    static std::ofstream out;
-    if(!inited){
-        inited = true;
-        out.open((options["out"] + ".sum").c_str());
-        if (!out) { LOGGER.e(0, "failed to open the file [" + options["out"] + ".sum" + "] to write"); }
-        out << "CHR\tSNP\tPOS\tA1\tA2\tAAm\tABm\tBBm\tMm\tAAf\tABf\tBBf\tMf" << std::endl;
-    }
-
-    const static uint64_t MASK = 6148914691236517205UL; 
-    if(num_marker_freq >= marker->count_extract()) return;
-
-    int cur_num_marker_read = num_marker;
-    uint32_t *gender_mask = (uint32_t *)keep_male_mask;
-
-    vector<string> out_contents;
-    out_contents.resize(cur_num_marker_read);
-    
-    #pragma omp parallel for schedule(dynamic) 
-    for(int cur_marker_index = 0; cur_marker_index < cur_num_marker_read; ++cur_marker_index){
-        uint32_t even_ct = 0, odd_ct = 0, both_ct = 0, even_ct_m = 0, odd_ct_m = 0, both_ct_m = 0;
-        uint64_t *p_buf = buf + cur_marker_index * num_item_1geno;
-
-        for(int index = 0; index < num_item_1geno ; index++){
-            uint64_t mask_gender = *(gender_mask + index);
-            mask_gender = fill_inter_zero(mask_gender);
-            mask_gender += (mask_gender << 1);
-
-            uint64_t g_buf = p_buf[index];
-            uint64_t g_buf_h = MASK & (g_buf >> 1);
-            uint64_t g_buf_l = g_buf & MASK;
-            uint64_t g_buf_b = g_buf & g_buf_h;
-            odd_ct += std::popcount(g_buf_l);
-            even_ct += std::popcount(g_buf_h);
-            both_ct += std::popcount(g_buf_b);
-
-            even_ct_m += std::popcount(g_buf_h & mask_gender);
-            odd_ct_m += std::popcount(g_buf_l & mask_gender);
-            both_ct_m += std::popcount(g_buf_b & mask_gender);
-        }
-
-        int all_BB = both_ct;
-        int all_AB = even_ct - both_ct;
-        int all_miss = odd_ct - both_ct;
-        int all_AA = num_keep_sample - odd_ct - even_ct + both_ct;
-
-        int m_BB = both_ct_m;
-        int m_AB = even_ct_m - both_ct_m;
-        int m_miss = odd_ct_m - both_ct_m;
-        int m_AA = num_male_keep_sample - odd_ct_m - even_ct_m + both_ct_m;
-        
-        std::ostringstream os;
-        int raw_index_marker = num_marker_freq + cur_marker_index;
-        os << marker->get_marker(marker->getRawIndex(raw_index_marker)) << "\t";
-        os << m_AA << "\t" << m_AB << "\t" << m_BB << "\t" << m_miss << "\t";
-        os << all_AA - m_AA << "\t" << all_AB - m_AB << "\t" << all_BB - m_BB << "\t" << all_miss - m_miss;
-
-        out_contents[cur_marker_index] = os.str();
- 
-    }
-
-    std::copy(out_contents.begin(), out_contents.end(), std::ostream_iterator<string>(out, "\n"));
- 
-    num_marker_freq += num_marker;
-
-}
-
-
-void Geno::freq64_x(uint64_t *buf, int num_marker) {
-    const static uint64_t MASK = 6148914691236517205UL; 
-    if(num_marker_freq >= marker->count_extract()) return;
-
-    int cur_num_marker_read = num_marker;
-    uint32_t *gender_mask = (uint32_t *)keep_male_mask;
-    
-    #pragma omp parallel for schedule(dynamic) 
-    for(int cur_marker_index = 0; cur_marker_index < cur_num_marker_read; ++cur_marker_index){
-        uint32_t even_ct = 0, odd_ct = 0, both_ct = 0, odd_ct_m = 0, both_ct_m = 0;
-        uint64_t *p_buf = buf + cur_marker_index * num_item_1geno;
-        for(int index = 0; index < num_item_1geno ; index++){
-            uint64_t mask_gender = *(gender_mask + index);
-            mask_gender = ~fill_inter_zero(mask_gender);
-
-            uint64_t g_buf = p_buf[index];
-            uint64_t g_buf_h = MASK & (g_buf >> 1);
-            uint64_t g_buf_l = g_buf & MASK;
-            uint64_t g_buf_b = g_buf & g_buf_h;
-            odd_ct += std::popcount(g_buf_l);
-            even_ct += std::popcount(g_buf_h);
-            both_ct += std::popcount(g_buf_b);
-
-            odd_ct_m += std::popcount(g_buf_l & mask_gender);
-            both_ct_m += std::popcount(g_buf_b & mask_gender);
-        }
-
-        int raw_index_marker = num_marker_freq + cur_marker_index;
-        uint32_t cur_total_markers = total_markers - odd_ct_m - odd_ct + both_ct_m + both_ct;
-
-        double cur_af = 1.0 * (even_ct + both_ct_m) / cur_total_markers;
-        if(!marker->isEffecRev(raw_index_marker)){
-            cur_af = 1.0 - cur_af;
-        }
-        AFA1[raw_index_marker] = cur_af;
-        //RDev[raw_index_marker] = 2.0 * cur_af * (1.0 - cur_af);
-        countMarkers[raw_index_marker] = cur_total_markers;
-    }
-    num_marker_freq += num_marker;
-
-}
 
 union Geno_prob{
     char byte[4];
@@ -2974,7 +1402,9 @@ void Geno::bgen2bed(const vector<uint32_t> &raw_marker_index){
     fclose(h_bgen);
 }
 
-
+// extracted and revised from plink2.0
+// GPL v3, license detailed on github
+// https://github.com/chrchang/plink-ng
 
 void Geno::save_bed(uint64_t *buf, int num_marker){
     static string err_string = "can't write to [" + options["out"] + ".bed].";
@@ -2984,90 +1414,26 @@ void Geno::save_bed(uint64_t *buf, int num_marker){
         if(hOut == NULL){
             LOGGER.e(0, err_string);
         }
-        uint8_t * buffer = new uint8_t[3];
-        buffer[0] = 0x6c;
-        buffer[1] = 0x1b;
-        buffer[2] = 0x01;
-        if(3 != fwrite(buffer, sizeof(uint8_t), 3, hOut)){
+        uint8_t header[3] = {0x6c, 0x1b, 0x01};
+        if(3 != fwrite(header, sizeof(uint8_t), 3, hOut)){
             LOGGER.e(0, err_string);
         }
         inited = true;
-        delete[] buffer;
     }
-
     uint64_t base_buffer = 0;
     for(int i = 0; i < num_marker; i++){
-        uint8_t * buffer = (uint8_t *) (buf + base_buffer);
-        if(fwrite(buffer, sizeof(uint8_t), num_byte_keep_geno1,hOut) != num_byte_keep_geno1){
+        uint8_t *buffer = (uint8_t *)(buf + base_buffer);
+        if(fwrite(buffer, sizeof(uint8_t), num_byte_keep_geno1, hOut) != num_byte_keep_geno1){
             LOGGER.e(0, err_string);
         }
         base_buffer += num_item_1geno;
     }
-
 }
 
 void Geno::closeOut(){
     fclose(hOut);
 }
 
-void Geno::resetFreq(){
-    num_marker_freq = 0;
-    bFreqFiltered = false;
-}
-
-void Geno::resetLoop(){
-    resetFreq();
-    num_finished_markers = 0;
-}
-
-void Geno::freq64(uint64_t *buf, int num_marker) {
-    //pheno->mask_geno_keep(buf, num_marker);
-    const static uint64_t MASK = 6148914691236517205UL; 
-    if(bFreqFiltered) return;
-    if(isX){
-        freq64_x(buf, num_marker);
-        return;
-    }
-
-    int cur_num_marker_read = num_marker;
-    
-    #pragma omp parallel for schedule(dynamic) 
-    for(int cur_marker_index = 0; cur_marker_index < cur_num_marker_read; ++cur_marker_index){
-        //uint32_t curA1A1, curA1A2, curA2A2;
-        uint32_t even_ct = 0, odd_ct = 0, both_ct = 0;
-        uint64_t *p_buf = buf + cur_marker_index * num_item_1geno;
-        for(int index = 0; index < num_item_1geno ; index++){
-            uint64_t g_buf = p_buf[index];
-            uint64_t g_buf_h = MASK & (g_buf >> 1);
-            odd_ct += std::popcount(g_buf & MASK);
-            even_ct += std::popcount(g_buf_h);
-            both_ct += std::popcount(g_buf & g_buf_h);
-        }
-
-        //curA1A1 = num_keep_sample + both_ct - even_ct - odd_ct;
-        //curA1A2 = even_ct - both_ct;
-        //curA2A2 = both_ct;
-
-        int raw_index_marker = num_marker_freq + cur_marker_index;
-
-        //countA1A1[raw_index_marker] = curA1A1;
-        //countA1A2[raw_index_marker] = curA1A2;
-        //countA2A2[raw_index_marker] = curA2A2;
-        uint32_t cur_total_markers = (total_markers - 2 * (odd_ct - both_ct));
-        double cur_af = 1.0*(even_ct + both_ct) / cur_total_markers;
-        if(!marker->isEffecRev(raw_index_marker)){
-            cur_af = 1.0 - cur_af;
-        }
-        AFA1[raw_index_marker] = cur_af;
-        //RDev[raw_index_marker] = 2.0 * cur_af * (1.0 - cur_af);
-        countMarkers[raw_index_marker] = cur_total_markers;
-    }
-    num_marker_freq += num_marker;
-}
-
-// extracted and revised from plink2.0
-// GPL v3, license detailed on github
-// https://github.com/chrchang/plink-ng
 void copy_quaterarr_nonempty_subset(uint64_t* raw_quaterarr[], const uint64_t* subset_mask, uint32_t raw_quaterarr_entry_ct, uint32_t subset_entry_ct, uint64_t* output_quaterarr[], const int num_marker) {
     // in plink 2.0, we probably want (0-based) bit raw_quaterarr_entry_ct of
     // subset_mask to be always allocated and unset.  This removes a few special
@@ -3215,208 +1581,8 @@ void copy_quaterarr_nonempty_subset(uint64_t* raw_quaterarr[], const uint64_t* s
     }
 }
 
-void Geno::move_geno(uint8_t *buf, uint64_t *keep_list, uint32_t num_raw_sample, uint32_t num_keep_sample, uint32_t num_marker, uint64_t *geno_buf){
-    /*
-    if(num_raw_sample == num_keep_sample){
-        for(int index = 0; index < num_marker; index++){
-            memcpy(
 
-        }
-    }
-    */
-
-    static uint32_t num_byte_keep_geno = (num_keep_sample + 3) / 4;
-    static uint32_t num_byte_per_marker = (num_raw_sample + 3) / 4;
-    static uint32_t num_qword_per_marker = (num_byte_keep_geno + 7) / 8;
-
-    static int remain_bit = (num_byte_per_marker % 8) * 8;
-    static int move_bit = 64 - remain_bit;
-    static uint64_t MASK = (UINT64_MAX << move_bit) >> move_bit;
-
-    const int move_markers = 4;
-
-    #pragma omp parallel for schedule(dynamic) 
-    for(uint32_t index = 0; index < num_marker; index += move_markers){
-        uint64_t *pbuf[move_markers], *gbuf[move_markers];
-        int num_marker_move = 0;
-        for(uint32_t i = 0; i < move_markers; i++){
-            uint32_t startIndex = index + i;
-            if(startIndex < num_marker){ 
-                pbuf[i] = (uint64_t *) (buf + startIndex * num_byte_per_marker);
-                gbuf[i] = geno_buf + startIndex * num_qword_per_marker; 
-                num_marker_move++;
-            }
-        }
-        copy_quaterarr_nonempty_subset(pbuf, keep_list, num_raw_sample, num_keep_sample, gbuf, num_marker_move);
-    }
-}
-
-void Geno::loop_64block(const vector<uint32_t> &raw_marker_index, vector<function<void (uint64_t *buf, int num_marker)>> callbacks, bool showLog) {
-    // show log also act as function that 
-    if(showLog){
-        LOGGER.i(0, "Reading PLINK BED file(s) in SNP-major format...");
-        num_finished_markers = 0;
-        if(!bFreqFiltered){
-            num_marker_freq = 0;
-        }
-    }
-    //LOGGER << "DEBUG num_finished_markers: " << num_finished_markers << std::endl;
-    thread read_thread([this, &raw_marker_index](){this->read_bed(raw_marker_index);});
-    read_thread.detach();
-
-    uint8_t *r_buf = NULL;
-    bool isEOF = false;
-    int cur_num_marker_read;
-
-    if(showLog){
-        LOGGER.ts("LOOP_GENO_TOT");
-        LOGGER.ts("LOOP_GENO_PRE");
-    }
-    int cur_num_blocks = (raw_marker_index.size() + Constants::NUM_MARKER_READ - 1) / Constants::NUM_MARKER_READ;
-
-    uint64_t *geno_buf = new uint64_t[num_item_geno_buffer];
-    for(int cur_block = 0; cur_block < cur_num_blocks; ++cur_block){
-        std::tie(r_buf, isEOF) = asyncBuffer->start_read();
-        //LOGGER.i(0, "time get buffer: " + to_string(LOGGER.tp("LOOP_GENO_PRE")));
-
-        LOGGER.d(0, "Process block " + std::to_string(cur_block));
-        if(isEOF && cur_block != (cur_num_blocks - 1)){
-            LOGGER.e(0, "the reading process reached to the end of the BED file but couldn't finish.");
-        }
-        //correct the marker read;
-        if(cur_block == (cur_num_blocks - 1)){
-            cur_num_marker_read = raw_marker_index.size() - Constants::NUM_MARKER_READ * cur_block;
-        }else{
-            cur_num_marker_read = Constants::NUM_MARKER_READ;
-        }
-
-        //FILE * f1 = fopen(("b" + to_string(cur_block) + ".bin").c_str(), "wb");
-        //fwrite(r_buf, sizeof(uint8_t), num_byte_buffer, f1);
-        //fclose(f1);
-        /*
-        if(cur_block == 0){
-            FILE *debug = fopen("test_gbuf0.bin", "wb");
-            uint64_t bsize = num_byte_buffer;
-            fwrite((void *)r_buf, 1, bsize, debug);
-            fclose(debug);
-
-            FILE *masks = fopen("test_mask0.bin", "wb");
-            uint64_t msize = (num_raw_sample + 63)/64;
-            fwrite((void *)keep_mask, 8, msize, masks);
-            fclose(masks);
-
-            LOGGER << "0. gbuf size: " << bsize << ", mask size: " << msize << ", raw ct: " << num_raw_sample << ", keep ct: " << num_keep_sample << ", nMarker: " << cur_num_marker_read << std::endl;
-        }
-        */
- 
-        move_geno(r_buf, keep_mask, num_raw_sample, num_keep_sample, cur_num_marker_read, geno_buf);
-        asyncBuffer->end_read();
-
-        //FILE * f2 = fopen(("b" + to_string(cur_block) + ".mbin").c_str(), "wb");
-        //fwrite(geno_buf, sizeof(uint64_t), num_item_geno_buffer, f2);
-        //fclose(f2);
-
-
-        for(auto callback : callbacks){
-            callback(geno_buf, cur_num_marker_read);
-        }
-
-
-        num_finished_markers += cur_num_marker_read;
-        if(showLog && cur_block % 100 == 0){
-            float time_p = LOGGER.tp("LOOP_GENO_PRE");
-            if(time_p > 300){
-                LOGGER.ts("LOOP_GENO_PRE");
-                float elapse_time = LOGGER.tp("LOOP_GENO_TOT");
-                float finished_percent = (float) cur_block / cur_num_blocks;
-                float remain_time = (1.0 / finished_percent - 1) * elapse_time / 60;
-
-                std::ostringstream ss;
-                ss << std::fixed << std::setprecision(1) << finished_percent * 100 << "% Estimated time remaining " << remain_time << " min"; 
-                
-                LOGGER.i(1, ss.str());
-            }
-        }
-    }
-    delete[] geno_buf;
-    if(showLog){
-        std::ostringstream ss;
-        ss << std::fixed << std::setprecision(1) << "100% finished in " << LOGGER.tp("LOOP_GENO_TOT") << " sec";
-        LOGGER.i(1, ss.str());
-    }
-}
-
-
-void Geno::makeMarkerX(uint64_t *buf, int cur_marker, double *w_buf, bool center, bool std, uint32_t num_sample){
-    static uint32_t n_actual_sample = (num_sample == 0) ? num_keep_sample : num_sample;
-    uint32_t num_item_n_sample = (n_actual_sample + 31) / 32;
-    static uint32_t last_sample = (n_actual_sample % 32 == 0) ? 32 : (n_actual_sample % 32);
-    static uint32_t last_8block = last_sample / 4;
-    static uint32_t last_2block = last_sample % 4; 
-
-    uint32_t cur_raw_marker = num_finished_markers + cur_marker;
-    uint64_t *cur_buf = buf + cur_marker * num_item_1geno;
-    double af = AFA1[cur_raw_marker];
-    double mu = 2.0 * af;
-    double center_value = 0.0;
-    if(center){
-        center_value = mu;
-    }
-    double rdev = 1.0;
-    if(std){
-        double dev = mu * (1.0 - af);
-        rdev = (dev < 1.0e-50) ? 0 : sqrt(1.0 / dev);
-        //use RDev
-    }
-
-    double g1_lookup[4];
-    g1_lookup[0] = (2.0 - center_value) * rdev;
-    g1_lookup[1] = (mu - center_value) * rdev;
-    g1_lookup[2] = (1.0 - center_value) * rdev;
-    g1_lookup[3] = (0.0 - center_value) * rdev;
-
-    
-    double g_lookup[256][4];
-    for(uint16_t i = 0; i <= 255; i++){
-        for(uint16_t j = 0; j < 4; j++){
-            g_lookup[i][j] = g1_lookup[(i >> (2 * j)) & 3];
-        }
-    }
-
-    int sub_index = 0;
-    uint32_t index = 0;
-    for(; index < num_item_n_sample - 1; index++){
-        uint64_t geno = cur_buf[index];
-        int move_bit = 0;
-        for(int ri = 0; ri < 8; ri++){
-            uint8_t geno_temp = (uint8_t) (geno >> move_bit);
-            w_buf[sub_index] = g_lookup[geno_temp][0]; 
-            w_buf[sub_index + 1] = g_lookup[geno_temp][1]; 
-            w_buf[sub_index + 2] = g_lookup[geno_temp][2]; 
-            w_buf[sub_index + 3] = g_lookup[geno_temp][3]; 
-            move_bit += 8;
-            sub_index += 4;
-        }
-    }
-    //last geno
-    uint64_t geno = cur_buf[index];
-    int move_bit = 0;
-    for(int ri = 0; ri < last_8block; ri++){
-        uint8_t geno_temp = (uint8_t) (geno >> move_bit);
-        w_buf[sub_index] = g_lookup[geno_temp][0]; 
-        w_buf[sub_index + 1] = g_lookup[geno_temp][1]; 
-        w_buf[sub_index + 2] = g_lookup[geno_temp][2]; 
-        w_buf[sub_index + 3] = g_lookup[geno_temp][3]; 
-        move_bit += 8;
-        sub_index += 4;
-    }
-    //last 4
-    uint8_t geno_temp = (uint8_t) (geno >> move_bit);
-    for(int ri = 0; ri < last_2block; ri++){
-        w_buf[sub_index + ri] = g_lookup[geno_temp][ri];
-    }
-
-}
+// === Restored functions ===
 
 void Geno::setMAF(double val){
     if(val < 0){
@@ -3656,141 +1822,6 @@ int Geno::registerOption(map<string, vector<string>>& options_in) {
     return return_value;
 }
 
-void Geno::setGenoBufSize(GenoBuf *gbuf, uint32_t n_marker){
-    uint32_t n_sample = gbuf->n_sample;
-    gbuf->n_marker = n_marker;
-
-    gbuf->usedIndex.resize(n_marker);
-    gbuf->af.resize(n_marker);
-    gbuf->nValidN.resize(n_marker);
-    gbuf->nValidAllele.resize(n_marker);
-    gbuf->preAF.resize(n_marker);
-
-    if(gbuf->hasInfo)gbuf->info.resize(n_marker);
-
-    if(gbuf->saveGeno)gbuf->geno.resize(n_marker * n_sample);
-    if(gbuf->saveMiss){
-        gbuf->nBLMiss = (n_sample + 63)/64;
-        gbuf->miss.resize(n_marker * gbuf->nBLMiss);
-    }
-}
-
-void Geno::loopDoublePre(const vector<uint32_t> &extractMarkerIndex, GenoBuf *gbuf, vector<function<void (GenoBuf *gbuf, const vector<uint32_t> &markerIndex)>> callbacks){
-    bool showLog = true;
-    if(showLog){
-        LOGGER.ts("LOOP_GENO_TOT");
-        LOGGER.ts("LOOP_GENO_PRE");
-    }
-
-    int nMarker = gbuf->n_marker;
-    thread read_thread([this, nMarker](){this->read_bed2(this->rawMarkerIndexProceed, nMarker);});
-    read_thread.detach();
-
- 
-    int nTMarker = extractMarkerIndex.size();
-    
-    uint32_t nFinishedMarker = 0;
-
-    int pre_block = 0;
-    while(nFinishedMarker < nTMarker){
-        uint32_t endIndex = nFinishedMarker + nMarker;
-        endIndex = endIndex > nTMarker ? nTMarker : endIndex;
-        vector<uint32_t> curExtractIndex(extractMarkerIndex.begin() + nFinishedMarker, 
-                extractMarkerIndex.begin() + endIndex);
-        getGenoArrayExtract(curExtractIndex, gbuf);
-
-        for(auto callback : callbacks){
-            callback(gbuf, curExtractIndex);
-        }
-        nFinishedMarker += nMarker;
-
-        // show progress
-        if(showLog){
-            int cur_block = nFinishedMarker >> 14;
-            if(cur_block > pre_block){
-                pre_block = cur_block;
-                float time_p = LOGGER.tp("LOOP_GENO_PRE");
-                if(time_p > 300){
-                    LOGGER.ts("LOOP_GENO_PRE");
-                    float elapse_time = LOGGER.tp("LOOP_GENO_TOT");
-                    float finished_percent = (float) nFinishedMarker / nTMarker;
-                    float remain_time = (1.0 / finished_percent - 1) * elapse_time / 60;
-
-                    std::ostringstream ss;
-                    ss << std::fixed << std::setprecision(1) << finished_percent * 100 << "% Estimated time remaining " << remain_time << " min"; 
-
-                    LOGGER.i(1, ss.str());
-                }
-            }
-        }
-    }
-    if(showLog){
-        std::ostringstream ss;
-        ss << std::fixed << std::setprecision(1) << "100% finished in " << LOGGER.tp("LOOP_GENO_TOT") << " sec";
-        LOGGER.i(1, ss.str());
-        LOGGER << nFinishedMarker << " SNPs have been processed." << std::endl;
-    }
-}
-
-void Geno::loopDoubleFull(const vector<uint32_t> &extractMarkerIndex, GenoBuf *gbuf, vector<function<void (GenoBuf *gbuf, const vector<uint32_t> &markerIndex)>> callbacks){
-    bool showLog = true;
-    if(showLog){
-        LOGGER.ts("LOOP_GENO_TOT");
-        LOGGER.ts("LOOP_GENO_PRE");
-    }
- 
-    int nMarker = gbuf->n_marker;
-    int nTMarker = extractMarkerIndex.size();
-    
-    uint32_t nFinishedMarker = 0;
-    uint32_t num_valid_marker_processed = 0;
-    vector<uint32_t> keptIndex;
-    int pre_block = 0;
-    while(nFinishedMarker < nTMarker){
-        uint32_t endIndex = nFinishedMarker + nMarker;
-        endIndex = endIndex > nTMarker ? nTMarker : endIndex;
-        uint32_t totalReadMarker;
-        //vector<uint32_t> curExtractIndex(extractMarkerIndex.begin() + nFinishedMarker, 
-         //       extractMarkerIndex.begin() + endIndex);
-        getGenoArrayExtractFull(extractMarkerIndex, nFinishedMarker, nMarker, keptIndex, totalReadMarker, gbuf);
-        if(totalReadMarker == 0){
-            break;
-        }
-
-        for(auto callback : callbacks){
-            callback(gbuf, keptIndex);
-        }
-        nFinishedMarker += totalReadMarker;
-        num_valid_marker_processed += keptIndex.size();
-
-        // show progress
-        if(showLog){
-            int cur_block = nFinishedMarker >> 14;
-            if(cur_block > pre_block){
-                pre_block = cur_block;
-                float time_p = LOGGER.tp("LOOP_GENO_PRE");
-                if(time_p > 300){
-                    LOGGER.ts("LOOP_GENO_PRE");
-                    float elapse_time = LOGGER.tp("LOOP_GENO_TOT");
-                    float finished_percent = (float) nFinishedMarker / nTMarker;
-                    float remain_time = (1.0 / finished_percent - 1) * elapse_time / 60;
-
-                    std::ostringstream ss;
-                    ss << std::fixed << std::setprecision(1) << finished_percent * 100 << "% Estimated time remaining " << remain_time << " min"; 
-
-                    LOGGER.i(1, ss.str());
-                }
-            }
-        }
-    }
-    if(showLog){
-        std::ostringstream ss;
-        ss << std::fixed << std::setprecision(1) << "100% finished in " << LOGGER.tp("LOOP_GENO_TOT") << " sec";
-        LOGGER.i(1, ss.str());
-        LOGGER << num_valid_marker_processed << " SNPs have been processed." << std::endl;
-    }
-}
-
 void Geno::processFreq(){
     string name_out = options["out"] + ".frq";
     int buf_size = 23068672;
@@ -3955,9 +1986,9 @@ void Geno::recode_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex){
     }
 }
 
+
+
 void Geno::processMain() {
-    //vector<function<void (uint8_t *, int)>> callBacks;
-    vector<function<void (uint64_t *, int)>> callBacks;
     for(auto &process_function : processFunctions){
         if(process_function == "freq"){
             Pheno pheno;
@@ -3965,116 +1996,7 @@ void Geno::processMain() {
             Geno geno(&pheno, &marker);
             geno.processFreq();
         }
-            /*
-            if(!geno.filterMAF() ){
-                LOGGER.i(0, "Computing allele frequencies...");
-                callBacks.push_back(bind(&Geno::freq64, &geno, _1, _2));
-                geno.loop_64block(marker.get_extract_index(), callBacks);
-            }
-            geno.out_freq(options["out"]);
-            */
 
-            /* // Full manner;
-            string name_frq = options["out"] + ".frq";
-           
-
-
-            int nMarker = 128;
-            int nTMarker = marker.count_extract();
-            int nBMarker = (nTMarker + nMarker - 1) / nMarker;
-            GenoBuf gbuf;
-            gbuf.center = false;
-            gbuf.std = false;
-            gbuf.saveMiss = false;
-            gbuf.saveGeno = false;
-            geno.preProcess(&gbuf, nMarker);
-
-            std::ofstream o_freq(name_frq.c_str());
-            if (!o_freq) { LOGGER.e(0, "cannot open the file [" + name_frq + "] to write"); }
-            o_freq << "CHR\tSNP\tPOS\tA1\tA2\tAF\tNCHROBS";
-            if(gbuf.hasInfo){
-                o_freq << "\tINFO\n";
-            }else{
-                o_freq << "\n";
-            }
-
-
-            uint32_t nFinishedMarker = 0;
-            vector<uint32_t> fullExtractIndex(nTMarker);
-            std::iota(fullExtractIndex.begin(), fullExtractIndex.end(), 0);
-            vector<uint32_t> keptIndex;
-            int nValidMarker = 0;
-            while(nFinishedMarker < nTMarker){
-                uint32_t totalReadMarker;
-                geno.getGenoArrayExtractFull(fullExtractIndex, nFinishedMarker, nMarker, keptIndex, totalReadMarker, &gbuf);
-                //LOGGER << totalReadMarker << " SNPs read." << std::endl;
-
-                for(int i = 0; i != keptIndex.size(); i++){
-                    o_freq << marker.getMarkerStrExtract(keptIndex[i]) << "\t"  << to_string(gbuf.af[i])
-                        <<"\t" << gbuf.nValidAllele[i];
-                    if(gbuf.hasInfo)o_freq << "\t" << gbuf.info[i];
-                    o_freq << "\n";
-                }
-                if(totalReadMarker == 0){
-                    break;
-                }
-                nFinishedMarker += totalReadMarker;
-                nValidMarker += keptIndex.size();
-            }
-             //final 
-            geno.endProcess();
-            o_freq.close();
-            LOGGER.i(0, "Allele frequencies of " + to_string(nValidMarker) + " SNPs have been saved in the file [" + name_frq + "]");
-
-            callBacks.clear();
-        }
-        */
-
-
-        /*  extract mode example
-            uint32_t nFinishedMarker = 0;
-            while(nFinishedMarker < markerIndices.size()){
-                bool isX;
-                bool chr_ends;
-                vector<uint32_t> indices = marker.getNextSizeIndex(nFinishedMarker, nMarker, chr_ends, isX);
-                gbuf.bSex = isX;
-                if(indices.size() == 0){
-                    break;
-                }
-                geno.getGenoArrayExtract(indices, &gbuf);
-                //output marker
-                for(int i = 0; i != indices.size(); i++){
-                    o_freq << marker.getMarkerStrExtract(indices[i]) << "\t"  << to_string(gbuf.af[i])
-                        <<"\t" << gbuf.nValidAllele[i];
-                    if(gbuf.hasInfo)o_freq << "\t" << gbuf.info[i];
-                    o_freq << "\n";
-                }
-                nFinishedMarker += indices.size();
-            }
-            */
-/* 
-            for(int bindex = 0; bindex < nBMarker; bindex++){
-                int baseIndex = bindex * nMarker; 
-                int startIndex = baseIndex;
-                int endIndex = (bindex + 1) * nMarker;
-                endIndex = endIndex > nTMarker ? nTMarker : endIndex;
-                vector<uint32_t> curMarkerIndices(markerIndices.begin() + startIndex,
-                    markerIndices.begin() + endIndex);
-                uint32_t n_marker = curMarkerIndices.size();
-                geno.getGenoArray(curMarkerIndices, &gbuf);
-
-                //output marker
-                for(int i = 0; i != n_marker; i++){
-                    o_freq << marker.get_marker(curMarkerIndices[i]) << "\t"  << to_string(gbuf.af[i])
-                        <<"\t" << gbuf.nValidAllele[i];
-
-                    if(gbuf.hasInfo)o_freq << "\t" << gbuf.info[i];
-
-                    o_freq << "\n";
-
-                }
-            }
-            */
         if(process_function == "recodet"){
             Pheno pheno;
             Marker marker;
@@ -4082,36 +2004,8 @@ void Geno::processMain() {
             geno.processRecodet();
         }
 
-/*
-        if(process_function == "freqx"){
-            Geno::setSexMode();
-
-            Pheno pheno;
-            Marker marker;
-            Geno geno(&pheno, &marker);
-            if(!geno.filterMAF()){
-                LOGGER.i(0, "Computing allele frequencies...");
-                callBacks.push_back(bind(&Geno::freq64, &geno, _1, _2));
-                geno.loop_64block(marker.get_extract_index(), callBacks);
-            }
-            geno.out_freq(options["out"]);
-            callBacks.clear();
-        }
-        */
-
         if(process_function == "make_bed"){
-            Pheno pheno;
-            Marker marker;
-            Geno geno(&pheno, &marker);
-            geno.filterMAF();
-            string filename = options["out"];
-            pheno.save_pheno(filename + ".fam");
-            marker.save_marker(filename + ".bim");
-            LOGGER.i(0, "Saving genotype to PLINK binary PED format [" + filename + ".bed]...");
-            callBacks.push_back(bind(&Geno::save_bed, &geno, _1, _2));
-            geno.loop_64block(marker.get_extract_index(), callBacks);
-            geno.closeOut();
-            LOGGER.i(0, "Genotype has been saved.");
+            LOGGER.e(0, "make_bed has not been migrated to the coroutine pipeline yet.");
         }
 
         if(process_function == "make_bed_bgen"){
@@ -4126,19 +2020,8 @@ void Geno::processMain() {
             LOGGER.i(0, "Genotype has been saved.");
         }
 
-
         if(process_function == "sum_geno_x"){
-            Pheno pheno;
-            Marker marker;
-            Geno geno(&pheno, &marker);
-            geno.filterMAF();
-            LOGGER.i(0, "Summing up genotypes based on sex"); 
-            callBacks.push_back(bind(&Geno::sum_geno_x, &geno, _1, _2));
-            geno.loop_64block(marker.get_extract_index(), callBacks);
-            LOGGER.i(0, "Summary has been saved.");
+            LOGGER.e(0, "sum_geno_x has not been migrated to the coroutine pipeline yet.");
         }
-
-
     }
-
 }
