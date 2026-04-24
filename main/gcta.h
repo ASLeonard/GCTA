@@ -190,8 +190,8 @@ public:
     // mlma
     void mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_file, std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool within_family, bool inbred, bool no_adj_covar, std::string weight_file, std::string save_reml_file, std::string load_reml_file);
     void mlma_loco(std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool inbred, bool no_adj_covar);
-    void save_reml_state(std::string filename, bool no_adj_covar);
-    void load_reml_state(std::string filename, bool no_adj_covar);
+    void save_reml_state(const std::string& filename, bool no_adj_covar);
+    void load_reml_state(const std::string& filename, bool no_adj_covar);
 
     // gene based association test
     void sbat_gene(std::string sAssoc_file, std::string gAnno_file, int sbat_wind, double sbat_ld_cutoff, bool sbat_write_snpset, bool GC, double GC_val);
