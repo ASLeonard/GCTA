@@ -27,14 +27,6 @@
   #include <lapacke.h>
   typedef lapack_int gcta_blas_int;
 
-  // Functions with char* params need the FORTRAN_STRLEN wrapper from lapack.h
-  #define dpotrf(...) LAPACK_dpotrf(__VA_ARGS__)
-  #define dpotri(...) LAPACK_dpotri(__VA_ARGS__)
-  #define dormqr(...) LAPACK_dormqr(__VA_ARGS__)
-  // Functions without char* params map directly to the Fortran symbols
-  #define dgetrf LAPACK_dgetrf
-  #define dgetri LAPACK_dgetri
-  #define dgeqrf LAPACK_dgeqrf
 #elif defined(GCTA_USE_ACCELERATE)
   #ifndef EIGEN_USE_BLAS
   #define EIGEN_USE_BLAS
