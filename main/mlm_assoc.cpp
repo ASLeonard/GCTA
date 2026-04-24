@@ -301,29 +301,30 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
 
 gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m)
 {
-    const auto n = static_cast<unsigned long>(y.size());
-    constexpr int max_block_size = 10000;
+    const auto n = static_cast<Eigen::Index>(y.size());
+    constexpr Eigen::Index max_block_size = 10000;
     unsigned long i = 0;
     std::vector<float> beta(m, 0.0f), se(m, 0.0f), pval(m, 2.0f);
-    Eigen::MatrixXf Vi = _Vi.cast<float>();
+
+    // Symmetrise Vi once into a plain matrix so every downstream GEMM/GEMV
+    // dispatches through Eigen's full BLAS path rather than the slower
+    // selfadjointView fallback that activates for block-expression targets.
+    Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
     _Vi.resize(0,0);
 
-    // Precompute Vi * y once (Vi is symmetric → use ssymv)
-    std::vector<float> Vi_y(n);
-    cblas_ssymv(CblasColMajor, CblasUpper,
-                n, 1.0f, Vi.data(), n,
-                y.data(), 1,
-                0.0f, Vi_y.data(), 1);
+    // Precompute Vi * y once (plain GEMV, Vi is now fully dense symmetric)
+    Eigen::Map<const Eigen::VectorXf> y_vec(y.data(), n);
+    Eigen::VectorXf Vi_y(n);
+    Vi_y.noalias() = Vi * y_vec;
 
     LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<std::endl;
 
     int k = 0, l = 0;
-    Eigen::MatrixXf X_block;
+    Eigen::MatrixXf X_block, Vi_X_block(n, max_block_size);
+    // Pre-allocated temporaries — no heap activity inside the hot loop
+    Eigen::VectorXf Xt_Vi_y_block(max_block_size);
+    Eigen::VectorXf xvx_diag(max_block_size);   // diag(X^T Vi X)
     std::vector<int> indx;
-    // Vi_X_block: col-major n × bs result of Vi * X_block
-    std::vector<float> Vi_X_block(static_cast<size_t>(n) * max_block_size);
-    std::vector<float> Xt_Vi_X_block(max_block_size);
-    std::vector<float> Xt_Vi_y_block(max_block_size);
 
     int last_pct = -1;
     for(i = 0; i < m; ){
@@ -332,37 +333,28 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
             LOGGER.p(0, std::to_string(i) + " / " + std::to_string(m) + " SNPs (" + std::to_string(cur_pct) + "%)");
             last_pct = cur_pct;
         }
-        int bs = (int)std::min((unsigned long)max_block_size, m - i);
+        const Eigen::Index bs = static_cast<Eigen::Index>(
+            std::min(static_cast<unsigned long>(max_block_size), m - i));
         indx.resize(bs);
         for(k = 0; k < bs; k++) indx[k] = i + k;
-        make_XMat_subset(X_block, indx, false);
+        make_XMat_subset(X_block, indx, false);  // X_block is n×bs
 
-        // Vi (symmetric n×n) * X_block (col-major n×bs) → Vi_X_block (col-major n×bs)
-        cblas_ssymm(CblasColMajor, CblasLeft, CblasUpper,
-                    n, bs, 1.0f, Vi.data(), n,
-                    X_block.data(), n,
-                    0.0f, Vi_X_block.data(), n);
+        // Vi * X_block → Vi_X_block (n×bs); Vi is plain dense → full GEMM
+        Vi_X_block.leftCols(bs).noalias() = Vi * X_block;
 
-        // Diagonal of X_block^T * Vi_X_block: contiguous stride-1 dot products
-        for(l = 0; l < bs; l++){
-            Xt_Vi_X_block[l] = cblas_sdot(n, X_block.data() + (size_t)l * n, 1,
-                                           Vi_X_block.data() + (size_t)l * n, 1);
-        }
+        // diag(X^T Vi X): column-wise dot products via elementwise product + colwise sum
+        // Avoids O(bs²) full matrix multiply; reads each column once.
+        xvx_diag.head(bs) = (X_block.cwiseProduct(Vi_X_block.leftCols(bs))).colwise().sum();
 
-        // X_block^T * Vi_y (precomputed) — avoids re-reading n×bs Vi_X_block
-        cblas_sgemv(CblasColMajor, CblasTrans,
-                    n, bs,
-                    1.0f, X_block.data(), n,
-                    Vi_y.data(), 1,
-                    0.0f, Xt_Vi_y_block.data(), 1);
-
+        // X^T Vi_y (bs×1) — single GEMV, pre-allocated target
+        Xt_Vi_y_block.head(bs).noalias() = X_block.transpose() * Vi_y;
 
         for(l = 0; l < bs; l++){
-            float inv_xvx = 1.0f / Xt_Vi_X_block[l];
+            const float inv_xvx = 1.0f / xvx_diag[l];
             if(std::isfinite(inv_xvx) && inv_xvx > 1.0e-30f){
                 beta[i + l] = inv_xvx * Xt_Vi_y_block[l];
                 se[i + l] = std::sqrt(inv_xvx);
-                float chisq = beta[i + l] / se[i + l];
+                const float chisq = beta[i + l] / se[i + l];
                 pval[i + l] = StatFunc::pchisq(chisq * chisq, 1, _log_pval);
             }
         }
@@ -375,59 +367,59 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
 
 gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned long m)
 {
-    const auto n = static_cast<unsigned long>(y.size());
-    const int p = static_cast<int>(_X_c);  // number of fixed covariates
-    constexpr int max_block_size = 10000;
+    const auto n = static_cast<Eigen::Index>(y.size());
+    const Eigen::Index p = static_cast<Eigen::Index>(_X_c);  // number of fixed covariates
+    constexpr Eigen::Index max_block_size = 10000;
     unsigned long i = 0;
     std::vector<float> beta(m, 0.0f), se(m, 0.0f), pval(m, 2.0f);
 
-    Eigen::MatrixXf Vi = _Vi.cast<float>();
+    // Symmetrise Vi once into a plain dense matrix so all downstream GEMMs
+    // go through the full BLAS path (selfadjointView products on block-expression
+    // targets may fall back to a scalar path in some Eigen/BLAS configurations).
+    Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
     _Vi.resize(0,0);
 
-    // Precompute Vi * y once (Vi is symmetric → use ssymv)
-    std::vector<float> Vi_y(n);
-    cblas_ssymv(CblasColMajor, CblasUpper,
-                n, 1.0f, Vi.data(), n,
-                y.data(), 1, 0.0f, Vi_y.data(), 1);
+    // Precompute Vi * y once (plain GEMV on the now-dense Vi)
+    Eigen::Map<const Eigen::VectorXf> y_vec(y.data(), n);
+    Eigen::VectorXf Vi_y(n);
+    Vi_y.noalias() = Vi * y_vec;
 
     // --- Schur complement precomputation (done once, not per SNP) ---
-    // C (n×p, col-major float): fixed covariate matrix
+    // C (n×p): fixed covariate matrix
     Eigen::MatrixXf C = _X.cast<float>();
 
-    // Vi_C = Vi * C  (n×p, col-major; Vi is symmetric → use ssymm)
-    std::vector<float> Vi_C(static_cast<size_t>(n) * p);
-    cblas_ssymm(CblasColMajor, CblasLeft, CblasUpper,
-                n, p, 1.0f, Vi.data(), n, C.data(), n, 0.0f, Vi_C.data(), n);
+    // Vi_C = Vi * C  (n×p); plain GEMM, no block expressions
+    Eigen::MatrixXf Vi_C(n, p);
+    Vi_C.noalias() = Vi * C;
 
-    // A = C^T Vi_C  (p×p), then invert in-place → A becomes A^{-1}
-    std::vector<float> A(static_cast<size_t>(p) * p);
-    cblas_sgemm(CblasColMajor, CblasTrans, CblasNoTrans,
-                p, p, n, 1.0f, C.data(), n, Vi_C.data(), n, 0.0f, A.data(), p);
-    double d_buf = 0.0;
-    if(!comput_inverse_logdet_LU_array(p, A.data(), d_buf))
-        LOGGER.e(0, "covariate matrix C^T Vi C is not invertible.");
+    // A = C^T Vi_C  (p×p).  Use Vi_C^T * C = C^T * Vi_C (same result, Vi symmetric).
+    // Factor immediately; we never need the explicit inverse.
+    Eigen::MatrixXf A_mat(p, p);
+    A_mat.noalias() = Vi_C.transpose() * C;
+    Vi_C.resize(0, 0);  // no longer needed — free n×p memory before the SNP loop
+    Eigen::LLT<Eigen::MatrixXf> A_llt(A_mat);
+    if(A_llt.info() != Eigen::Success)
+        LOGGER.e(0, "covariate matrix C^T Vi C is not positive-definite/invertible.");
 
-    // c = C^T Vi_y  (p×1)
-    std::vector<float> c_vec(p);
-    cblas_sgemv(CblasColMajor, CblasTrans,
-                n, p, 1.0f, C.data(), n, Vi_y.data(), 1, 0.0f, c_vec.data(), 1);
-
-    // t = A^{-1} c  (p×1): used to adjust numerator of each SNP test
-    std::vector<float> t_vec(p);
-    cblas_sgemv(CblasColMajor, CblasNoTrans,
-                p, p, 1.0f, A.data(), p, c_vec.data(), 1, 0.0f, t_vec.data(), 1);
+    // t = A^{-1} (C^T Vi_y)  (p×1)
+    Eigen::VectorXf t_vec(p);
+    t_vec.noalias() = C.transpose() * Vi_y;
+    t_vec = A_llt.solve(t_vec);
 
     LOGGER << "\nRunning association tests for " << m << " SNPs ..." << std::endl;
 
     int k = 0, l = 0;
     Eigen::MatrixXf X_block;
     std::vector<int> indx;
-    // Pre-allocate block buffers (sized for max block; reused each iteration)
-    std::vector<float> Vi_X_block(static_cast<size_t>(n) * max_block_size);
-    std::vector<float> D_block(static_cast<size_t>(p) * max_block_size);  // C^T * Vi_X_block (p×bs)
-    std::vector<float> E_block(static_cast<size_t>(p) * max_block_size);  // A^{-1} * D_block
-    std::vector<float> f_vec(max_block_size);     // X_block^T Vi_y
-    std::vector<float> Dt_t_vec(max_block_size);  // D_block^T t
+
+    // All block temporaries pre-allocated outside the loop — zero heap activity per SNP
+    Eigen::MatrixXf Vi_X_block(n, max_block_size);   // Vi * X_block
+    Eigen::MatrixXf D_block(p, max_block_size);      // C^T * Vi_X_block  (p×bs)
+    Eigen::MatrixXf E_block(p, max_block_size);      // A^{-1} * D_block  (p×bs)
+    Eigen::VectorXf f_vec(max_block_size);           // X^T Vi_y          (bs×1)
+    Eigen::VectorXf Dt_t_vec(max_block_size);        // D^T t             (bs×1)
+    Eigen::VectorXf xvx_diag(max_block_size);        // diag(X^T Vi X)    (bs×1)
+    Eigen::VectorXf d_dot_e_diag(max_block_size);    // diag(D^T E)       (bs×1)
 
     int last_pct_c = -1;
     for(i = 0; i < m; ){
@@ -436,43 +428,38 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
             LOGGER.p(0, std::to_string(i) + " / " + std::to_string(m) + " SNPs (" + std::to_string(cur_pct_c) + "%)");
             last_pct_c = cur_pct_c;
         }
-        int bs = static_cast<int>(std::min(static_cast<unsigned long>(max_block_size), m - i));
+        const Eigen::Index bs = static_cast<Eigen::Index>(
+            std::min(static_cast<unsigned long>(max_block_size), m - i));
         indx.resize(bs);
         for(k = 0; k < bs; k++) indx[k] = i + k;
-        make_XMat_subset(X_block, indx, false);
+        make_XMat_subset(X_block, indx, false);  // X_block is n×bs
 
-        // Vi * X_block → Vi_X_block  (n×bs, col-major; Vi symmetric → ssymm)
-        cblas_ssymm(CblasColMajor, CblasLeft, CblasUpper,
-                    n, bs, 1.0f, Vi.data(), n, X_block.data(), n, 0.0f, Vi_X_block.data(), n);
+        // Vi * X_block → Vi_X_block (n×bs); plain GEMM
+        Vi_X_block.leftCols(bs).noalias() = Vi * X_block;
 
-        // D = C^T * Vi_X_block  (p×bs) — reuses Vi_X_block, avoids a second read of Vi_C
-        cblas_sgemm(CblasColMajor, CblasTrans, CblasNoTrans,
-                    p, bs, n, 1.0f, C.data(), n, Vi_X_block.data(), n, 0.0f, D_block.data(), p);
+        // D = C^T * Vi_X_block  (p×bs); plain GEMM on evaluated sub-matrices
+        D_block.leftCols(bs).noalias() = C.transpose() * Vi_X_block.leftCols(bs);
 
-        // E = A^{-1} * D  (p×bs)
-        cblas_sgemm(CblasColMajor, CblasNoTrans, CblasNoTrans,
-                    p, bs, p, 1.0f, A.data(), p, D_block.data(), p, 0.0f, E_block.data(), p);
+        // E = A^{-1} * D  (p×bs) via LLT; noalias safe since D and E are distinct
+        E_block.leftCols(bs).noalias() = A_llt.solve(D_block.leftCols(bs));
 
-        // f = X_block^T Vi_y  (bs×1)
-        cblas_sgemv(CblasColMajor, CblasTrans,
-                    n, bs, 1.0f, X_block.data(), n, Vi_y.data(), 1, 0.0f, f_vec.data(), 1);
+        // f = X^T Vi_y  (bs×1)
+        f_vec.head(bs).noalias() = X_block.transpose() * Vi_y;
 
-        // Dt_t = D_block^T t  (bs×1): covariate correction to numerator
-        cblas_sgemv(CblasColMajor, CblasTrans,
-                    p, bs, 1.0f, D_block.data(), p, t_vec.data(), 1, 0.0f, Dt_t_vec.data(), 1);
+        // Dt_t = D^T t  (bs×1)
+        Dt_t_vec.head(bs).noalias() = D_block.leftCols(bs).transpose() * t_vec;
+
+        // diag(X^T Vi X) and diag(D^T E) via elementwise product + colwise sum;
+        // avoids forming the full bs×bs products.
+        xvx_diag.head(bs)    = (X_block.cwiseProduct(Vi_X_block.leftCols(bs))).colwise().sum();
+        d_dot_e_diag.head(bs) = (D_block.leftCols(bs).cwiseProduct(E_block.leftCols(bs))).colwise().sum();
 
         for(l = 0; l < bs; l++){
-            // a = x^T Vi x  (diagonal element of X_block^T Vi_X_block)
-            float a = cblas_sdot(n, X_block.data()   + static_cast<size_t>(l)*n, 1,
-                                    Vi_X_block.data() + static_cast<size_t>(l)*n, 1);
-            // d^T e = D[:,l]^T E[:,l]  (covariate correction to denominator)
-            float d_dot_e = cblas_sdot(p, D_block.data() + static_cast<size_t>(l)*p, 1,
-                                          E_block.data() + static_cast<size_t>(l)*p, 1);
-            float S = a - d_dot_e;  // Schur complement = 1/Var(beta_snp)
+            const float S = xvx_diag[l] - d_dot_e_diag[l];  // Schur complement = 1/Var(beta_snp)
             beta[i+l] = (f_vec[l] - Dt_t_vec[l]) / S;
             if(S > 1.0e-30f){
                 se[i+l] = std::sqrt(1.0f / S);
-                float chisq = beta[i+l] / se[i+l];
+                const float chisq = beta[i+l] / se[i+l];
                 pval[i+l] = StatFunc::pchisq(chisq * chisq, 1, _log_pval);
             }
         }
