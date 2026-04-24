@@ -26,7 +26,7 @@ namespace StatLib{
 
     double pnorm(double x, bool bLowerTail=false);
 
-    bool rankContrast(int n, double *Z);
+    bool rankContrast(int n, Eigen::MatrixXd &Z);
 
     VectorXd weightBetaMAF(const VectorXd& MAF, double weight_alpha, double weight_beta);
 }
