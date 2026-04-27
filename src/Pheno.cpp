@@ -30,6 +30,7 @@
 #include <boost/crc.hpp>
 #include <set>
 #include "OptionIO.h"
+#include "htslib/vcf.h"
 
 using std::to_string;
 
@@ -42,6 +43,16 @@ Pheno::Pheno() {
     }
             
     bool has_pheno = false;    
+    if(options.find("vcf_file") != options.end()){
+        has_pheno = true;
+        read_vcf_samples(options["vcf_file"]);
+    } else if(options.find("mvcf_file") != options.end()){
+        has_pheno = true;
+        // use the first VCF file for sample IDs
+        string first_vcf = options["mvcf_file"].substr(0, options["mvcf_file"].find(' '));
+        read_vcf_samples(first_vcf);
+    }
+
     if(options.find("pheno_file") != options.end()){
         this->read_fam(options["pheno_file"]);
         has_pheno = true;
@@ -505,6 +516,42 @@ void Pheno::read_sample(string sample_file){
 }
 
 
+void Pheno::read_vcf_samples(const string& vcf_file) {
+    LOGGER.i(0, "Reading sample IDs from VCF/BCF file [" + vcf_file + "]...");
+    htsFile* fp = hts_open(vcf_file.c_str(), "r");
+    if (!fp) {
+        LOGGER.e(0, "cannot open VCF/BCF file [" + vcf_file + "]");
+    }
+    bcf_hdr_t* hdr = bcf_hdr_read(fp);
+    if (!hdr) {
+        hts_close(fp);
+        LOGGER.e(0, "cannot read header from VCF/BCF file [" + vcf_file + "]");
+    }
+    int nsamples = bcf_hdr_nsamples(hdr);
+    if (nsamples == 0) {
+        bcf_hdr_destroy(hdr);
+        hts_close(fp);
+        LOGGER.e(0, "no samples found in VCF/BCF file [" + vcf_file + "]");
+    }
+    for (int i = 0; i < nsamples; ++i) {
+        const char* sid = hdr->samples[i];
+        fid.push_back(string(sid));
+        pid.push_back(string(sid));
+        mark.push_back(string(sid) + "\t" + string(sid));
+        fa_id.push_back("0");
+        mo_id.push_back("0");
+        sex.push_back(0);
+        pheno.push_back(strtod("nan", NULL));
+        index_keep.push_back(i);
+    }
+    num_ind = static_cast<int>(fid.size());
+    num_bytes = (num_ind + 3) / 4;
+    num_keep = static_cast<int>(index_keep.size());
+    LOGGER.i(0, to_string(num_ind) + " individuals to be included from VCF/BCF file.");
+    bcf_hdr_destroy(hdr);
+    hts_close(fp);
+}
+
 void Pheno::read_fam(string fam_file) {
     LOGGER.i(0, "Reading PLINK FAM file from [" + fam_file + "]...");
     std::ifstream fam(fam_file.c_str());
@@ -940,6 +987,9 @@ int Pheno::registerOption(map<string, vector<string>>& options_in){
     options_in.erase("--fam");
     addOneFileOption("sample_file", "", "--sample", options_in, options);
     // options_in.erase("--sample");
+
+    addOneFileOption("vcf_file", "", "--vcf", options_in, options);
+    addMFileListsOption("mvcf_file", "", "--mvcf", options_in, options);
 
     addOneFileOption("pheno_file", ".fam", "--bpfile", options_in, options);
     addOneFileOption("psam_file", ".psam", "--pfile", options_in, options);

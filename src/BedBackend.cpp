@@ -30,7 +30,7 @@
 // --------------------------------------------------------------------------
 // Helper: aligned-allocated mask buffer with posix_mem_free deleter.
 // --------------------------------------------------------------------------
-namespace {
+namespace bed_detail {
 struct PosixFreeDeleter {
     void operator()(uintptr_t *p) const noexcept { posix_mem_free(p); }
 };
@@ -44,7 +44,10 @@ MaskBuf allocMask(std::size_t nElements)
         p = nullptr;
     return MaskBuf{p};
 }
-} // anonymous namespace
+} // namespace bed_detail
+
+using bed_detail::MaskBuf;
+using bed_detail::allocMask;
 
 // --------------------------------------------------------------------------
 // BedBackend

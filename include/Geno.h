@@ -33,6 +33,7 @@
 class BedBackend;
 class BgenBackend;
 class PgenBackend;
+class VcfBackend;
 
 using std::function;
 using std::string;
@@ -179,6 +180,7 @@ private:
     friend class BedBackend;
     friend class BgenBackend;
     friend class PgenBackend;
+    friend class VcfBackend;
 
     // getGenoDouble dispatch map (processing only; I/O moved to backends).
     typedef void (Geno::*GetGenoDoubleFunc)(uintptr_t *buf, int idx, GenoBufItem* gbuf);
@@ -211,6 +213,7 @@ private:
     void getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf);
     void getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf);
     void getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf);
+    void getGenoDouble_vcf(uintptr_t *buf, int idx, GenoBufItem* gbuf);
  
     //BED
     int bedRawGenoBuf1PtrSize; // how many 64bit geno of raw sample save 
@@ -243,6 +246,9 @@ private:
     int pgenGenoPtrSize;
     int pgenDosagePresentPtrSize;
     int pgenDosageMainPtrSize;
+
+    //VCF — one uint8_t per kept sample per marker, padded to uintptr_t alignment
+    int vcfRawGenoBuf1PtrSize;
 
     std::ofstream osOut;
     FILE * bOut = NULL;

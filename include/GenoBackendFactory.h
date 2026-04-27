@@ -27,3 +27,6 @@ std::unique_ptr<GenoBackend> makeBgenBackend(Geno &geno);
 
 /// Create a PGEN-format backend (proper PGEN via ReadDosage).
 std::unique_ptr<GenoBackend> makePgenBackend(Geno &geno);
+
+/// Create a VCF/BCF-format backend (htslib-based, random access via CSI/TBI index).
+std::unique_ptr<GenoBackend> makeVcfBackend(Geno &geno);
