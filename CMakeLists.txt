@@ -215,6 +215,9 @@ ExternalProject_Add(
         "--enable-static"
         "--disable-shared"
         "--disable-libcurl"
+        "--without-libdeflate"
+        "--disable-bz2"
+        "--disable-lzma"
         "CC=${CMAKE_C_COMPILER}"
     BUILD_COMMAND   $(MAKE) lib-static
     INSTALL_COMMAND $(MAKE) install
@@ -230,6 +233,12 @@ set_target_properties(htslib PROPERTIES
     IMPORTED_LOCATION             "${HTSLIB_INSTALL_DIR}/lib/libhts.a"
     INTERFACE_INCLUDE_DIRECTORIES "${HTSLIB_INSTALL_DIR}/include")
 message(STATUS "htslib will be built from source")
+
+# htslib built with --without-libdeflate --disable-bz2 --disable-lzma; only
+# zlib is required for VCF/BCF support and is already exposed via ZLIB::ZLIB.
+if(TARGET ZLIB::ZLIB)
+    target_link_libraries(htslib INTERFACE ZLIB::ZLIB)
+endif()
 
 if(NOT WIN32)
     # NOTE: Install gsl with your system package manager
@@ -259,7 +268,6 @@ endif()
 
 find_package(OpenMP REQUIRED)
 
-set(OPENBLAS_INCLUDE_DIR "" CACHE PATH "Path to OpenBLAS headers (used when GCTA_BLAS_BACKEND=OpenBLAS)")
 set(GCTA_BLAS_LIBS "")
 set(GCTA_BLAS_INCLUDE_DIRS "")
 set(GCTA_BLAS_DEFINES "")
@@ -301,7 +309,6 @@ if(DEFINED _BLA_VENDOR_NAME)
     message(STATUS "Setting BLA_VENDOR=${_BLA_VENDOR_NAME} to prefer requested BLAS vendor")
 endif()
 
-#TODO: Should this also have EIGEN_USE_LAPACKE?
 if(_GCTA_BLAS STREQUAL "Accelerate")
     find_library(ACCELERATE_LIBRARY Accelerate REQUIRED)
     list(APPEND GCTA_BLAS_LIBS ${ACCELERATE_LIBRARY})
@@ -317,35 +324,36 @@ if(_GCTA_BLAS STREQUAL "Accelerate")
     set(VECLIB_INCLUDE_DIR "${CMAKE_OSX_SYSROOT}/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework/Headers")
     list(APPEND GCTA_BLAS_INCLUDE_DIRS ${VECLIB_INCLUDE_DIR})
 
-#TODO: if the openblas directory also contains mkl, it overrides?
 elseif(_GCTA_BLAS STREQUAL "OpenBLAS")
-    # Check Homebrew path first (macOS), then fall back to find_package
-    set(_openblas_prefix "/opt/homebrew/opt/openblas")
-    if(APPLE AND EXISTS "${_openblas_prefix}/lib/libopenblas.dylib")
-        list(APPEND GCTA_BLAS_LIBS "${_openblas_prefix}/lib/libopenblas.dylib")
-        list(APPEND GCTA_BLAS_INCLUDE_DIRS "${_openblas_prefix}/include")
+    # Find OpenBLAS via its CMake package config. Respect OpenBLAS_DIR if set.
+    if(OpenBLAS_DIR)
+        find_package(OpenBLAS REQUIRED CONFIG HINTS ${OpenBLAS_DIR})
     else()
-        find_package(BLAS REQUIRED)
-        find_package(LAPACK REQUIRED)
-        list(APPEND GCTA_BLAS_LIBS ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
-        if(OPENBLAS_INCLUDE_DIR)
-            list(APPEND GCTA_BLAS_INCLUDE_DIRS ${OPENBLAS_INCLUDE_DIR})
+        find_package(OpenBLAS REQUIRED CONFIG HINTS "/opt/homebrew/opt/openblas/lib/cmake/openblas")
+    endif()
+
+    if(NOT TARGET OpenBLAS::OpenBLAS)
+        # Fallback for conda/broken config files that don't define the imported target
+        if(APPLE)
+            add_library(OpenBLAS::OpenBLAS SHARED IMPORTED)
+            set_target_properties(OpenBLAS::OpenBLAS PROPERTIES
+                IMPORTED_LOCATION "${_OpenBLAS_ROOT_DIR}/lib/libopenblas.dylib"
+                INTERFACE_INCLUDE_DIRECTORIES "${OpenBLAS_INCLUDE_DIRS}")
         else()
-            find_path(LAPACKE_INCLUDE_DIR lapacke.h
-                HINTS
-                    /usr/include/openblas
-                    /usr/local/include/openblas
-                    /usr/include/x86_64-linux-gnu/openblas-pthread
-                    /usr/include
-                    /usr/local/include)
-            if(LAPACKE_INCLUDE_DIR)
-                list(APPEND GCTA_BLAS_INCLUDE_DIRS ${LAPACKE_INCLUDE_DIR})
-                message(STATUS "Found lapacke.h in: ${LAPACKE_INCLUDE_DIR}")
+            add_library(OpenBLAS::OpenBLAS SHARED IMPORTED)
+            set_target_properties(OpenBLAS::OpenBLAS PROPERTIES
+                IMPORTED_LOCATION "${_OpenBLAS_ROOT_DIR}/lib/libopenblas.a"
+                INTERFACE_INCLUDE_DIRECTORIES "${OpenBLAS_INCLUDE_DIRS}")
+            find_library(GFORTRAN_LIBRARY gfortran
+                HINTS "${_OpenBLAS_ROOT_DIR}/lib")
+            if(GFORTRAN_LIBRARY)
+                list(APPEND GCTA_BLAS_LIBS ${GFORTRAN_LIBRARY})
             else()
-                message(WARNING "lapacke.h not found. Set OPENBLAS_INCLUDE_DIR to the directory containing lapacke.h")
+                message(FATAL_ERROR "libgfortran not found, required for static OpenBLAS linking")
             endif()
         endif()
     endif()
+    list(APPEND GCTA_BLAS_LIBS OpenBLAS::OpenBLAS)
     list(APPEND GCTA_BLAS_DEFINES GCTA_USE_OPENBLAS EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
     set(GCTA_BLAS_PROVIDER "OpenBLAS" CACHE INTERNAL "")
 
@@ -369,7 +377,7 @@ elseif(_GCTA_BLAS STREQUAL "MKL")
     find_package(MKL REQUIRED)
     list(APPEND GCTA_BLAS_LIBS MKL::MKL)
     list(APPEND GCTA_BLAS_INCLUDE_DIRS ${MKL_INCLUDE})
-    list(APPEND GCTA_BLAS_DEFINES GCTA_USE_MKL EIGEN_USE_MKL EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
+    list(APPEND GCTA_BLAS_DEFINES GCTA_USE_MKL EIGEN_USE_MKL_ALL)
     set(GCTA_BLAS_PROVIDER "MKL" CACHE INTERNAL "")
 
 else()
@@ -389,6 +397,7 @@ set(SRCS
     ${CMAKE_SOURCE_DIR}/src/BedBackend.cpp
     ${CMAKE_SOURCE_DIR}/src/BgenBackend.cpp
     ${CMAKE_SOURCE_DIR}/src/PgenBackend.cpp
+    ${CMAKE_SOURCE_DIR}/src/VcfBackend.cpp
     ${CMAKE_SOURCE_DIR}/src/LD.cpp
     ${CMAKE_SOURCE_DIR}/src/Logger.cpp
     ${CMAKE_SOURCE_DIR}/src/Marker.cpp
@@ -551,13 +560,6 @@ endif()
 if(UNIX AND NOT APPLE AND NOT _GCTA_BLAS STREQUAL "None")
     target_link_libraries(gcta64 PRIVATE ${GCTA_BLAS_LIBS})
 endif()
-
-
-
-# TODO: testing disabled pending fixes
-# enable_testing()
-# add_subdirectory(test)
-
 
 # List all targets (verbose, only if requested)
 if(CMAKE_VERBOSE_MAKEFILE OR GCTA_LIST_TARGETS)
