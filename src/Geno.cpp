@@ -173,12 +173,12 @@ Geno::Geno(Pheno* pheno, Marker* marker) {
 
 
 
-    // register getGenoDouble dispatch (fix PGEN bug: was aliased to BED)
-    getGenoDoubleFuncs["BED"]  = &Geno::getGenoDouble_bed;
-    getGenoDoubleFuncs["PGEN"] = &Geno::getGenoDouble_pgen;
-    getGenoDoubleFuncs["BGEN"] = &Geno::getGenoDouble_bgen;
-    // preGenoDouble*/endGenoDouble*/readGeno* maps removed:
-    // those are now handled by BedBackend / BgenBackend / PgenBackend.
+    // Resolve the unpacking function once so getGenoDouble() is a direct
+    // member-function call on every marker, not a hash-map lookup.
+    if      (genoFormat == "BED")  getGenoDoubleFunc = &Geno::getGenoDouble_bed;
+    else if (genoFormat == "PGEN") getGenoDoubleFunc = &Geno::getGenoDouble_pgen;
+    else if (genoFormat == "BGEN") getGenoDoubleFunc = &Geno::getGenoDouble_bgen;
+    else LOGGER.e(0, "Geno: unknown genoFormat '" + genoFormat + "' — cannot resolve getGenoDouble.");
 
     string alleleFileName = "";
     if(options.find("update_freq_file") != options.end()){
@@ -418,7 +418,7 @@ void Geno::setGenoItemSize(uint32_t &genoSize, uint32_t &missSize){
 }
 
 void Geno::getGenoDouble(uintptr_t *buf, int bufIndex, GenoBufItem* gbuf){
-    (this->*getGenoDoubleFuncs[genoFormat])(buf, bufIndex, gbuf);
+    (this->*getGenoDoubleFunc)(buf, bufIndex, gbuf);
 }
 
 void Geno::setMaleWeight(double &weight, bool &needWeight){
@@ -1988,6 +1988,179 @@ void Geno::recode_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex){
 
 
 
+// ─────────────────────────────────────────────────────────────────────────────
+// make_bed: convert BED/PGEN input to PLINK .bed/.bim/.fam
+// Uses a two-pass strategy:
+//   Pass 1 (no geno extraction) — determines which markers pass all runtime
+//           filters (MAF, missingness, INFO) via getGenoDouble item.valid.
+//   Pass 2 (with geno + missing mask) — writes the .bed file.
+// The .bim is written between the two passes so it matches exactly the set
+// of variants written to .bed.
+// ─────────────────────────────────────────────────────────────────────────────
+void Geno::processMakeBed() {
+    LOGGER.i(0, "Making PLINK binary PED files...");
+    const string filename = options["out"];
+
+    // ── Pass 1: collect valid extract-list indices ────────────────────────
+    const int N = static_cast<int>(marker->count_extract());
+    vector<uint32_t> extractIndex(N);
+    std::iota(extractIndex.begin(), extractIndex.end(), 0);
+
+    vector<uint32_t> validIdx;
+    validIdx.reserve(N);
+
+    loopDouble(extractIndex, Constants::NUM_MARKER_READ,
+               /*bMakeGeno*/false, /*bGenoCenter*/false, /*bGenoStd*/false, /*bMakeMiss*/false,
+        {[this, &validIdx](uintptr_t *buf, const vector<uint32_t> &exIdx) {
+            for (int i = 0; i < static_cast<int>(exIdx.size()); ++i) {
+                GenoBufItem item;
+                item.extractedMarkerIndex = exIdx[i];
+                getGenoDouble(buf, i, &item);
+                if (item.valid) validIdx.push_back(exIdx[i]);
+            }
+        }}, /*showLog*/false);
+
+    marker->keep_extracted_index(validIdx);
+    LOGGER.i(0, to_string(validIdx.size()) + " SNPs pass QC filters.");
+
+    // ── Write .fam and .bim (valid markers only) ──────────────────────────
+    pheno->save_pheno(filename + ".fam");
+    marker->save_marker(filename + ".bim");
+
+    // ── Pass 2: write .bed ────────────────────────────────────────────────
+    hOut = fopen((filename + ".bed").c_str(), "wb");
+    if (!hOut) LOGGER.e(0, "cannot open the file [" + filename + ".bed] to write.");
+    const uint8_t bedHeader[3] = {0x6c, 0x1b, 0x01};
+    fwrite(bedHeader, sizeof(uint8_t), 3, hOut);
+
+    const int N2 = static_cast<int>(marker->count_extract());
+    extractIndex.resize(N2);
+    std::iota(extractIndex.begin(), extractIndex.end(), 0);
+    numMarkerOutput = 0;
+
+    loopDouble(extractIndex, Constants::NUM_MARKER_READ,
+               /*bMakeGeno*/true, /*bGenoCenter*/false, /*bGenoStd*/false, /*bMakeMiss*/true,
+        {[this](uintptr_t *buf, const vector<uint32_t> &exIdx) {
+            make_bed_func(buf, exIdx);
+        }});
+
+    fclose(hOut);
+    hOut = nullptr;
+    LOGGER << numMarkerOutput << " SNPs have been saved to [" << filename << ".bed]." << std::endl;
+}
+
+// BED 2-bit encoding per sample (LSB-first within each byte, 4 samples/byte):
+//   0b00 = 0 → homozygous A1   (GCTA dosage 0)
+//   0b01 = 1 → missing
+//   0b10 = 2 → heterozygous    (GCTA dosage 1)
+//   0b11 = 3 → homozygous A2   (GCTA dosage 2)
+static constexpr uint8_t kGenoToBed[3] = {0u, 2u, 3u};
+
+void Geno::make_bed_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex) {
+    const int num_marker = static_cast<int>(markerIndex.size());
+    const uint32_t bytesPerMarker = (keepSampleCT + 3) / 4;
+    vector<uint8_t> bedBuf(bytesPerMarker);
+
+    for (int i = 0; i < num_marker; i++) {
+        GenoBufItem item;
+        item.extractedMarkerIndex = markerIndex[i];
+        getGenoDouble(genobuf, i, &item);
+        if (!item.valid) continue;
+
+        std::fill(bedBuf.begin(), bedBuf.end(), 0u);
+        for (uint32_t j = 0; j < keepSampleCT; j++) {
+            uint8_t bits;
+            if (item.missing[j / 64u] & (static_cast<uintptr_t>(1) << (j % 64u))) {
+                bits = 1u;  // 0b01 = missing
+            } else {
+                const int g = static_cast<int>(std::round(item.geno[j]));
+                bits = (g >= 0 && g <= 2) ? kGenoToBed[g] : 1u;
+            }
+            bedBuf[j / 4u] |= static_cast<uint8_t>(bits << ((j % 4u) * 2u));
+        }
+
+        if (fwrite(bedBuf.data(), 1u, bytesPerMarker, hOut) != bytesPerMarker) {
+            LOGGER.e(0, "write error to [" + options["out"] + ".bed].");
+        }
+        ++numMarkerOutput;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// sum_geno_x: per-sample genotype sum across all (kept) X chromosome markers.
+// Output file columns: FID TAB IID TAB Sex TAB SumGenoX TAB NValidX TAB MeanGenoX
+// Sex encoding follows FAM convention: 1=male, 2=female, 0=unknown.
+// ─────────────────────────────────────────────────────────────────────────────
+void Geno::processSumGenoX() {
+    LOGGER.i(0, "Computing per-sample genotype sums on the X chromosome...");
+    const string outFile = options["out"] + ".sum_geno_x.txt";
+
+    const uint32_t nSample = pheno->count_keep();
+    sumGenoX.assign(nSample, 0.0);
+    nValidGenoX.assign(nSample, 0u);
+
+    const int N = static_cast<int>(marker->count_extract());
+    vector<uint32_t> extractIndex(N);
+    std::iota(extractIndex.begin(), extractIndex.end(), 0);
+
+    loopDouble(extractIndex, Constants::NUM_MARKER_READ,
+               /*bMakeGeno*/true, /*bGenoCenter*/false, /*bGenoStd*/false, /*bMakeMiss*/false,
+        {[this](uintptr_t *buf, const vector<uint32_t> &exIdx) {
+            sum_geno_x_func(buf, exIdx);
+        }});
+
+    // ── Write output ──────────────────────────────────────────────────────
+    std::ofstream out(outFile.c_str());
+    if (!out) LOGGER.e(0, "cannot open the file [" + outFile + "] to write.");
+    out << "FID\tIID\tSex\tSumGenoX\tNValidX\tMeanGenoX\n";
+
+    const vector<string> ids = pheno->get_id(0, static_cast<int>(nSample) - 1, "\t");
+    for (uint32_t i = 0; i < nSample; i++) {
+        const int8_t sex = pheno->get_sex(i);
+        const double mean = (nValidGenoX[i] > 0u)
+                            ? sumGenoX[i] / static_cast<double>(nValidGenoX[i])
+                            : 0.0;
+        out << ids[i] << "\t" << static_cast<int>(sex)
+            << "\t" << sumGenoX[i]
+            << "\t" << nValidGenoX[i]
+            << "\t" << mean << "\n";
+    }
+    out.close();
+    LOGGER.i(0, "Results saved to [" + outFile + "].");
+}
+
+void Geno::sum_geno_x_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex) {
+    const int num_marker = static_cast<int>(markerIndex.size());
+    const int nS = static_cast<int>(keepSampleCT);
+    const int nThreads = omp_get_max_threads();
+
+    // Thread-local buffers avoid atomic overhead on sumGenoX[j] (shared per-sample arrays).
+    vector<vector<double>>   localSum(nThreads, vector<double>(nS, 0.0));
+    vector<vector<uint32_t>> localN  (nThreads, vector<uint32_t>(nS, 0u));
+
+    #pragma omp parallel for schedule(dynamic)
+    for (int i = 0; i < num_marker; i++) {
+        const int tid = omp_get_thread_num();
+        GenoBufItem item;
+        item.extractedMarkerIndex = markerIndex[i];
+        getGenoDouble(genobuf, i, &item);
+        if (!item.valid) continue;
+
+        for (int j = 0; j < nS; j++) {
+            localSum[tid][j] += item.geno[j];
+            localN  [tid][j]++;
+        }
+    }
+
+    // Merge thread-local results into the member accumulators.
+    for (int t = 0; t < nThreads; t++) {
+        for (int j = 0; j < nS; j++) {
+            sumGenoX   [j] += localSum[t][j];
+            nValidGenoX[j] += localN  [t][j];
+        }
+    }
+}
+
 void Geno::processMain() {
     for(auto &process_function : processFunctions){
         if(process_function == "freq"){
@@ -2005,7 +2178,10 @@ void Geno::processMain() {
         }
 
         if(process_function == "make_bed"){
-            LOGGER.e(0, "make_bed has not been migrated to the coroutine pipeline yet.");
+            Pheno pheno;
+            Marker marker;
+            Geno geno(&pheno, &marker);
+            geno.processMakeBed();
         }
 
         if(process_function == "make_bed_bgen"){
@@ -2021,7 +2197,10 @@ void Geno::processMain() {
         }
 
         if(process_function == "sum_geno_x"){
-            LOGGER.e(0, "sum_geno_x has not been migrated to the coroutine pipeline yet.");
+            Pheno pheno;
+            Marker marker;
+            Geno geno(&pheno, &marker);
+            geno.processSumGenoX();
         }
     }
 }

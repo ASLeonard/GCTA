@@ -27,7 +27,6 @@
 #include "GenoBackend.h"     // GenoBlock, GenoBackend, GenoScheduler
 #include <functional>
 #include "tables.h"
-#include <unordered_map>
 
 // Forward declarations for the three concrete backends (needed for friend).
 class BedBackend;
@@ -180,10 +179,9 @@ private:
     friend class BgenBackend;
     friend class PgenBackend;
 
-    // getGenoDouble dispatch map (processing only; I/O moved to backends).
+    // getGenoDouble — resolved once at construction from genoFormat.
     typedef void (Geno::*GetGenoDoubleFunc)(uintptr_t *buf, int idx, GenoBufItem* gbuf);
-    typedef std::unordered_map<string, GetGenoDoubleFunc> GetGenoDoubleFuncs;
-    GetGenoDoubleFuncs getGenoDoubleFuncs;
+    GetGenoDoubleFunc getGenoDoubleFunc = nullptr;
 
     bool hasInfo = false;
 
@@ -256,6 +254,18 @@ private:
 
     void processFreq();
     void freq_func(uintptr_t * genobuf, const vector<uint32_t> &markerIndex);
+
+    // make_bed: convert any supported genotype format to PLINK BED (non-BGEN path).
+    // Uses a two-pass approach: pass 1 determines valid markers, pass 2 writes .bed.
+    void processMakeBed();
+    void make_bed_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex);
+
+    // sum_geno_x: per-sample genotype sum across X chromosome markers.
+    // Used for dosage compensation analysis (--sum-geno-x).
+    void processSumGenoX();
+    void sum_geno_x_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex);
+    vector<double>   sumGenoX;    // per-sample accumulated genotype sum on chrX
+    vector<uint32_t> nValidGenoX; // per-sample count of valid X markers
 
  };
 
