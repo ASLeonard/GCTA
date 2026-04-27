@@ -49,6 +49,7 @@ set_property(CACHE GCTA_BLAS_BACKEND PROPERTY STRINGS Auto MKL OpenBLAS Accelera
 set(Accelerate_DIR "" CACHE PATH "Exact path to the Accelerate framework directory, for example /System/Library/Frameworks/Accelerate.framework")
 set(OpenBLAS_DIR "" CACHE PATH "Exact OpenBLAS CMake config directory, for example /opt/homebrew/opt/openblas/lib/cmake/openblas")
 set(MKL_DIR "" CACHE PATH "Exact MKL CMake config directory containing MKLConfig.cmake")
+set(Boost_DIR "" CACHE PATH "Exact Boost CMake config directory containing BoostConfig.cmake. If set, Boost will be used from this location instead of fetching it.")
 option(GCTA_LIST_TARGETS "List imported and local targets during configure" OFF)
 option(GCTA_UNITY_BUILD "Enable unity builds for faster compilation" ON)
 option(GCTA_ENABLE_IPO "Enable IPO/LTO in Release builds" ON)
@@ -126,6 +127,9 @@ FetchContent_Declare(
 set(ZLIB_BUILD_EXAMPLES OFF)
 FetchContent_MakeAvailable(zlib)
 
+# Only use Boost when explicitly provided via Boost_DIR; otherwise fall back to
+# fetching Boost with FetchContent. Do NOT probe for a system Boost.
+
 # After zlib is available, set hints so Boost iostreams links against it correctly.
 if(zlib_POPULATED)
     set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR}" CACHE PATH "" FORCE)
@@ -138,21 +142,24 @@ endif()
 
 block()
     set(ZSTD_BUILD_PROGRAMS OFF)
-    set(ZSTD_BUILD_TESTS OFF)
-    set(ZSTD_BUILD_SHARED ON)
-    set(BOOST_ENABLE_CMAKE ON)
-    set(BOOST_INCLUDE_LIBRARIES "algorithm;math;crc;iostreams")
+    set(ZSTD_BUILD_TESTS    OFF)
+    set(ZSTD_BUILD_SHARED   ON)
     set(SPECTRA_BUILD_TESTS OFF)
-    set(BUILD_TESTING OFF)
-    # Explicitly enable zlib support in Boost iostreams and point it at our zlib.
-    # Without this Boost may silently disable the zlib filter if it doesn't find
-    # zlib on its own, producing the missing zlib_error::check link error later.
+    set(BUILD_TESTING       OFF)
     set(BOOST_IOSTREAMS_ENABLE_ZLIB ON)
     if(zlib_POPULATED)
-        set(ZLIB_ROOT "${zlib_BINARY_DIR}" CACHE PATH "" FORCE)
-        set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}" CACHE PATH "" FORCE)
+        set(ZLIB_ROOT        "${zlib_BINARY_DIR}"                      CACHE PATH "" FORCE)
+        set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}"   CACHE PATH "" FORCE)
     endif()
-    FetchContent_MakeAvailable(zstd Boost)
+
+    if(Boost_DIR)
+        FetchContent_MakeAvailable(zstd)
+    else()
+        # These two vars are only meaningful to Boost's own CMake build system
+        set(BOOST_ENABLE_CMAKE ON)
+        set(BOOST_INCLUDE_LIBRARIES "algorithm;math;crc;iostreams")
+        FetchContent_MakeAvailable(zstd Boost)
+    endif()
 endblock()
 
 # Eigen and Spectra have entangled install rules (Spectra exports reference
@@ -166,6 +173,16 @@ set(CMAKE_SKIP_INSTALL_RULES OFF)
 # in the parent scope for the add_library(sqlite3) call below.
 FetchContent_MakeAvailable(sqlite)
 FetchContent_MakeAvailable(stdexec)
+
+# If the user supplied a Boost_DIR, prefer that over fetching Boost.
+if(Boost_DIR)
+    message(STATUS "Using external Boost from ${Boost_DIR}")
+    find_package(Boost REQUIRED COMPONENTS iostreams
+        CONFIG
+        PATHS "${Boost_DIR}"
+        NO_DEFAULT_PATH)
+    find_package(ZLIB REQUIRED)
+endif()
 
 # Ensure a consistent ZLIB::ZLIB target exists for downstream linking.
 # - System zlib: find_package (via FIND_PACKAGE_ARGS) already created ZLIB::ZLIB
@@ -411,8 +428,24 @@ target_include_directories(gcta64 PRIVATE
     "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include"
     "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/simde")
 
+set(_GCTA_BOOST_LINKS "")
+if(TARGET Boost::iostreams)
+    list(APPEND _GCTA_BOOST_LINKS Boost::iostreams)
+endif()
+if(TARGET Boost::headers)
+    list(APPEND _GCTA_BOOST_LINKS Boost::headers)
+endif()
+# Fallback for module-mode find_package (old FindBoost.cmake)
+if(DEFINED Boost_LIBRARIES AND NOT "${Boost_LIBRARIES}" STREQUAL "")
+    list(APPEND _GCTA_BOOST_LINKS ${Boost_LIBRARIES})
+endif()
+if(DEFINED Boost_INCLUDE_DIRS)
+    target_include_directories(gcta64 PRIVATE ${Boost_INCLUDE_DIRS})
+endif()
+
 target_link_libraries(gcta64 PRIVATE
-    Boost::algorithm Boost::math Boost::crc Boost::iostreams
+    ${_GCTA_BOOST_LINKS}
+    $<$<BOOL:${Boost_DIR}>:ZLIB::ZLIB>   # system Boost::iostreams needs system zlib
     Eigen3::Eigen
     Spectra
     STDEXEC::stdexec
