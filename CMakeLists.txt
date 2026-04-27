@@ -4,8 +4,6 @@ project(GCTA2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_C_STANDARD 23)
-set(CMAKE_C_STANDARD_REQUIRED ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -248,9 +246,6 @@ endif()
 # Find OpenMP
 if(APPLE)
     # Use manual flags for OpenMP with Apple Clang
-    set(OpenMP_C_FLAGS "-Xpreprocessor -fopenmp")
-    set(OpenMP_C_LIB_NAMES "omp")
-    set(OpenMP_C_INCLUDE_DIR "/opt/homebrew/opt/libomp/include")
     set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp")
     set(OpenMP_CXX_LIB_NAMES "omp")
     set(OpenMP_CXX_INCLUDE_DIR "/opt/homebrew/opt/libomp/include")
@@ -259,8 +254,6 @@ endif()
 
 if(WIN32)
     set(OpenMP_omp_LIBRARY "${LLVM_ROOT}/lib/libomp.lib")
-    set(OpenMP_C_FLAGS "-fopenmp")
-    set(OpenMP_C_LIB_NAMES "omp")
     set(OpenMP_CXX_FLAGS "-fopenmp")
     set(OpenMP_CXX_LIB_NAMES "omp")
     set(OpenMP_CXX_INCLUDE_DIR "${LLVM_ROOT}/lib/clang/20/include")
@@ -340,17 +333,39 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS")
                 IMPORTED_LOCATION "${_OpenBLAS_ROOT_DIR}/lib/libopenblas.dylib"
                 INTERFACE_INCLUDE_DIRECTORIES "${OpenBLAS_INCLUDE_DIRS}")
         else()
-            add_library(OpenBLAS::OpenBLAS SHARED IMPORTED)
-            set_target_properties(OpenBLAS::OpenBLAS PROPERTIES
-                IMPORTED_LOCATION "${_OpenBLAS_ROOT_DIR}/lib/libopenblas.a"
-                INTERFACE_INCLUDE_DIRECTORIES "${OpenBLAS_INCLUDE_DIRS}")
-            find_library(GFORTRAN_LIBRARY gfortran
-                HINTS "${_OpenBLAS_ROOT_DIR}/lib")
-            if(GFORTRAN_LIBRARY)
-                list(APPEND GCTA_BLAS_LIBS ${GFORTRAN_LIBRARY})
+            # Prefer the shared library so RPATH pins the correct one at runtime,
+            # preventing MKL (common in conda envs) from winning via LD_LIBRARY_PATH.
+            find_library(OpenBLAS_SO openblas
+                HINTS "${_OpenBLAS_ROOT_DIR}/lib"
+                NO_DEFAULT_PATH)
+            if(OpenBLAS_SO)
+                add_library(OpenBLAS::OpenBLAS SHARED IMPORTED)
+                set_target_properties(OpenBLAS::OpenBLAS PROPERTIES
+                    IMPORTED_LOCATION "${OpenBLAS_SO}"
+                    INTERFACE_INCLUDE_DIRECTORIES "${OpenBLAS_INCLUDE_DIRS}")
             else()
-                message(FATAL_ERROR "libgfortran not found, required for static OpenBLAS linking")
+                add_library(OpenBLAS::OpenBLAS STATIC IMPORTED)
+                set_target_properties(OpenBLAS::OpenBLAS PROPERTIES
+                    IMPORTED_LOCATION "${_OpenBLAS_ROOT_DIR}/lib/libopenblas.a"
+                    INTERFACE_INCLUDE_DIRECTORIES "${OpenBLAS_INCLUDE_DIRS}")
+                find_library(GFORTRAN_LIBRARY gfortran
+                    HINTS "${_OpenBLAS_ROOT_DIR}/lib")
+                if(GFORTRAN_LIBRARY)
+                    list(APPEND GCTA_BLAS_LIBS ${GFORTRAN_LIBRARY})
+                else()
+                    message(FATAL_ERROR "libgfortran not found, required for static OpenBLAS linking")
+                endif()
             endif()
+        endif()
+    endif()
+    # Capture the OpenBLAS library directory for RPATH so the correct shared
+    # library is found at runtime even when MKL is also on LD_LIBRARY_PATH.
+    if(LINUX)
+        get_target_property(_openblas_loc OpenBLAS::OpenBLAS IMPORTED_LOCATION)
+        if(_openblas_loc)
+            get_filename_component(_openblas_libdir "${_openblas_loc}" DIRECTORY)
+            list(APPEND CMAKE_BUILD_RPATH "${_openblas_libdir}")
+            list(APPEND CMAKE_INSTALL_RPATH "${_openblas_libdir}")
         endif()
     endif()
     list(APPEND GCTA_BLAS_LIBS OpenBLAS::OpenBLAS)
@@ -407,14 +422,10 @@ set(SRCS
     ${CMAKE_SOURCE_DIR}/src/ThreadPool.cpp
     ${CMAKE_SOURCE_DIR}/src/mem.cpp
     ${CMAKE_SOURCE_DIR}/src/tables.cpp
-    ${CMAKE_SOURCE_DIR}/src/utils.cpp)
+    ${CMAKE_SOURCE_DIR}/src/utils.cpp
+    ${CMAKE_SOURCE_DIR}/src/acat.cpp)
 
 add_executable(gcta64 ${MAIN_SOURCE})
-
-# acat.c is pure C — keep it in its own small library so the C++ PCH
-# applied to gcta64 does not bleed into C compilation units.
-add_library(acat_c OBJECT "${CMAKE_SOURCE_DIR}/src/acat.c")
-target_include_directories(acat_c PUBLIC ${COMMON_INCLUDES})
 
 target_sources(gcta64 PRIVATE ${SRCS})
 
@@ -437,7 +448,7 @@ target_precompile_headers(gcta64 PRIVATE
     <boost/algorithm/string.hpp>
     <boost/math/distributions.hpp>)
 
-set(GCTA_LIBS acat_c)
+set(GCTA_TARGETS gcta64)
 
 target_sources(gcta64 PRIVATE
     main/CommFunc.cpp
@@ -466,12 +477,12 @@ target_sources(gcta64 PRIVATE
     main/sbat.cpp)
 target_link_libraries(gcta64 PRIVATE htslib)
 
-set(GCTA_TARGETS gcta64 ${GCTA_LIBS})
+set(GCTA_TARGETS gcta64)
 
 set(GCTA_IPO_ENABLED OFF)
 if(GCTA_ENABLE_IPO AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
     include(CheckIPOSupported)
-    check_ipo_supported(RESULT GCTA_IPO_SUPPORTED OUTPUT GCTA_IPO_OUTPUT)
+    check_ipo_supported(RESULT GCTA_IPO_SUPPORTED OUTPUT GCTA_IPO_OUTPUT LANGUAGES CXX)
     if(GCTA_IPO_SUPPORTED)
         set(GCTA_IPO_ENABLED ON)
     else()
@@ -535,7 +546,7 @@ endif()
 
 target_include_directories(Pgenlib PRIVATE ${GCTA_ZLIB_INCLUDE_DIRS})
 
-target_link_libraries(gcta64 PRIVATE acat_c Pgenlib sqlite3 Threads::Threads)
+target_link_libraries(gcta64 PRIVATE Pgenlib sqlite3 Threads::Threads)
 
 # Link BLAS before GSL so OpenBLAS/Accelerate/MKL cblas symbols take precedence
 # over libgslcblas in dyld (macOS) and ld.so (Linux) symbol resolution order
