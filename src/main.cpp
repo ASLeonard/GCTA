@@ -38,8 +38,8 @@
 #include "mem.hpp"
 #include "config.h"
 
-#include "acat.hpp" //add by fanghl 20210303
-#define ACAT_MODULE
+//#include "acat.hpp" //add by fanghl 20210303
+//#define ACAT_MODULE
 
 using std::bind;
 using std::map;
