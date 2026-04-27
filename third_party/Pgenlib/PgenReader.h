@@ -30,6 +30,7 @@
 #define PGENREADER
 #include "pgenlib_ffi_support.h"
 #include "pgenlib_read.h"
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -52,7 +53,43 @@ typedef struct SNPInfo{
     uint32_t AlCount;
 } SNPInfo;
 
+// Re-export plink2's PAIR_TABLE16 under the name used by downstream code (e.g. Geno.cpp).
 #define GET_TABLE16(a, b, c, d) PAIR_TABLE16(a, b, c, d)
+
+// Structured view over a flat dosage buffer.
+//
+// The flat layout (used by PgenBackend's block.buf) is:
+//   [genovec:        genoPtrSize   uintptr_t]
+//   [dosage_present: presentSize   uintptr_t]
+//   [dosage_main:    mainSize      uintptr_t (reinterpreted as uint16_t*)]
+//   [dosage_ct:      1             uint32_t  (written by ReadDosage)]
+//
+// Use DosageBuf::from() to construct a view into a stride-aligned slot of
+// such a buffer instead of repeating the pointer arithmetic at each call site.
+struct DosageBuf {
+    uintptr_t* genovec;
+    uintptr_t* dosage_present;
+    uint16_t*  dosage_main;
+    uint32_t   dosage_ct;      // filled by ReadDosage
+
+    // Construct a DosageBuf view into a flat pre-allocated buffer slot.
+    // base        -- pointer to the start of this marker's slot
+    // genoPtrSize -- PgenReader::GetGenoBufPtrSize(keepCT),    padded to 64-byte boundary
+    // presentSize -- PgenReader::GetDosagePresentSize(keepCT), padded to 64-byte boundary
+    // mainSize    -- PgenReader::GetDosageMainSize(keepCT),    padded to 64-byte boundary
+    static DosageBuf from(uintptr_t* base,
+                          std::size_t genoPtrSize,
+                          std::size_t presentSize,
+                          std::size_t mainSize) {
+        (void)mainSize; // size retained for documentation; dosage_ct sits after it
+        return DosageBuf{
+            base,
+            base + genoPtrSize,
+            reinterpret_cast<uint16_t*>(base + genoPtrSize + presentSize),
+            0   // dosage_ct written by ReadDosage
+        };
+    }
+};
 
 class PgenReader {
     public:
@@ -99,6 +136,7 @@ class PgenReader {
         void ReadRawFullHard(uintptr_t *buf, int variant_idx);
 
         void ReadDosage(uintptr_t *buf, int variant_idx, int allele_idx);
+        void ReadDosage(DosageBuf &buf, int variant_idx, int allele_idx);
 
         void CountHardFreqMiss(uintptr_t *buf, SNPInfo *snpinfo);
         static bool CountHardFreqMissExt(uintptr_t *buf, const uintptr_t *subset_iter_vec, uint32_t rawSampleSize, uint32_t keepSize, SNPInfo *snpinfo, bool f_std);
@@ -109,26 +147,6 @@ class PgenReader {
         static void ExtractGenoExt(const uintptr_t *in, const uintptr_t * subsets, uint32_t rawSampleSize, uint32_t keepSize, uintptr_t *out);
         static void ExtractDoubleExt(uintptr_t *in, const uintptr_t *subsets, uint32_t rawSampleSize, uint32_t keepSize, const double *gtable, double *gOut, uintptr_t *missOut);
 
-        /*
-
-           void ReadAlleles(IntegerMatrix acbuf,
-           Nullable<LogicalVector> phasepresent_buf, int variant_idx);
-
-           void ReadAllelesNumeric(NumericMatrix acbuf,
-           Nullable<LogicalVector> phasepresent_buf,
-           int variant_idx);
-
-           void ReadIntList(IntegerMatrix buf, IntegerVector variant_subset);
-
-           void ReadList(NumericMatrix buf, IntegerVector variant_subset, bool meanimpute);
-
-           void FillVariantScores(NumericVector result, NumericVector weights, Nullable<IntegerVector> variant_subset);
-        */
-
-        void Close();
-
-        ~PgenReader();
-
         static void SetSampleSubsets(const vector<uint32_t> &sample_subset_0based, uint32_t rawSampleSize, uintptr_t *subset_incl_vec, uintptr_t *subset_inter_vec);
         static int GetGenoBufPtrSize(uint32_t sample_ct);
         static int GetSubsetMaskSize(uint32_t sample_ct);
@@ -137,6 +155,9 @@ class PgenReader {
 
         static bool CountHardDosage(uintptr_t *buf, uint16_t *dosage_buf, const uintptr_t *dosage_present, const vector<uint32_t> *maskp, uint32_t sampleCT, uint32_t dosageCT, SNPInfo *snpinfo, string &err);
 
+        void Close();
+
+        ~PgenReader();
 
     private:
         plink2::PgenFileInfo* _info_ptr;
@@ -159,17 +180,10 @@ class PgenReader {
         plink2::PgenVariant _pgv;
 
         plink2::VecW* _transpose_batch_buf;
-        // kPglNypTransposeBatch (= 256) variants at a time, and then transpose
-        uintptr_t* _multivar_vmaj_geno_buf;
-        uintptr_t* _multivar_vmaj_phasepresent_buf;
-        uintptr_t* _multivar_vmaj_phaseinfo_buf;
-        uintptr_t* _multivar_smaj_geno_batch_buf;
-        uintptr_t* _multivar_smaj_phaseinfo_batch_buf;
-        uintptr_t* _multivar_smaj_phasepresent_batch_buf;
+        // Reserved for future multi-sample transpose use; not currently active.
 
         void SetSampleSubsetInternal(const vector<uint32_t> &sample_subset_0based);
 
         void ReadAllelesPhasedInternal(int variant_idx);
 };
 #endif //PGENREADER
-

@@ -33,6 +33,7 @@
 #include "pgenlib_read.h"
 #include <iostream>
 #include <limits>
+#include <stdexcept>
 
 RefcountedWptr* CreateRefcountedWptr(uintptr_t size) {
     RefcountedWptr* rwp = S_CAST(RefcountedWptr*, malloc(sizeof(RefcountedWptr) + size * sizeof(intptr_t)));
@@ -55,9 +56,8 @@ void CondReleaseRefcountedWptr(RefcountedWptr** rwpp) {
     *rwpp = nullptr;
 }
 
-void stop(const char *prompt){
-    std::cout << prompt << std::endl;
-    exit(1);
+[[noreturn]] static void stop(const char* msg) {
+    throw std::runtime_error(msg);
 }
 
 PgenReader::PgenReader() : _info_ptr(nullptr),
@@ -166,7 +166,7 @@ void PgenReader::Load(string filename, uint32_t *raw_sample_ct, uint32_t* raw_ma
     }
     const uintptr_t dosage_main_byte_ct = plink2::DivUp(file_sample_ct, (2 * plink2::kInt32PerVec)) * plink2::kBytesPerVec;
     unsigned char* pgr_alloc;
-    if (plink2::cachealigned_malloc(pgr_alloc_main_byte_ct + (2 * plink2::kPglNypTransposeBatch + 5) * sample_subset_byte_ct + cumulative_popcounts_byte_ct + (1 + plink2::kPglNypTransposeBatch) * genovec_byte_ct + multiallelic_hc_byte_ct + dosage_main_byte_ct + plink2::kPglBitTransposeBufbytes + 4 * (plink2::kPglNypTransposeBatch * plink2::kPglNypTransposeBatch / 8), &pgr_alloc)) {
+    if (plink2::cachealigned_malloc(pgr_alloc_main_byte_ct + 5 * sample_subset_byte_ct + cumulative_popcounts_byte_ct + genovec_byte_ct + multiallelic_hc_byte_ct + dosage_main_byte_ct + plink2::kPglBitTransposeBufbytes, &pgr_alloc)) {
         stop("Out of memory");
     }
     plink2::PglErr reterr = PgrInit(fname, max_vrec_width, _info_ptr, _state_ptr, pgr_alloc);
@@ -216,26 +216,14 @@ void PgenReader::Load(string filename, uint32_t *raw_sample_ct, uint32_t* raw_ma
     pgr_alloc_iter = &(pgr_alloc_iter[sample_subset_byte_ct]);
     _pgv.dosage_main = reinterpret_cast<uint16_t*>(pgr_alloc_iter);
     pgr_alloc_iter = &(pgr_alloc_iter[dosage_main_byte_ct]);
-    //std::cout << "phase info size: " << dosage_main_byte_ct << ", dosage_present: " << sample_subset_byte_ct << std::endl;;
     if (sample_subset_0based.size() > 0) {
         SetSampleSubsetInternal(sample_subset_0based);
     } else {
         _subset_size = file_sample_ct;
     }
     _transpose_batch_buf = reinterpret_cast<plink2::VecW*>(pgr_alloc_iter);
-    pgr_alloc_iter = &(pgr_alloc_iter[plink2::kPglBitTransposeBufbytes]);
-    _multivar_vmaj_geno_buf = reinterpret_cast<uintptr_t*>(pgr_alloc_iter);
-    pgr_alloc_iter = &(pgr_alloc_iter[plink2::kPglNypTransposeBatch * genovec_byte_ct]);
-    _multivar_vmaj_phasepresent_buf = reinterpret_cast<uintptr_t*>(pgr_alloc_iter);
-    pgr_alloc_iter = &(pgr_alloc_iter[plink2::kPglNypTransposeBatch * sample_subset_byte_ct]);
-    _multivar_vmaj_phaseinfo_buf = reinterpret_cast<uintptr_t*>(pgr_alloc_iter);
-    pgr_alloc_iter = &(pgr_alloc_iter[plink2::kPglNypTransposeBatch * sample_subset_byte_ct]);
-    _multivar_smaj_geno_batch_buf = reinterpret_cast<uintptr_t*>(pgr_alloc_iter);
-    pgr_alloc_iter = &(pgr_alloc_iter[plink2::kPglNypTransposeBatch * plink2::kPglNypTransposeBatch / 4]);
-    _multivar_smaj_phaseinfo_batch_buf = reinterpret_cast<uintptr_t*>(pgr_alloc_iter);
-    pgr_alloc_iter = &(pgr_alloc_iter[plink2::kPglNypTransposeBatch * plink2::kPglNypTransposeBatch / 8]);
-    _multivar_smaj_phasepresent_batch_buf = reinterpret_cast<uintptr_t*>(pgr_alloc_iter);
-    // pgr_alloc_iter = &(pgr_alloc_iter[plink2::kPglNypTransposeBatch * plink2::kPglNypTransposeBatch / 8]);
+    // The remaining allocation space is reserved for future multi-sample
+    // transpose batching; no active methods use these buffers currently.
    //for dosage 
     genovec_size64 = (GetGenoBufPtrSize(_subset_size) + 63) / 64 * 64;
     dosage_present_size64 = (GetDosagePresentSize(_subset_size) + 63) / 64 * 64;
@@ -424,22 +412,7 @@ bool PgenReader::CountHardFreqMissExt(uintptr_t *buf, const uintptr_t *subset_it
 
     if(rawSampleSize == keepSize){
         uint32_t sample_ct = keepSize;
-        //const uint32_t sample_ct_remainder = sample_ct % plink2::kBitsPerWordD2;
         plink2::GenoarrCountFreqsUnsafe(buf, sample_ct, genocounts);
-        /*
-        plink2::GenoarrCountFreqsUnsafe(buf, sample_ct - sample_ct_remainder, genocounts);
-        if (sample_ct_remainder) {
-            uintptr_t cur_geno_word = plink2::bzhi(buf[sample_ct / plink2::kBitsPerWordD2], 2 * sample_ct_remainder);
-            const uintptr_t cur_geno_word_high = plink2::kMask5555 & (cur_geno_word >> 1);
-            const uint32_t even_ct = plink2::Popcount01Word(cur_geno_word & plink2::kMask5555);
-            const uint32_t odd_ct = plink2::Popcount01Word(cur_geno_word_high);
-            const uint32_t bothset_ct = plink2::Popcount01Word(cur_geno_word & cur_geno_word_high);
-            genocounts[0] += sample_ct_remainder + bothset_ct - even_ct - odd_ct;
-            genocounts[1] += even_ct - bothset_ct;
-            genocounts[2] += odd_ct - bothset_ct;
-            genocounts[3] += bothset_ct;
-        } 
-        */
     }else{
         const uint32_t raw_sample_ct = rawSampleSize;
         plink2::GenoarrCountSubsetFreqs(buf, subset_iter_vec, raw_sample_ct , keepSize, genocounts);
@@ -453,20 +426,9 @@ bool PgenReader::CountHardFreqMissExt(uintptr_t *buf, const uintptr_t *subset_it
     if(f_std) snpinfo->std = (dosage + dGenoCounts2 - snpinfo->mean * dosage) / (snpinfo->N - 1);
     snpinfo->nMissRate = 1.0 * snpinfo->N / keepSize;
     return true;
-    /*
-       std::cout << "00: " << genocounts[0] << "\n";
-       std::cout << "01: " << genocounts[1] << "\n";
-       std::cout << "10: " << genocounts[2] << "\n";
-       std::cout << "11: " << genocounts[3] << "\n";
-       std::cout << "tt: " << genocounts[0] + genocounts[1]
-       + genocounts[2] + genocounts[3] << "\n";
-       */
 }
-#include <csignal>
 bool PgenReader::CountHardDosage(uintptr_t *buf, uint16_t *dosage_buf, const uintptr_t *dosage_present, const vector<uint32_t> *maskp, uint32_t sampleCT, uint32_t dosageCT, SNPInfo *snpinfo, string &err){
     if(sampleCT != dosageCT){
-        std::raise(SIGINT);
-        std::cout << sampleCT << ", dosageCT: " << dosageCT << std::endl;
         err = "GCTA can't support mix hard-call and dosage currently.";
         return false;
     }
@@ -477,7 +439,7 @@ bool PgenReader::CountHardDosage(uintptr_t *buf, uint16_t *dosage_buf, const uin
         sumsq += curDos * curDos;
     }
     uint32_t maskSize = 0;
-    if(maskp != NULL){
+    if(maskp != nullptr){
         const vector<uint32_t> masks = *maskp;
         maskSize = masks.size();
         for(int i = 0; i < maskSize; i++){
@@ -486,11 +448,14 @@ bool PgenReader::CountHardDosage(uintptr_t *buf, uint16_t *dosage_buf, const uin
             sumsq -= 3 * curDos / 4;
         }
     }
+    // plink2 stores dosage as uint16 in [0, 16384], so the scale factor to
+    // convert to [0, 1] is 1/16384 = 0.00006103515625.
+    static constexpr double kDosageScale = 1.0 / 16384.0;
     snpinfo->nMissRate = 1;
     snpinfo->N = sampleCT;
     snpinfo->AlCount = 2 * sampleCT - maskSize;
-    snpinfo->af = 0.00006103515625 * sum / snpinfo->AlCount;
-    snpinfo->std = 0.00006103515625 * 0.00006103515625 * (1.0 *sumsq - 1.0 * sum * sum / sampleCT) / (sampleCT - 1);
+    snpinfo->af  = kDosageScale * sum / snpinfo->AlCount;
+    snpinfo->std = kDosageScale * kDosageScale * (1.0 * sumsq - 1.0 * sum * sum / sampleCT) / (sampleCT - 1);
 
     return true;
 }
@@ -556,21 +521,18 @@ void PgenReader::ExtractGenoExt(const uintptr_t *in, const uintptr_t * subsets, 
 }
 
 void PgenReader::ExtractDoubleExt(uintptr_t *in, const uintptr_t *subsets, uint32_t rawSampleSize, uint32_t keepSize, const double *gtable, double *gOut, uintptr_t *missOut){
-    uintptr_t *bufptr = NULL;
-    bool newBuf = false;
+    uintptr_t *bufptr = nullptr;
+    std::vector<uintptr_t> tmpbuf;
     if(rawSampleSize == keepSize){
         bufptr = in;
     }else{
-        newBuf = true;
-        bufptr = new uintptr_t[GetGenoBufPtrSize(keepSize)];
+        tmpbuf.resize(GetGenoBufPtrSize(keepSize));
+        bufptr = tmpbuf.data();
         ExtractGenoExt(in, subsets, rawSampleSize, keepSize, bufptr);
     }
     plink2::GenoarrLookup16x8bx2(bufptr, gtable, keepSize, gOut);
-    if(missOut != NULL){
+    if(missOut != nullptr){
         plink2::GenoarrToMissingnessUnsafe(bufptr, keepSize, missOut);
-    }
-    if(newBuf){
-        delete[] bufptr;
     }
 }
 
@@ -627,287 +589,59 @@ void PgenReader::Read(vector<double> &buf, int variant_idx, int allele_idx) {
     plink2::Dosage16ToDoubles(kGenoRDoublePairs, _pgv.genovec, _pgv.dosage_present, _pgv.dosage_main, _subset_size, dosage_ct, buf.data());
 }
 
+// Original flat-buffer overload: buf must be laid out as:
+//   [genovec: genovec_size64 uintptr_t]
+//   [dosage_present: dosage_present_size64 uintptr_t]
+//   [dosage_main: dosage_main_size64 * sizeof(uintptr_t)/sizeof(uint16_t) uint16_t]
+//   [dosage_ct: 1 uint32_t]
+// Use GetGenoBufPtrSize/GetDosagePresentSize/GetDosageMainSize to compute sizes.
 void PgenReader::ReadDosage(uintptr_t *buf, int variant_idx, int allele_idx){
-    uintptr_t *genovec = buf;
-    uintptr_t *dosage_present = (buf + genovec_size64);
-    //uintptr_t *dosage_present = buf;
-    //uintptr_t *genovec = buf + dosage_present_size64;
-    uint16_t *dosage_main = reinterpret_cast<uint16_t*>(buf + genovec_size64 + dosage_present_size64);
-    uint32_t *dosage_ct_ptr = reinterpret_cast<uint32_t*>(buf + genovec_size64 + dosage_present_size64 + dosage_main_size64);
-    //std::cout << "genovec_size64: " << genovec_size64 << ", dosage present: " << dosage_present_size64 << ", dosage main: " << dosage_main_size64 << std::endl;
-    //plink2::PglErr reterr = PgrGet1D(_subset_include_vec, _subset_cumulative_popcounts, _subset_size, variant_idx, allele_idx, _state_ptr, genovec, dosage_present, dosage_main, dosage_ct_ptr);
-    uint32_t dosage_ct;
+    if (!_info_ptr) {
+        stop("pgen is closed");
+    }
+    if (static_cast<uint32_t>(variant_idx) >= _info_ptr->raw_variant_ct) {
+        char errstr_buf[256];
+        snprintf(errstr_buf, sizeof(errstr_buf), "variant_num out of range (%d; must be 1..%u)", variant_idx + 1, _info_ptr->raw_variant_ct);
+        stop(errstr_buf);
+    }
+    uintptr_t* genovec       = buf;
+    uintptr_t* dosage_present = buf + genovec_size64;
+    uint16_t*  dosage_main   = reinterpret_cast<uint16_t*>(buf + genovec_size64 + dosage_present_size64);
+    uint32_t*  dosage_ct_ptr = reinterpret_cast<uint32_t*>(buf + genovec_size64 + dosage_present_size64 + dosage_main_size64);
     plink2::PgrSampleSubsetIndex pssi;
     PgrSetSampleSubsetIndex(_subset_cumulative_popcounts, _state_ptr, &pssi);
-    plink2::PglErr reterr = plink2::PgrGet1D(_subset_include_vec, pssi, _subset_size, variant_idx, allele_idx, _state_ptr, genovec, dosage_present, dosage_main, dosage_ct_ptr);
+    plink2::PglErr reterr = plink2::PgrGet1D(
+        _subset_include_vec, pssi, _subset_size, variant_idx, allele_idx,
+        _state_ptr, genovec, dosage_present, dosage_main, dosage_ct_ptr);
     if(reterr != plink2::kPglRetSuccess){
         char errstr_buf[256];
         snprintf(errstr_buf, sizeof(errstr_buf), "PgrGet1D() error %d", static_cast<int>(reterr));
         stop(errstr_buf);
     }
-    //plink2::Dosage16ToDoubles(kGenoRDoublePairs, _pgv.genovec, _pgv.dosage_present, _pgv.dosage_main, _subset_size, dosage_ct, buf.data());
 }
 
-
-
-static const uint64_t kGenoToRIntcodeDPairs[32] ALIGNV16 = PAIR_TABLE16(0, 0x100000000LLU, 0x100000001LLU, 0x8000000080000000LLU);
-static const int32_t kGenoToLogicalPhaseQuads[1024] ALIGNV16 = QUAD_TABLE256(1, 0, 1, -9);
-/*
-   void PgenReader::ReadAlleles(IntegerMatrix acbuf, Nullable<LogicalVector> phasepresent_buf, int variant_idx) {
-   if (!_info_ptr) {
-   stop("pgen is closed");
-   }
-   if ((acbuf.nrow() != 2) || (acbuf.ncol() != static_cast<int>(_subset_size))) {
-   char errstr_buf[256];
-    snprintf(errstr_buf, sizeof(errstr_buf), "acbuf has wrong size (%dx%d; 2x%u expected)", acbuf.nrow(), acbuf.ncol(), _subset_size);
-   stop(errstr_buf);
-   }
-   ReadAllelesPhasedInternal(variant_idx);
-   plink2::GenoarrToAlleleCodes(kGenoToRIntcodeDPairs, _pgv.genovec, _subset_size, &acbuf[0]);
-   const uintptr_t* allele_idx_offsets = _info_ptr->allele_idx_offsets;
-   uint32_t cur_allele_ct = 2;
-   if (allele_idx_offsets) {
-   cur_allele_ct = allele_idx_offsets[variant_idx + 1] - allele_idx_offsets[variant_idx];
-   if (cur_allele_ct != 2) {
-   stop("multiallelic support under development");
-   }
-   }
-   const uintptr_t* phasepresent = _pgv.phasepresent;
-   const uintptr_t* phaseinfo = _pgv.phaseinfo;
-   const uint32_t phasepresent_ct = _pgv.phasepresent_ct;
-   uintptr_t sample_uidx_base = 0;
-   uintptr_t cur_bits = phasepresent[0];
-   if (!phasepresent_buf.isNotNull()) {
-   if (cur_allele_ct == 2) {
-   uint64_t* allele_codes_alias64 = R_CAST(uint64_t*, &acbuf[0]);
-   for (uint32_t phased_idx = 0; phased_idx != phasepresent_ct; ++phased_idx) {
-   const uintptr_t sample_uidx = plink2::BitIter1(phasepresent, &sample_uidx_base, &cur_bits);
-   if (plink2::IsSet(phaseinfo, sample_uidx)) {
-// 1|0
-allele_codes_alias64[sample_uidx] = 1;
-}
-}
-} else {
-int32_t* allele_codes = &acbuf[0];
-for (uint32_t phased_idx = 0; phased_idx != phasepresent_ct; ++phased_idx) {
-const uintptr_t sample_uidx = plink2::BitIter1(phasepresent, &sample_uidx_base, &cur_bits);
-if (plink2::IsSet(phaseinfo, sample_uidx)) {
-const int32_t tmpval = allele_codes[2 * sample_uidx];
-allele_codes[2 * sample_uidx] = allele_codes[2 * sample_uidx + 1];
-allele_codes[2 * sample_uidx + 1] = tmpval;
-}
-}
-}
-return;
-}
-// Unfortunately, we can't use GenoarrPhasedToAlleleCodes directly, since
-// it's written for Python 1-byte bools instead of R 4-byte logical values.
-// (probable todo: allow the no-phasepresent_buf part to be called
-// separately)
-//
-// 0, 2 -> automatically phased.  3 -> NA_LOGICAL.
-// 1 -> assume unphased; then change to phased as necessary when iterating
-//      over phasepresent.
-int32_t* phasepresent_wbuf = &(as<LogicalVector>(phasepresent_buf)[0]);
-plink2::GenoarrLookup256x4bx4(_pgv.genovec, kGenoToLogicalPhaseQuads, _subset_size, phasepresent_wbuf);
-if (cur_allele_ct == 2) {
-uint64_t* allele_codes_alias64 = R_CAST(uint64_t*, &acbuf[0]);
-for (uint32_t phased_idx = 0; phased_idx != phasepresent_ct; ++phased_idx) {
-const uintptr_t sample_uidx = plink2::BitIter1(phasepresent, &sample_uidx_base, &cur_bits);
-phasepresent_wbuf[sample_uidx] = 1;
-if (plink2::IsSet(phaseinfo, sample_uidx)) {
-allele_codes_alias64[sample_uidx] = 1;
-}
-}
-} else {
-int32_t* allele_codes = &acbuf[0];
-for (uint32_t phased_idx = 0; phased_idx != phasepresent_ct; ++phased_idx) {
-const uintptr_t sample_uidx = plink2::BitIter1(phasepresent, &sample_uidx_base, &cur_bits);
-phasepresent_wbuf[sample_uidx] = 1;
-if (plink2::IsSet(phaseinfo, sample_uidx)) {
-    const int32_t tmpval = allele_codes[2 * sample_uidx];
-    allele_codes[2 * sample_uidx] = allele_codes[2 * sample_uidx + 1];
-    allele_codes[2 * sample_uidx + 1] = tmpval;
-}
-}
-}
-}
-
-static const double kGenoToRNumcodePairs[8] ALIGNV16 = {0.0, 0.0, 0.0, 1.0, 1.0, 1.0, NA_REAL, NA_REAL};
-
-void PgenReader::ReadAllelesNumeric(NumericMatrix acbuf, Nullable<LogicalVector> phasepresent_buf, int variant_idx) {
+void PgenReader::ReadDosage(DosageBuf &buf, int variant_idx, int allele_idx){
     if (!_info_ptr) {
         stop("pgen is closed");
     }
-    if ((acbuf.nrow() != 2) || (acbuf.ncol() != static_cast<int>(_subset_size))) {
+    if (static_cast<uint32_t>(variant_idx) >= _info_ptr->raw_variant_ct) {
         char errstr_buf[256];
-        snprintf(errstr_buf, sizeof(errstr_buf), "acbuf has wrong size (%dx%d; 2x%u expected)", acbuf.nrow(), acbuf.ncol(), _subset_size);
+        snprintf(errstr_buf, sizeof(errstr_buf), "variant_num out of range (%d; must be 1..%u)", variant_idx + 1, _info_ptr->raw_variant_ct);
         stop(errstr_buf);
     }
-    ReadAllelesPhasedInternal(variant_idx);
-    double* allele_codes = &acbuf[0];
-    plink2::GenoarrLookup4x16b(_pgv.genovec, kGenoToRNumcodePairs, _subset_size, allele_codes);
-    const uintptr_t* allele_idx_offsets = _info_ptr->allele_idx_offsets;
-    uint32_t cur_allele_ct = 2;
-    if (allele_idx_offsets) {
-        cur_allele_ct = allele_idx_offsets[variant_idx + 1] - allele_idx_offsets[variant_idx];
-        if (cur_allele_ct != 2) {
-            stop("multiallelic support under development");
-        }
-    }
-    const uintptr_t* phasepresent = _pgv.phasepresent;
-    const uintptr_t* phaseinfo = _pgv.phaseinfo;
-    const uint32_t phasepresent_ct = _pgv.phasepresent_ct;
-    uintptr_t sample_uidx_base = 0;
-    uintptr_t cur_bits = phasepresent[0];
-    if (!phasepresent_buf.isNotNull()) {
-        if (cur_allele_ct == 2) {
-            for (uint32_t phased_idx = 0; phased_idx != phasepresent_ct; ++phased_idx) {
-                const uintptr_t sample_uidx = plink2::BitIter1(phasepresent, &sample_uidx_base, &cur_bits);
-                if (plink2::IsSet(phaseinfo, sample_uidx)) {
-                    // 1|0
-                    allele_codes[2 * sample_uidx] = 1.0;
-                    allele_codes[2 * sample_uidx + 1] = 0.0;
-                }
-            }
-        } else {
-            for (uint32_t phased_idx = 0; phased_idx != phasepresent_ct; ++phased_idx) {
-                const uintptr_t sample_uidx = plink2::BitIter1(phasepresent, &sample_uidx_base, &cur_bits);
-                if (plink2::IsSet(phaseinfo, sample_uidx)) {
-                    const double tmpval = allele_codes[2 * sample_uidx];
-                    allele_codes[2 * sample_uidx] = allele_codes[2 * sample_uidx + 1];
-                    allele_codes[2 * sample_uidx + 1] = tmpval;
-                }
-            }
-        }
-        return;
-    }
-    int32_t* phasepresent_wbuf = &(as<LogicalVector>(phasepresent_buf)[0]);
-    plink2::GenoarrLookup256x4bx4(_pgv.genovec, kGenoToLogicalPhaseQuads, _subset_size, phasepresent_wbuf);
-    if (cur_allele_ct == 2) {
-        for (uint32_t phased_idx = 0; phased_idx != phasepresent_ct; ++phased_idx) {
-            const uintptr_t sample_uidx = plink2::BitIter1(phasepresent, &sample_uidx_base, &cur_bits);
-            phasepresent_wbuf[sample_uidx] = 1;
-            if (plink2::IsSet(phaseinfo, sample_uidx)) {
-                allele_codes[2 * sample_uidx] = 1.0;
-                allele_codes[2 * sample_uidx + 1] = 0.0;
-            }
-        }
-    } else {
-        for (uint32_t phased_idx = 0; phased_idx != phasepresent_ct; ++phased_idx) {
-            const uintptr_t sample_uidx = plink2::BitIter1(phasepresent, &sample_uidx_base, &cur_bits);
-            phasepresent_wbuf[sample_uidx] = 1;
-            if (plink2::IsSet(phaseinfo, sample_uidx)) {
-                const double tmpval = allele_codes[2 * sample_uidx];
-                allele_codes[2 * sample_uidx] = allele_codes[2 * sample_uidx + 1];
-                allele_codes[2 * sample_uidx + 1] = tmpval;
-            }
-        }
-    }
-}
-
-void PgenReader::ReadIntList(IntegerMatrix buf, IntegerVector variant_subset) {
-    if (!_info_ptr) {
-        stop("pgen is closed");
-    }
-    // assume that buf has the correct dimensions
-    const uintptr_t vsubset_size = variant_subset.size();
-    const uint32_t raw_variant_ct = _info_ptr->raw_variant_ct;
-    int32_t* buf_iter = &buf[0];
-    for (uintptr_t col_idx = 0; col_idx != vsubset_size; ++col_idx) {
-        uint32_t variant_idx = variant_subset[col_idx] - 1;
-        if (static_cast<uint32_t>(variant_idx) >= raw_variant_ct) {
-            char errstr_buf[256];
-            snprintf(errstr_buf, sizeof(errstr_buf), "variant_subset element out of range (%d; must be 1..%u)", variant_idx + 1, raw_variant_ct);
-            stop(errstr_buf);
-        }
-        plink2::PglErr reterr = PgrGet(_subset_include_vec, _subset_cumulative_popcounts, _subset_size, variant_idx, _state_ptr, _pgv.genovec);
-        if (reterr != plink2::kPglRetSuccess) {
-            char errstr_buf[256];
-            snprintf(errstr_buf, sizeof(errstr_buf), "PgrGet() error %d", static_cast<int>(reterr));
-            stop(errstr_buf);
-        }
-        plink2::GenoarrLookup256x4bx4(_pgv.genovec, kGenoRInt32Quads, _subset_size, buf_iter);
-        buf_iter = &(buf_iter[_subset_size]);
-    }
-}
-
-void PgenReader::ReadList(NumericMatrix buf, IntegerVector variant_subset, bool meanimpute) {
-    if (!_info_ptr) {
-        stop("pgen is closed");
-    }
-    // assume that buf has the correct dimensions
-    const uintptr_t vsubset_size = variant_subset.size();
-    const uint32_t raw_variant_ct = _info_ptr->raw_variant_ct;
-    double* buf_iter = &buf[0];
-    for (uintptr_t col_idx = 0; col_idx != vsubset_size; ++col_idx) {
-        uint32_t variant_idx = variant_subset[col_idx] - 1;
-        if (static_cast<uint32_t>(variant_idx) >= raw_variant_ct) {
-            char errstr_buf[256];
-            snprintf(errstr_buf, sizeof(errstr_buf), "variant_subset element out of range (%d; must be 1..%u)", variant_idx + 1, raw_variant_ct);
-            stop(errstr_buf);
-        }
-        uint32_t dosage_ct;
-        plink2::PglErr reterr = PgrGetD(_subset_include_vec, _subset_cumulative_popcounts, _subset_size, variant_idx, _state_ptr, _pgv.genovec, _pgv.dosage_present, _pgv.dosage_main, &dosage_ct);
-        if (reterr != plink2::kPglRetSuccess) {
-            char errstr_buf[256];
-            snprintf(errstr_buf, sizeof(errstr_buf), "PgrGetD() error %d", static_cast<int>(reterr));
-            stop(errstr_buf);
-        }
-        if (!meanimpute) {
-            plink2::Dosage16ToDoubles(kGenoRDoublePairs, _pgv.genovec, _pgv.dosage_present, _pgv.dosage_main, _subset_size, dosage_ct, buf_iter);
-        } else {
-            plink2::ZeroTrailingNyps(_subset_size, _pgv.genovec);
-            if (plink2::Dosage16ToDoublesMeanimpute(_pgv.genovec, _pgv.dosage_present, _pgv.dosage_main, _subset_size, dosage_ct, buf_iter)) {
-                char errstr_buf[256];
-                snprintf(errstr_buf, sizeof(errstr_buf), "variant %d has only missing dosages", variant_idx + 1);
-                stop(errstr_buf);
-            }
-        }
-        buf_iter = &(buf_iter[_subset_size]);
-    }
-}
-
-void PgenReader::FillVariantScores(NumericVector result, NumericVector weights, Nullable<IntegerVector> variant_subset) {
-    if (!_info_ptr) {
-        stop("pgen is closed");
-    }
-    if (weights.size() != _subset_size) {
+    plink2::PgrSampleSubsetIndex pssi;
+    PgrSetSampleSubsetIndex(_subset_cumulative_popcounts, _state_ptr, &pssi);
+    plink2::PglErr reterr = plink2::PgrGet1D(
+        _subset_include_vec, pssi, _subset_size, variant_idx, allele_idx,
+        _state_ptr, buf.genovec, buf.dosage_present, buf.dosage_main, &buf.dosage_ct);
+    if(reterr != plink2::kPglRetSuccess){
         char errstr_buf[256];
-        snprintf(errstr_buf, sizeof(errstr_buf), "weights.size()=%td doesn't match pgen sample-subset size=%d", weights.size(), _subset_size);
+        snprintf(errstr_buf, sizeof(errstr_buf), "PgrGet1D() error %d", static_cast<int>(reterr));
         stop(errstr_buf);
     }
-    const int raw_variant_ct = _info_ptr->raw_variant_ct;
-    const int* variant_idx_ints = nullptr;
-    uintptr_t variant_ct = raw_variant_ct;
-    if (variant_subset.isNotNull()) {
-        IntegerVector vs = as<IntegerVector>(variant_subset);
-        variant_idx_ints = &(vs[0]);
-        variant_ct = vs.size();
-    }
-    for (uintptr_t ulii = 0; ulii != variant_ct; ++ulii) {
-        int variant_idx = ulii;
-        if (variant_idx_ints) {
-            variant_idx = variant_idx_ints[ulii] - 1;
-            if ((variant_idx < 0) || (variant_idx >= raw_variant_ct)) {
-                char errstr_buf[256];
-                snprintf(errstr_buf, sizeof(errstr_buf), "variant_num out of range (%d; must be 1..%u)", variant_idx + 1, raw_variant_ct);
-                stop(errstr_buf);
-            }
-        }
-        uint32_t dosage_ct;
-        plink2::PglErr reterr = plink2::PgrGetD(_subset_include_vec, _subset_cumulative_popcounts, _subset_size, variant_idx, _state_ptr, _pgv.genovec, _pgv.dosage_present, _pgv.dosage_main, &dosage_ct);
-        if (reterr != plink2::kPglRetSuccess) {
-            char errstr_buf[256];
-            snprintf(errstr_buf, sizeof(errstr_buf), "PgrGetD() error %d", static_cast<int>(reterr));
-            stop(errstr_buf);
-        }
-        plink2::ZeroTrailingNyps(_subset_size, _pgv.genovec);
-        const double* wts = &(weights[0]);
-        result[ulii] = plink2::LinearCombinationMeanimpute(wts, _pgv.genovec, _pgv.dosage_present, _pgv.dosage_main, _subset_size, dosage_ct);
-    }
 }
-*/
+
+
 
 void PgenReader::Close() {
     // don't bother propagating file close errors for now
@@ -1022,5 +756,3 @@ PgenReader::~PgenReader() {
     Close();
 }
 //plink2::Pack11ToHalfword
-
-

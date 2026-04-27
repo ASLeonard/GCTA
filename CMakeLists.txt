@@ -513,6 +513,12 @@ add_library(Pgenlib
     third_party/plink-ng/2.0/include/plink2_thread.cc
     third_party/plink-ng/2.0/include/plink2_zstfile.cc
     third_party/plink-ng/2.0/include/pvar_ffi_support.cc)
+# Unity builds must be disabled for Pgenlib: it is a separate static library
+# with its own include paths and must never be merged into a gcta64 unity TU.
+# Without this, CMake can concatenate PgenReader.cpp and PgenBackend.cpp into
+# the same translation unit, causing PgenReader.cpp to fail to find GCTA
+# headers such as GenoBackendFactory.h.
+set_target_properties(Pgenlib PROPERTIES UNITY_BUILD OFF)
 target_include_directories(Pgenlib PUBLIC "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include")
 if(NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_compile_options(Pgenlib PRIVATE -mavx2 -mbmi -mbmi2 -mlzcnt)

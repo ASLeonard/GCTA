@@ -134,9 +134,12 @@ try {
             int rawIndex  = static_cast<int>(rawIndices[finishedMarker + i]);
             int lag_index = rawIndex - g_.baseIndexLookup[fileIndex];
             int al_idx    = g_.marker->isEffecRevRaw(rawIndex) ? 0 : 1;
-            reader.ReadDosage(
+            DosageBuf dbuf = DosageBuf::from(
                 block.buf.data() + static_cast<std::size_t>(i) * stride,
-                lag_index, al_idx);
+                g_.pgenGenoPtrSize,
+                g_.pgenDosagePresentPtrSize,
+                g_.pgenDosageMainPtrSize);
+            reader.ReadDosage(dbuf, lag_index, al_idx);
         }
 
         co_await stdexec::schedule(cpu_sched);
