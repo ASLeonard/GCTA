@@ -18,8 +18,10 @@
 #include "FastFAM.h"
 #include "OptionIO.h"
 #include "StatLib.h"
+#include "constants.hpp"
 #include <cmath>
 #include <algorithm>
+#include <numeric>
 #include <ranges>
 #include <Eigen/SparseCholesky>
 
@@ -1360,12 +1362,20 @@ void generateRandom(Ref<MatrixXd> mat){
     }
 }
 
-void FastFAM::genRandY(uint64_t *buf, int num_marker){
+void FastFAM::genRandY(uintptr_t *buf, const vector<uint32_t> &markerIndex){
+    int num_marker = static_cast<int>(markerIndex.size());
     MatrixXd X(num_indi, num_marker);
     double * ptr = X.data();
-    #pragma omp parallel for schedule(dynamic) 
+    #pragma omp parallel for schedule(dynamic)
     for(int i = 0; i < num_marker; i++){
-        geno->makeMarkerX(buf, i, ptr + i * num_indi, true, true);
+        GenoBufItem item;
+        item.extractedMarkerIndex = markerIndex[i];
+        geno->getGenoDouble(buf, i, &item);
+        if(item.valid){
+            std::copy(item.geno.begin(), item.geno.end(), ptr + i * num_indi);
+        } else {
+            std::fill(ptr + i * num_indi, ptr + (i + 1) * num_indi, 0.0);
+        }
     }
 
     #pragma omp parallel for schedule(dynamic) 
@@ -1376,12 +1386,20 @@ void FastFAM::genRandY(uint64_t *buf, int num_marker){
     finished_rand_marker += num_marker;
 }
 
-void FastFAM::estBeta(uint64_t *buf, int num_marker){
+void FastFAM::estBeta(uintptr_t *buf, const vector<uint32_t> &markerIndex){
+    int num_marker = static_cast<int>(markerIndex.size());
     MatrixXd X(num_indi, num_marker);
     double * ptr = X.data();
-    #pragma omp parallel for schedule(dynamic) 
+    #pragma omp parallel for schedule(dynamic)
     for(int i = 0; i < num_marker; i++){
-        geno->makeMarkerX(buf, i, ptr + i * num_indi, true, true);
+        GenoBufItem item;
+        item.extractedMarkerIndex = markerIndex[i];
+        geno->getGenoDouble(buf, i, &item);
+        if(item.valid){
+            std::copy(item.geno.begin(), item.geno.end(), ptr + i * num_indi);
+        } else {
+            std::fill(ptr + i * num_indi, ptr + (i + 1) * num_indi, 0.0);
+        }
     }
 
     phenoEstBeta.block(finished_rand_marker, 0, num_marker, 1) = X.transpose() * VinvY;
@@ -1411,17 +1429,14 @@ double FastFAM::fitREML(double logdet, const SpMat &fam, const VectorXd &pheno){
         LOGGER.e(0, "the V matrix is not invertible.");
     }
     
-    vector<uint32_t> marker_index = marker->get_extract_index();
-    uint32_t m = marker_index.size();
+    uint32_t m = marker->count_extract();
+    vector<uint32_t> extract_index(m);
+    std::iota(extract_index.begin(), extract_index.end(), 0);
 
     finished_rand_marker = 0;
-    vector<function<void (uint64_t *, int)>> callBacks;
-    if(!geno->filterMAF()){
-        callBacks.push_back(std::bind(&Geno::freq64, geno, _1, _2));
-    }
+    vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks;
     callBacks.push_back(std::bind(&FastFAM::genRandY, this, _1, _2));
-    geno->loop_64block(marker_index, callBacks, true);
-    //geno->resetLoop();
+    geno->loopDouble(extract_index, Constants::NUM_MARKER_READ, true, true, true, false, callBacks, true);
 
     VectorXd sum_e2_rand(mcTrails); // sum e rand ^ 2
     double det2 = det * det;
@@ -1437,13 +1452,9 @@ double FastFAM::fitREML(double logdet, const SpMat &fam, const VectorXd &pheno){
     double sum_e2 = det2 * (VinvY.squaredNorm()); 
 
     finished_rand_marker = 0;
-    vector<function<void (uint64_t *, int)>> callBacks2;
-    if(!geno->filterMAF()){
-        callBacks2.push_back(std::bind(&Geno::freq64, geno, _1, _2));
-    }
+    vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks2;
     callBacks2.push_back(std::bind(&FastFAM::estBeta, this, _1, _2));
-    geno->loop_64block(marker_index, callBacks2, true);
-    //geno->resetLoop();
+    geno->loopDouble(extract_index, Constants::NUM_MARKER_READ, true, true, true, false, callBacks2, true);
 
     LOGGER << "sum of betas" << std::endl;
 
@@ -3568,7 +3579,7 @@ void FastFAM::processFAMreg(){
 
     string gfile = options["geneset"];
     LOGGER.i(0, "Reading gene list file from [" + gfile + "]...");
-    vector<pair<string, vector<uint32_t>>> genelist = marker->read_gene(gfile);
+    std::vector<std::pair<std::string, std::vector<uint32_t>>> genelist = marker->read_gene(gfile);
     int numGeneBlock = genelist.size();
     if(numGeneBlock == 0){
         LOGGER.e(0, "can't find a valid gene in the genotype file.");

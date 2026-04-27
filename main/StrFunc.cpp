@@ -132,19 +132,17 @@ bool StrFunc::str_within_quto(std::string_view str, std::string &str_buf)
 
 std::vector<std::string>::iterator StrFunc::find(std::vector<std::string> &target_vs, std::string_view target_str)
 {
-	auto it = std::ranges::find_if(target_vs, [target_str](const std::string& s) {
+	return std::ranges::find_if(target_vs, [target_str](const std::string& s) {
 		return i_compare(s, target_str);
 	});
-	return it;
 }
 
 std::string::iterator StrFunc::find(std::string &target_str, char target_ch)
 {
-	auto it = std::ranges::find_if(target_str, [target_ch](char c) {
+	return std::ranges::find_if(target_str, [target_ch](char c) {
 		return std::toupper(static_cast<unsigned char>(c)) == 
 		       std::toupper(static_cast<unsigned char>(target_ch));
 	});
-	return it;
 }
 
 bool StrFunc::goto_str(std::istream &in_file, std::string_view str)

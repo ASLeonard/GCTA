@@ -19,19 +19,17 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <utility>
 #include <cstdint>
-using std::vector;
 using std::string;
 using std::to_string;
-using std::pair;
-using std::map;
 
 struct MarkerInfo{
-    string chr;
-    string name;
+    std::string chr;
+    std::string name;
     uint32_t pd;
-    vector<string> alleles;
+    std::vector<string> alleles;
     bool A_rev;
 };
 
@@ -50,74 +48,81 @@ public:
     uint32_t count_extract();
     bool isInExtract(uint32_t index);
     uint32_t getRawIndex(uint32_t extractedIndex);
-    vector<uint32_t>& get_extract_index(); // return the raw index for autosome;
-    vector<uint32_t> get_extract_index_autosome(); // return the extract index for autosome; //not raw index
-    vector<uint32_t> get_extract_index_X();
+    std::vector<uint32_t>& get_extract_index(); // return the raw index for autosome;
+    std::vector<uint32_t> get_extract_index_autosome(); // return the extract index for autosome; //not raw index
+    std::vector<uint32_t> get_extract_index_X();
     int getMIndex(uint32_t raw_index);
     //uint64_t getStartPosSize(uint32_t raw_index);
     void getStartPosSize(uint32_t raw_index, uint64_t &pos, uint64_t &size);
     bool isEffecRev(uint32_t extractedIndex);
     bool isEffecRevRaw(uint32_t rawIndex);
-    string get_marker(int rawindex, bool bflip=false);
-    string getMarkerStrExtract(int extractindex, bool bflip=false);
-    static int registerOption(map<string, vector<string>>& options_in);
+    std::string get_marker(int rawindex, bool bflip=false);
+    std::string getMarkerStrExtract(int extractindex, bool bflip=false);
+    static int registerOption(std::map<string, std::vector<string>>& options_in);
     static void processMain();
     static MarkerInfo extractBgenMarkerInfo(FILE *h_bgen, uint64_t &pos);
-    static MarkerParam getBgenMarkerParam(FILE *h_bgen, string &outputs);
-    void extract_marker(vector<string> markers, bool isExtract);
+    static MarkerParam getBgenMarkerParam(FILE *h_bgen, std::string &outputs);
+    void extract_marker(std::vector<string> markers, bool isExtract);
     void reset_exclude();
-    void keep_raw_index(const vector<uint32_t>& keep_index);
-    void keep_extracted_index(const vector<uint32_t>& keep_index);
-    void matchSNPListFile(string filename, int num_min_fields, const vector<int>& field_return, vector<string> &fields, vector<bool>& a_rev, bool update_a_rev = false);
+    void keep_raw_index(const std::vector<uint32_t>& keep_index);
+    void keep_extracted_index(const std::vector<uint32_t>& keep_index);
+    void matchSNPListFile(string filename, int num_min_fields, const std::vector<int>& field_return, std::vector<string> &fields, std::vector<bool>& a_rev, bool update_a_rev = false);
     void save_marker(string filename);
-    vector<uint32_t> getNextWindowIndex(uint32_t cur_marker_index, uint32_t window, bool& chr_ends, bool& isX, bool retRaw = true);
-    vector<uint32_t> getNextSizeIndex(uint32_t cur_marker_index, uint32_t num, bool& chr_ends, bool& isX, bool retRaw = false);
-    uint32_t getNextSize(const vector<uint32_t> &rawRef, uint32_t curExtractIndex, uint32_t num, int &fileIndex, bool &chr_ends, uint8_t &isSexXY);
+    std::vector<uint32_t> getNextWindowIndex(uint32_t cur_marker_index, uint32_t window, bool& chr_ends, bool& isX, bool retRaw = true);
+    std::vector<uint32_t> getNextSizeIndex(uint32_t cur_marker_index, uint32_t num, bool& chr_ends, bool& isX, bool retRaw = false);
+    uint32_t getNextSize(const std::vector<uint32_t> &rawRef, uint32_t curExtractIndex, uint32_t num, int &fileIndex, bool &chr_ends, uint8_t &isSexXY);
     uint32_t getNextWindowSize(uint32_t cur_marker_index, uint32_t window);
 
     MarkerParam getMarkerParams(int part_num);
-    uint8_t mapCHR(string chr_str, bool &success);
-
     uint64_t getMaxGenoMarkerUptrSize();
-    vector<pair<string, vector<uint32_t>>> read_gene(string gfile);
+    std::vector<std::pair<string, std::vector<uint32_t>>> read_gene(string gfile);
+
+    /// Raw-index accessors used by VcfBackend for position-based htslib seeks.
+    const std::string& getRawChr(uint32_t i)  const { return chr[i]; }
+    uint32_t           getRawBp(uint32_t i)    const { return pd[i]; }
+    const std::string& getRawName(uint32_t i)  const { return name[i]; }
+    const std::string& getRawA1(uint32_t i)    const { return a1[i]; }  ///< effect allele
+    const std::string& getRawA2(uint32_t i)    const { return a2[i]; }  ///< reference allele
 
 private:
-    vector<uint8_t> chr;
-    vector<string> name;
-    vector<float> gd;
-    vector<uint32_t> pd;
-    vector<string> a1;
-    vector<string> a2;
-    vector<bool> A_rev; //effect allele;
-    vector<uint64_t> byte_start;
-    vector<uint64_t> byte_size;
-    vector<uint32_t> raw_limits;
+    std::vector<string> chr;
+    std::vector<string> name;
+    std::vector<float> gd;
+    std::vector<uint32_t> pd;
+    std::vector<string> a1;
+    std::vector<string> a2;
+    std::vector<bool> A_rev; //effect allele;
+    std::vector<uint64_t> byte_start;
+    std::vector<uint64_t> byte_size;
+    std::vector<uint32_t> raw_limits;
 
     //bgen
     uint64_t maxGeno1ByteSize = 0;
 
-    vector<uint32_t> index_extract;
-    vector<uint32_t> index_exclude;
+    std::vector<uint32_t> index_extract;
+    std::vector<uint32_t> index_exclude;
     uint32_t num_marker;
     uint32_t num_extract;
     uint32_t num_exclude;
 
     void read_bim(string bim_file);
     void read_mbim(string bim_file);
+    void read_vcf(string vcf_file);    ///< scan BCF/VCF.gz to populate marker arrays
+    void read_mvcf(string mvcf_file);  ///< split-whitespace list of VCF/BCF files
     void read_bgen(string bgen_file);
     void read_mbgen(string mbgen_file);
 
     void read_pvar(string pvar_file);
     void read_mpvar(string mpvar_file);
 
-    static map<string, string> options;
-    static map<string, int> options_i;
-    static void addOneFileOption(string key_store, string append_string, string key_name,
-                                 map<string, vector<string>> options_in);
-    vector<string> read_snplist(string snplist_file);
+    static std::map<string, std::string> options;
+    static std::map<string, int> options_i;
+    static void addOneFileOption(string key_store, std::string append_string, std::string key_name,
+                                 std::map<string, std::vector<string>> options_in);
+    std::vector<string> read_snplist(string snplist_file);
     void read_bgen_index(string bgen_file);
-    map<string, uint8_t> chr_maps;
-    vector<MarkerParam> markerParams;
+    static std::set<string> allowed_chrs;
+    std::vector<MarkerParam> markerParams;
 };
 
 

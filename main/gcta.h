@@ -33,23 +33,17 @@
 #include "Matrix.hpp"
 
 #ifdef SINGLE_PRECISION
-typedef Eigen::SparseMatrix<float, Eigen::ColMajor, long long> eigenSparseMat;
-#else
-typedef Eigen::SparseMatrix<double, Eigen::ColMajor, long long> eigenSparseMat;
-#endif
-//To avoid potential alignment problem. 
-EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(eigenSparseMat);
-
-#ifdef SINGLE_PRECISION
 typedef Eigen::DiagonalMatrix<float, Eigen::Dynamic, Eigen::Dynamic> eigenDiagMat;
 typedef Eigen::MatrixXf eigenMatrix;
 typedef Eigen::VectorXf eigenVector;
 typedef Eigen::SparseMatrix<float> eigenDynSparseMat;
+typedef Eigen::SparseMatrix<float, Eigen::ColMajor, long long> eigenSparseMat;
 #else
 typedef Eigen::DiagonalMatrix<double, Eigen::Dynamic, Eigen::Dynamic> eigenDiagMat;
 typedef Eigen::MatrixXd eigenMatrix;
 typedef Eigen::VectorXd eigenVector;
 typedef Eigen::SparseMatrix<double> eigenDynSparseMat;
+typedef Eigen::SparseMatrix<double, Eigen::ColMajor, long long> eigenSparseMat;
 #endif
 
 enum class GeneticModel {
@@ -92,6 +86,8 @@ public:
     void read_multi_famfiles(std::vector<std::string> multi_bfiles);
     void read_multi_bimfiles(std::vector<std::string> multi_bfiles);
     void read_multi_bedfiles(std::vector<std::string> multi_bfiles);
+    void read_vcf_file(std::string vcffile, std::string region = "");   // Read VCF/BCF into _snp_1/_snp_2
+    void read_vcf_dosage(std::string vcffile, std::string region = ""); // Read VCF/BCF into _geno_dose
     void read_imp_info_mach_gz(std::string zinfofile);
     void read_imp_info_mach(std::string infofile);
     void read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file, std::string rm_indi_file, std::string blup_indi_file);
@@ -124,7 +120,7 @@ public:
     //void make_grm_pca(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool output_bin, int grm_mtd, double wind_size, bool mlmassoc);
     void save_grm(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, std::string sex_file, double grm_cutoff, double adj_grm_fac, int dosage_compen, bool merge_grm_flag, bool output_grm_bin);
     void align_grm(std::string m_grm_file);
-    void pca(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num, bool pca_approx = true);
+    void pca(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num, std::string pca_approx = "");
     void snp_pc_loading(std::string pc_file);
     void project_loading(std::string pc_load, int N); 
 
@@ -194,8 +190,8 @@ public:
     // mlma
     void mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_file, std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool within_family, bool inbred, bool no_adj_covar, std::string weight_file, std::string save_reml_file, std::string load_reml_file);
     void mlma_loco(std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool inbred, bool no_adj_covar);
-    void save_reml_state(std::string filename, bool no_adj_covar);
-    void load_reml_state(std::string filename, bool no_adj_covar);
+    void save_reml_state(const std::string& filename, bool no_adj_covar);
+    void load_reml_state(const std::string& filename, bool no_adj_covar);
 
     // gene based association test
     void sbat_gene(std::string sAssoc_file, std::string gAnno_file, int sbat_wind, double sbat_ld_cutoff, bool sbat_write_snpset, bool GC, double GC_val);

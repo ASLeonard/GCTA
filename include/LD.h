@@ -51,7 +51,7 @@ class LD{
 public:
     LD(Geno *geno);
     ~LD();
-    void readGeno(uint64_t *buf, int num_marker);
+    void readGeno(uintptr_t *buf, const std::vector<uint32_t> &markerIndex);
     void readLD();
     static int registerOption(map<string, vector<string>>& options_in);
     static void processMain();

@@ -15,6 +15,9 @@
 #include <set>
 #include <fstream>
 #include <limits>
+#include <htslib/vcf.h>
+#include <htslib/hts.h>
+#include <htslib/synced_bcf_reader.h>
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
 #include "gcta.h"
@@ -104,7 +107,7 @@ void gcta::set_genetic_model(std::string model) {
     if (!stringToGeneticModel(model, _genetic_model)) {
         LOGGER.e(0, "genetic model must be either 'additive' or 'nonadditive'.");
     }
-    LOGGER << "Genetic model std::set to: " << model << std::endl;
+    LOGGER << "Genetic model set to: " << model << std::endl;
 }
 
 void gcta::read_famfile(std::string famfile) {
@@ -318,7 +321,7 @@ void gcta::read_bedfile(std::string bedfile)
  *   - RR (homozygous for reference) = 0
  *   - RA (heterozygous) = 2p (where p is allele frequency)
  *   - AA (homozygous for alternate) = 4p - 2
- *   - Missing values are std::set to DOSAGE_NA
+ *   - Missing values are set to DOSAGE_NA
  * 
  * Prerequisites:
  *   - read_famfile() must be called first to initialize individuals
@@ -2419,4 +2422,244 @@ bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bo
     }
 
     return true;
+}
+
+// ─── VCF/BCF helper ───────────────────────────────────────────────────────────
+// Convert a VCF chromosome name (e.g. "chr1", "X") to an integer as used in
+// GCTA's _chr vector.  Returns 0 for unrecognised strings.
+static int vcf_chr_to_int(const char* chrom) {
+    if (strncmp(chrom, "chr", 3) == 0) chrom += 3;
+    if (strcmp(chrom, "X")  == 0) return 23;
+    if (strcmp(chrom, "Y")  == 0) return 24;
+    if (strcmp(chrom, "XY") == 0) return 25;
+    if (strcmp(chrom, "MT") == 0 || strcmp(chrom, "M") == 0) return 26;
+    int v = std::atoi(chrom);
+    return (v > 0) ? v : 0;
+}
+
+// ─── read_vcf_file ────────────────────────────────────────────────────────────
+// Reads a VCF/BCF file (optionally restricted to a region).
+//
+// If _dosage_flag is false (default): populates _snp_1/_snp_2 bit arrays using
+// the PLINK BED convention (HomA1=(1,1), Het=(0,1), HomALT=(0,0), Missing=(1,0)).
+//
+// If _dosage_flag is true: populates _geno_dose and _mu using the same dosage
+// conventions as read_bed_dosage.  Set _dosage_flag before calling, or use the
+// read_vcf_dosage helper below.
+//
+// In both modes A1 is the minor allele (AF ≤ 0.5).  Where the VCF REF allele
+// is the major allele, A1/A2 are swapped and the genotypes re-oriented.
+//
+// If region is non-empty the file must be indexed (.csi or .tbi).
+void gcta::read_vcf_file(std::string vcffile, std::string region)
+{
+    int i = 0;
+    LOGGER << "Reading VCF/BCF file" << (_dosage_flag ? " (dosage mode)" : "")
+           << " from [" + vcffile + "] ..." << std::endl;
+
+    // ── Open via synced_bcf_reader (handles VCF.gz and BCF uniformly) ─────────
+    bcf_srs_t* sr = bcf_sr_init();
+    if (!region.empty()) {
+        if (bcf_sr_set_regions(sr, region.c_str(), 0) != 0) {
+            bcf_sr_destroy(sr);
+            LOGGER.e(0, "failed to set region [" + region + "]. "
+                     "Check that the region string is valid (e.g. chr1:1000-2000).");
+        }
+    }
+    if (!bcf_sr_add_reader(sr, vcffile.c_str())) {
+        std::string err_msg = "cannot open [" + vcffile + "]";
+        if (!region.empty())
+            err_msg += ". Region queries require an indexed file (.tbi/.csi). "
+                       "Create one with: bcftools index " + vcffile;
+        bcf_sr_destroy(sr);
+        LOGGER.e(0, err_msg);
+    }
+    bcf_hdr_t* hdr = bcf_sr_get_header(sr, 0);
+
+    // ── Populate sample information from VCF header ───────────────────────────
+    int nsamples = bcf_hdr_nsamples(hdr);
+    _indi_num = nsamples;
+    _fid.assign(nsamples, "");
+    _pid.assign(nsamples, "");
+    _fa_id.assign(nsamples, "0");
+    _mo_id.assign(nsamples, "0");
+    _sex.assign(nsamples, 0);
+    _pheno.assign(nsamples, -9.0);
+    for (i = 0; i < nsamples; i++)
+        _fid[i] = _pid[i] = hdr->samples[i];
+    LOGGER << nsamples << " samples found in VCF/BCF header." << std::endl;
+    init_keep();
+
+    // ── Clear SNP metadata ────────────────────────────────────────────────────
+    _chr.clear(); _snp_name.clear(); _genet_dst.clear();
+    _bp.clear();  _allele1.clear();  _allele2.clear();
+
+    // Pre-size the outer dimension of per-sample storage; inner (per-SNP) is
+    // push_back'd below so we never need the total SNP count in advance.
+    if (_dosage_flag) {
+        _mu.clear();
+        _geno_dose.assign(nsamples, {});
+    } else {
+        _snp_1.clear();
+        _snp_2.clear();
+    }
+
+    // ── Reserve SNP metadata vectors ──────────────────────────────────────────
+    // Use the index (if loaded by the synced reader) to estimate record count.
+    {
+        size_t reserve_hint = 1u << 20; // fallback: 1 M SNPs
+        hts_idx_t* stat_idx = sr->readers[0].bcf_idx;
+        if (!stat_idx && sr->readers[0].tbx_idx)
+            stat_idx = sr->readers[0].tbx_idx->idx;
+        if (stat_idx) {
+            uint64_t total = 0;
+            int n_seq = hts_idx_nseq(stat_idx);
+            for (int c = 0; c < n_seq; c++) {
+                uint64_t mapped = 0, unmapped = 0;
+                hts_idx_get_stat(stat_idx, c, &mapped, &unmapped);
+                total += mapped;
+            }
+            if (total > 0) reserve_hint = static_cast<size_t>(total);
+        }
+        _chr.reserve(reserve_hint);  _snp_name.reserve(reserve_hint);
+        _genet_dst.reserve(reserve_hint); _bp.reserve(reserve_hint);
+        _allele1.reserve(reserve_hint); _allele2.reserve(reserve_hint);
+        if (_dosage_flag) _mu.reserve(reserve_hint);
+    }
+
+    int      n_multiallelic = 0;
+    int32_t* gt_arr         = nullptr;
+    int      n_gt_arr       = 0;
+    std::vector<int> ref_counts(nsamples, -1);
+
+    while (bcf_sr_next_line(sr)) {
+        bcf1_t* rec = bcf_sr_get_line(sr, 0);
+        if (!rec) continue;
+
+            bcf_unpack(rec, BCF_UN_ALL);
+            if (rec->n_allele != 2) { ++n_multiallelic; continue; }
+
+            // ── Decode genotypes ──────────────────────────────────────────────
+            int ret    = bcf_get_genotypes(hdr, rec, &gt_arr, &n_gt_arr);
+            int ploidy = (ret > 0) ? ret / nsamples : 2;
+
+            // ── Per-sample REF allele counts + mean ───────────────────────────
+            // ref_counts[i] == -1 means missing for individual i.
+            ref_counts.assign(nsamples, -1);
+            double allele_sum = 0.0;
+            int    valid_n    = 0;
+            if (ret > 0) {
+                for (i = 0; i < nsamples; i++) {
+                    bool missing = false;
+                    int  rcnt    = 0;
+                    for (int p = 0; p < ploidy; p++) {
+                        int32_t g = gt_arr[i * ploidy + p];
+                        if (bcf_gt_is_missing(g) || g == bcf_int32_vector_end) { missing = true; break; }
+                        if (bcf_gt_allele(g) == 0) rcnt++;
+                    }
+                    if (!missing) { ref_counts[i] = rcnt; allele_sum += rcnt; valid_n++; }
+                }
+            }
+            const double mu_ref = valid_n > 0 ? allele_sum / valid_n : 0.0;
+
+            // ── Minor-allele convention ───────────────────────────────────────
+            // A1 = minor allele; A2 = major allele.
+            // Tie-break at AF=0.5: follow PLINK and assign A1 to the
+            // lexicographically earlier allele string (REF wins if REF <= ALT).
+            const double af_ref = mu_ref / 2.0;
+            const bool   a1_is_ref = (af_ref < 0.5) ||
+                                     (af_ref == 0.5 &&
+                                      strcmp(rec->d.allele[0], rec->d.allele[1]) <= 0);
+            const double mu_a1     = a1_is_ref ? mu_ref : (2.0 - mu_ref);
+
+            // ── Record SNP metadata ───────────────────────────────────────────
+            const char* chrom = bcf_hdr_id2name(hdr, rec->rid);
+            _chr.push_back(vcf_chr_to_int(chrom));
+            std::string snpid;
+            if (rec->d.id && strcmp(rec->d.id, ".") != 0)
+                snpid = rec->d.id;
+            else
+                snpid = std::string(chrom) + "_" + std::to_string(rec->pos + 1); //std::string(chrom) + ":" + std::to_string(rec->pos + 1) +
+                      //  ":" + rec->d.allele[0] + ":" + rec->d.allele[1];
+            _snp_name.push_back(snpid);
+            _genet_dst.push_back(0.0);
+            _bp.push_back(rec->pos + 1);
+            // A1 = minor allele, A2 = major allele (consistent with BIM convention).
+            _allele1.push_back(a1_is_ref ? rec->d.allele[0] : rec->d.allele[1]);
+            _allele2.push_back(a1_is_ref ? rec->d.allele[1] : rec->d.allele[0]);
+
+            // ── Fill storage ──────────────────────────────────────────────────
+            if (_dosage_flag) {
+                _mu.push_back(mu_a1);
+                const double p              = mu_a1 / 2.0;
+                const float  dose_het       = static_cast<float>(2.0 * p);
+                const float  dose_hom_minor = static_cast<float>(4.0 * p - 2.0);
+                for (i = 0; i < nsamples; i++) {
+                    if (ref_counts[i] < 0) { _geno_dose[i].push_back(DOSAGE_NA); continue; }
+                    const int a1_count = a1_is_ref ? ref_counts[i] : (ploidy - ref_counts[i]);
+                    float dosage = 0.0f;
+                    switch (_genetic_model) {
+                        case GeneticModel::ADDITIVE:
+                            dosage = static_cast<float>(a1_count);
+                            break;
+                        case GeneticModel::NONADDITIVE:
+                            if      (a1_count == ploidy) dosage = 0.0f;
+                            else if (a1_count == 0)      dosage = dose_hom_minor;
+                            else                         dosage = dose_het;
+                            break;
+                    }
+                    _geno_dose[i].push_back(dosage);
+                }
+            } else {
+                std::vector<bool> s1(nsamples), s2(nsamples);
+                for (i = 0; i < nsamples; i++) {
+                    const bool is_missing = (ref_counts[i] < 0);
+                    const int  a1_count   = is_missing ? 0
+                                            : (a1_is_ref ? ref_counts[i] : (ploidy - ref_counts[i]));
+                    // Internal _snp_1/_snp_2 encoding (NOT the raw BED bit pairs):
+                    //   HomA1   → (snp_1=1, snp_2=1)  → snp_1+snp_2 = 2
+                    //   Het     → (snp_1=0, snp_2=1)  → snp_1+snp_2 = 1
+                    //   HomA2   → (snp_1=0, snp_2=0)  → snp_1+snp_2 = 0
+                    //   Missing → (snp_1=1, snp_2=0)  → detected by snp_1 && !snp_2
+                    // Raw BED stores the bit-negations of this (00=HomA1, 01=missing,
+                    // 10=het, 11=HomA2); read_bedfile applies !bit1/!bit0 to arrive
+                    // at the same convention used here.
+                    s1[i] = is_missing  || (a1_count == ploidy);
+                    s2[i] = !is_missing && (a1_count >= 1);
+                }
+                _snp_1.push_back(std::move(s1));
+                _snp_2.push_back(std::move(s2));
+            }
+        }
+
+    free(gt_arr);
+    bcf_sr_destroy(sr);
+
+    if (n_multiallelic > 0)
+        LOGGER << "Warning: " << n_multiallelic
+               << " multiallelic variant(s) skipped (only biallelic sites supported)." << std::endl;
+
+    _snp_num = static_cast<int>(_chr.size());
+    LOGGER << _snp_num << " biallelic SNPs found in [" + vcffile + "]." << std::endl;
+    init_include();
+
+    // _ref_A = _allele1 (minor), _other_A = _allele2 — consistent with BIM convention.
+    _ref_A   = _allele1;
+    _other_A = _allele2;
+
+    if (_dosage_flag)
+        LOGGER << "Dosage data for " << nsamples << " individuals and " << _snp_num
+               << " SNPs loaded from [" + vcffile + "] using "
+               << geneticModelToString(_genetic_model) << " model." << std::endl;
+    else
+        LOGGER << "Genotype data for " << nsamples << " individuals and " << _snp_num
+               << " SNPs loaded from [" + vcffile + "]." << std::endl;
+}
+
+// ─── read_vcf_dosage ──────────────────────────────────────────────────────────
+// Thin wrapper: sets _dosage_flag and delegates to read_vcf_file.
+void gcta::read_vcf_dosage(std::string vcffile, std::string region)
+{
+    _dosage_flag = true;
+    read_vcf_file(vcffile, region);
 }

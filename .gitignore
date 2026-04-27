@@ -1,5 +1,6 @@
 .*/
 .*
+tests
 !.gitignore
 !.gitmodules
 !.gitattributes

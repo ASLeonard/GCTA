@@ -301,29 +301,30 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
 
 gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m)
 {
-    const auto n = static_cast<unsigned long>(y.size());
-    constexpr int max_block_size = 10000;
+    const auto n = static_cast<Eigen::Index>(y.size());
+    constexpr Eigen::Index max_block_size = 10000;
     unsigned long i = 0;
     std::vector<float> beta(m, 0.0f), se(m, 0.0f), pval(m, 2.0f);
-    Eigen::MatrixXf Vi = _Vi.cast<float>();
+
+    // Symmetrise Vi once into a plain matrix so every downstream GEMM/GEMV
+    // dispatches through Eigen's full BLAS path rather than the slower
+    // selfadjointView fallback that activates for block-expression targets.
+    Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
     _Vi.resize(0,0);
 
-    // Precompute Vi * y once (Vi is symmetric → use ssymv)
-    std::vector<float> Vi_y(n);
-    cblas_ssymv(CblasColMajor, CblasUpper,
-                n, 1.0f, Vi.data(), n,
-                y.data(), 1,
-                0.0f, Vi_y.data(), 1);
+    // Precompute Vi * y once (plain GEMV, Vi is now fully dense symmetric)
+    Eigen::Map<const Eigen::VectorXf> y_vec(y.data(), n);
+    Eigen::VectorXf Vi_y(n);
+    Vi_y.noalias() = Vi * y_vec;
 
     LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<std::endl;
 
     int k = 0, l = 0;
-    Eigen::MatrixXf X_block;
+    Eigen::MatrixXf X_block, Vi_X_block(n, max_block_size);
+    // Pre-allocated temporaries — no heap activity inside the hot loop
+    Eigen::VectorXf Xt_Vi_y_block(max_block_size);
+    Eigen::VectorXf xvx_diag(max_block_size);   // diag(X^T Vi X)
     std::vector<int> indx;
-    // Vi_X_block: col-major n × bs result of Vi * X_block
-    std::vector<float> Vi_X_block(static_cast<size_t>(n) * max_block_size);
-    std::vector<float> Xt_Vi_X_block(max_block_size);
-    std::vector<float> Xt_Vi_y_block(max_block_size);
 
     int last_pct = -1;
     for(i = 0; i < m; ){
@@ -332,37 +333,28 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
             LOGGER.p(0, std::to_string(i) + " / " + std::to_string(m) + " SNPs (" + std::to_string(cur_pct) + "%)");
             last_pct = cur_pct;
         }
-        int bs = (int)std::min((unsigned long)max_block_size, m - i);
+        const Eigen::Index bs = static_cast<Eigen::Index>(
+            std::min(static_cast<unsigned long>(max_block_size), m - i));
         indx.resize(bs);
         for(k = 0; k < bs; k++) indx[k] = i + k;
-        make_XMat_subset(X_block, indx, false);
+        make_XMat_subset(X_block, indx, false);  // X_block is n×bs
 
-        // Vi (symmetric n×n) * X_block (col-major n×bs) → Vi_X_block (col-major n×bs)
-        cblas_ssymm(CblasColMajor, CblasLeft, CblasUpper,
-                    n, bs, 1.0f, Vi.data(), n,
-                    X_block.data(), n,
-                    0.0f, Vi_X_block.data(), n);
+        // Vi * X_block → Vi_X_block (n×bs); Vi is plain dense → full GEMM
+        Vi_X_block.leftCols(bs).noalias() = Vi * X_block;
 
-        // Diagonal of X_block^T * Vi_X_block: contiguous stride-1 dot products
-        for(l = 0; l < bs; l++){
-            Xt_Vi_X_block[l] = cblas_sdot(n, X_block.data() + (size_t)l * n, 1,
-                                           Vi_X_block.data() + (size_t)l * n, 1);
-        }
+        // diag(X^T Vi X): column-wise dot products via elementwise product + colwise sum
+        // Avoids O(bs²) full matrix multiply; reads each column once.
+        xvx_diag.head(bs) = (X_block.cwiseProduct(Vi_X_block.leftCols(bs))).colwise().sum();
 
-        // X_block^T * Vi_y (precomputed) — avoids re-reading n×bs Vi_X_block
-        cblas_sgemv(CblasColMajor, CblasTrans,
-                    n, bs,
-                    1.0f, X_block.data(), n,
-                    Vi_y.data(), 1,
-                    0.0f, Xt_Vi_y_block.data(), 1);
-
+        // X^T Vi_y (bs×1) — single GEMV, pre-allocated target
+        Xt_Vi_y_block.head(bs).noalias() = X_block.transpose() * Vi_y;
 
         for(l = 0; l < bs; l++){
-            float inv_xvx = 1.0f / Xt_Vi_X_block[l];
+            const float inv_xvx = 1.0f / xvx_diag[l];
             if(std::isfinite(inv_xvx) && inv_xvx > 1.0e-30f){
                 beta[i + l] = inv_xvx * Xt_Vi_y_block[l];
                 se[i + l] = std::sqrt(inv_xvx);
-                float chisq = beta[i + l] / se[i + l];
+                const float chisq = beta[i + l] / se[i + l];
                 pval[i + l] = StatFunc::pchisq(chisq * chisq, 1, _log_pval);
             }
         }
@@ -375,59 +367,59 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
 
 gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned long m)
 {
-    const auto n = static_cast<unsigned long>(y.size());
-    const int p = static_cast<int>(_X_c);  // number of fixed covariates
-    constexpr int max_block_size = 10000;
+    const auto n = static_cast<Eigen::Index>(y.size());
+    const Eigen::Index p = static_cast<Eigen::Index>(_X_c);  // number of fixed covariates
+    constexpr Eigen::Index max_block_size = 10000;
     unsigned long i = 0;
     std::vector<float> beta(m, 0.0f), se(m, 0.0f), pval(m, 2.0f);
 
-    Eigen::MatrixXf Vi = _Vi.cast<float>();
+    // Symmetrise Vi once into a plain dense matrix so all downstream GEMMs
+    // go through the full BLAS path (selfadjointView products on block-expression
+    // targets may fall back to a scalar path in some Eigen/BLAS configurations).
+    Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
     _Vi.resize(0,0);
 
-    // Precompute Vi * y once (Vi is symmetric → use ssymv)
-    std::vector<float> Vi_y(n);
-    cblas_ssymv(CblasColMajor, CblasUpper,
-                n, 1.0f, Vi.data(), n,
-                y.data(), 1, 0.0f, Vi_y.data(), 1);
+    // Precompute Vi * y once (plain GEMV on the now-dense Vi)
+    Eigen::Map<const Eigen::VectorXf> y_vec(y.data(), n);
+    Eigen::VectorXf Vi_y(n);
+    Vi_y.noalias() = Vi * y_vec;
 
     // --- Schur complement precomputation (done once, not per SNP) ---
-    // C (n×p, col-major float): fixed covariate matrix
+    // C (n×p): fixed covariate matrix
     Eigen::MatrixXf C = _X.cast<float>();
 
-    // Vi_C = Vi * C  (n×p, col-major; Vi is symmetric → use ssymm)
-    std::vector<float> Vi_C(static_cast<size_t>(n) * p);
-    cblas_ssymm(CblasColMajor, CblasLeft, CblasUpper,
-                n, p, 1.0f, Vi.data(), n, C.data(), n, 0.0f, Vi_C.data(), n);
+    // Vi_C = Vi * C  (n×p); plain GEMM, no block expressions
+    Eigen::MatrixXf Vi_C(n, p);
+    Vi_C.noalias() = Vi * C;
 
-    // A = C^T Vi_C  (p×p), then invert in-place → A becomes A^{-1}
-    std::vector<float> A(static_cast<size_t>(p) * p);
-    cblas_sgemm(CblasColMajor, CblasTrans, CblasNoTrans,
-                p, p, n, 1.0f, C.data(), n, Vi_C.data(), n, 0.0f, A.data(), p);
-    double d_buf = 0.0;
-    if(!comput_inverse_logdet_LU_array(p, A.data(), d_buf))
-        LOGGER.e(0, "covariate matrix C^T Vi C is not invertible.");
+    // A = C^T Vi_C  (p×p).  Use Vi_C^T * C = C^T * Vi_C (same result, Vi symmetric).
+    // Factor immediately; we never need the explicit inverse.
+    Eigen::MatrixXf A_mat(p, p);
+    A_mat.noalias() = Vi_C.transpose() * C;
+    Vi_C.resize(0, 0);  // no longer needed — free n×p memory before the SNP loop
+    Eigen::LLT<Eigen::MatrixXf> A_llt(A_mat);
+    if(A_llt.info() != Eigen::Success)
+        LOGGER.e(0, "covariate matrix C^T Vi C is not positive-definite/invertible.");
 
-    // c = C^T Vi_y  (p×1)
-    std::vector<float> c_vec(p);
-    cblas_sgemv(CblasColMajor, CblasTrans,
-                n, p, 1.0f, C.data(), n, Vi_y.data(), 1, 0.0f, c_vec.data(), 1);
-
-    // t = A^{-1} c  (p×1): used to adjust numerator of each SNP test
-    std::vector<float> t_vec(p);
-    cblas_sgemv(CblasColMajor, CblasNoTrans,
-                p, p, 1.0f, A.data(), p, c_vec.data(), 1, 0.0f, t_vec.data(), 1);
+    // t = A^{-1} (C^T Vi_y)  (p×1)
+    Eigen::VectorXf t_vec(p);
+    t_vec.noalias() = C.transpose() * Vi_y;
+    t_vec = A_llt.solve(t_vec);
 
     LOGGER << "\nRunning association tests for " << m << " SNPs ..." << std::endl;
 
     int k = 0, l = 0;
     Eigen::MatrixXf X_block;
     std::vector<int> indx;
-    // Pre-allocate block buffers (sized for max block; reused each iteration)
-    std::vector<float> Vi_X_block(static_cast<size_t>(n) * max_block_size);
-    std::vector<float> D_block(static_cast<size_t>(p) * max_block_size);  // C^T * Vi_X_block (p×bs)
-    std::vector<float> E_block(static_cast<size_t>(p) * max_block_size);  // A^{-1} * D_block
-    std::vector<float> f_vec(max_block_size);     // X_block^T Vi_y
-    std::vector<float> Dt_t_vec(max_block_size);  // D_block^T t
+
+    // All block temporaries pre-allocated outside the loop — zero heap activity per SNP
+    Eigen::MatrixXf Vi_X_block(n, max_block_size);   // Vi * X_block
+    Eigen::MatrixXf D_block(p, max_block_size);      // C^T * Vi_X_block  (p×bs)
+    Eigen::MatrixXf E_block(p, max_block_size);      // A^{-1} * D_block  (p×bs)
+    Eigen::VectorXf f_vec(max_block_size);           // X^T Vi_y          (bs×1)
+    Eigen::VectorXf Dt_t_vec(max_block_size);        // D^T t             (bs×1)
+    Eigen::VectorXf xvx_diag(max_block_size);        // diag(X^T Vi X)    (bs×1)
+    Eigen::VectorXf d_dot_e_diag(max_block_size);    // diag(D^T E)       (bs×1)
 
     int last_pct_c = -1;
     for(i = 0; i < m; ){
@@ -436,43 +428,38 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
             LOGGER.p(0, std::to_string(i) + " / " + std::to_string(m) + " SNPs (" + std::to_string(cur_pct_c) + "%)");
             last_pct_c = cur_pct_c;
         }
-        int bs = static_cast<int>(std::min(static_cast<unsigned long>(max_block_size), m - i));
+        const Eigen::Index bs = static_cast<Eigen::Index>(
+            std::min(static_cast<unsigned long>(max_block_size), m - i));
         indx.resize(bs);
         for(k = 0; k < bs; k++) indx[k] = i + k;
-        make_XMat_subset(X_block, indx, false);
+        make_XMat_subset(X_block, indx, false);  // X_block is n×bs
 
-        // Vi * X_block → Vi_X_block  (n×bs, col-major; Vi symmetric → ssymm)
-        cblas_ssymm(CblasColMajor, CblasLeft, CblasUpper,
-                    n, bs, 1.0f, Vi.data(), n, X_block.data(), n, 0.0f, Vi_X_block.data(), n);
+        // Vi * X_block → Vi_X_block (n×bs); plain GEMM
+        Vi_X_block.leftCols(bs).noalias() = Vi * X_block;
 
-        // D = C^T * Vi_X_block  (p×bs) — reuses Vi_X_block, avoids a second read of Vi_C
-        cblas_sgemm(CblasColMajor, CblasTrans, CblasNoTrans,
-                    p, bs, n, 1.0f, C.data(), n, Vi_X_block.data(), n, 0.0f, D_block.data(), p);
+        // D = C^T * Vi_X_block  (p×bs); plain GEMM on evaluated sub-matrices
+        D_block.leftCols(bs).noalias() = C.transpose() * Vi_X_block.leftCols(bs);
 
-        // E = A^{-1} * D  (p×bs)
-        cblas_sgemm(CblasColMajor, CblasNoTrans, CblasNoTrans,
-                    p, bs, p, 1.0f, A.data(), p, D_block.data(), p, 0.0f, E_block.data(), p);
+        // E = A^{-1} * D  (p×bs) via LLT; noalias safe since D and E are distinct
+        E_block.leftCols(bs).noalias() = A_llt.solve(D_block.leftCols(bs));
 
-        // f = X_block^T Vi_y  (bs×1)
-        cblas_sgemv(CblasColMajor, CblasTrans,
-                    n, bs, 1.0f, X_block.data(), n, Vi_y.data(), 1, 0.0f, f_vec.data(), 1);
+        // f = X^T Vi_y  (bs×1)
+        f_vec.head(bs).noalias() = X_block.transpose() * Vi_y;
 
-        // Dt_t = D_block^T t  (bs×1): covariate correction to numerator
-        cblas_sgemv(CblasColMajor, CblasTrans,
-                    p, bs, 1.0f, D_block.data(), p, t_vec.data(), 1, 0.0f, Dt_t_vec.data(), 1);
+        // Dt_t = D^T t  (bs×1)
+        Dt_t_vec.head(bs).noalias() = D_block.leftCols(bs).transpose() * t_vec;
+
+        // diag(X^T Vi X) and diag(D^T E) via elementwise product + colwise sum;
+        // avoids forming the full bs×bs products.
+        xvx_diag.head(bs)    = (X_block.cwiseProduct(Vi_X_block.leftCols(bs))).colwise().sum();
+        d_dot_e_diag.head(bs) = (D_block.leftCols(bs).cwiseProduct(E_block.leftCols(bs))).colwise().sum();
 
         for(l = 0; l < bs; l++){
-            // a = x^T Vi x  (diagonal element of X_block^T Vi_X_block)
-            float a = cblas_sdot(n, X_block.data()   + static_cast<size_t>(l)*n, 1,
-                                    Vi_X_block.data() + static_cast<size_t>(l)*n, 1);
-            // d^T e = D[:,l]^T E[:,l]  (covariate correction to denominator)
-            float d_dot_e = cblas_sdot(p, D_block.data() + static_cast<size_t>(l)*p, 1,
-                                          E_block.data() + static_cast<size_t>(l)*p, 1);
-            float S = a - d_dot_e;  // Schur complement = 1/Var(beta_snp)
+            const float S = xvx_diag[l] - d_dot_e_diag[l];  // Schur complement = 1/Var(beta_snp)
             beta[i+l] = (f_vec[l] - Dt_t_vec[l]) / S;
             if(S > 1.0e-30f){
                 se[i+l] = std::sqrt(1.0f / S);
-                float chisq = beta[i+l] / se[i+l];
+                const float chisq = beta[i+l] / se[i+l];
                 pval[i+l] = StatFunc::pchisq(chisq * chisq, 1, _log_pval);
             }
         }
@@ -648,119 +635,159 @@ void gcta::grm_minus_grm(float *grm, float *sub_grm)
 
 }
 
-
-void gcta::save_reml_state(std::string filename, bool no_adj_covar)
+void gcta::save_reml_state(const std::string& filename, bool no_adj_covar)
 {
-    int n = _n;
-    int x_c = _X_c;
-    int num_varcmp = static_cast<int>(_varcmp.size());
-    int num_r_indx = static_cast<int>(_r_indx.size());
+    // Ensure _Vi is materialised regardless of which REML path was taken:
+    //   - Default path:  _Vi_use_llt == false, _Vi is already an n×n matrix.
+    //   - Hutch++ path:  _Vi_use_llt == true, _Vi was released to save RAM.
+    //     _Vi_llt holds L from V = L Lᵀ so _Vi_llt.solve(I) gives V^{-1} in O(n²).
+    if (_Vi_use_llt) {
+        _Vi = _Vi_llt.solve(eigenMatrix::Identity(_n, _n));
+        _Vi_use_llt = false;
+    }
 
     std::ofstream outfile(filename, std::ios::binary);
     if(!outfile.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
 
-    // magic + dimensions
-    outfile.write("REML", 4);
-    outfile.write(reinterpret_cast<const char*>(&n),          sizeof(int));
-    outfile.write(reinterpret_cast<const char*>(&x_c),        sizeof(int));
-    outfile.write(reinterpret_cast<const char*>(&num_varcmp), sizeof(int));
-    outfile.write(reinterpret_cast<const char*>(&num_r_indx), sizeof(int));
+    // ---- Header ----
+    // Magic "GOBY": packed-triangle symmetric format (replaces old "REML" dense format).
+    struct Header {
+        char    magic[4]    = {'G','O','B','Y'};
+        int32_t n           = 0;
+        int32_t x_c         = 0;
+        int32_t num_varcmp  = 0;
+        int32_t num_r_indx  = 0;
+    } hdr;
+    hdr.n          = static_cast<int32_t>(_n);
+    hdr.x_c        = static_cast<int32_t>(_X_c);
+    hdr.num_varcmp = static_cast<int32_t>(_varcmp.size());
+    hdr.num_r_indx = static_cast<int32_t>(_r_indx.size());
+    outfile.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
 
-    // _Vi (row-major) — bulk write via a float buffer.
-    // When the LLT-only path was used (_Vi_use_llt), _Vi is empty; recover V^{-1}
-    // by solving L L^T X = I (n RHS triangular solves, O(n^2) per column).
+    // ---- _Vi: packed lower triangle (float) ----
+    // _Vi is symmetric positive-definite, so only the n(n+1)/2 lower-triangle
+    // elements are unique.  We save those directly rather than the full n×n matrix.
+    // This halves the file size vs the old dense layout.
+    //
+    // We save _Vi (the inverse) rather than the LLT factor L for two reasons:
+    //   1. On the default (non-Hutch++) path _Vi_llt is not reliably populated
+    //      after convergence — only _Vi is guaranteed to exist.
+    //   2. Serialising L as float and reconstructing L Lᵀ introduces squared
+    //      rounding errors before the re-factorisation, degrading numerical quality.
     {
-        if (_Vi_use_llt) {
-            _Vi = _Vi_llt.solve(eigenMatrix::Identity(n, n));
-            _Vi_use_llt = false;
-        }
-        size_t vi_floats = static_cast<size_t>(n) * n;
-        std::vector<float> vi_buf(vi_floats);
-        for(int i = 0; i < n; i++)
-            for(int j = 0; j < n; j++)
-                vi_buf[static_cast<size_t>(i) * n + j] = static_cast<float>(_Vi(i, j));
-        outfile.write(reinterpret_cast<const char*>(vi_buf.data()),
-                      static_cast<std::streamsize>(vi_floats * sizeof(float)));
+        const int32_t n = hdr.n;
+        const size_t tri_size = static_cast<size_t>(n) * (n + 1) / 2;
+        std::vector<float> tri(tri_size);
+        size_t idx = 0;
+        for(int32_t j = 0; j < n; ++j)
+            for(int32_t i = j; i < n; ++i)
+                tri[idx++] = static_cast<float>(_Vi(i, j));
+        outfile.write(reinterpret_cast<const char*>(tri.data()),
+                      static_cast<std::streamsize>(tri_size * sizeof(float)));
     }
 
-    // _b
+    // ---- _b (float, only when covariates are present) ----
     if(!no_adj_covar) {
-        std::vector<float> b_buf(x_c);
-        for(int i = 0; i < x_c; i++) b_buf[i] = static_cast<float>(_b(i));
-        outfile.write(reinterpret_cast<const char*>(b_buf.data()), x_c * sizeof(float));
+        Eigen::VectorXf b_f = _b.cast<float>();
+        outfile.write(reinterpret_cast<const char*>(b_f.data()),
+                      static_cast<std::streamsize>(hdr.x_c * sizeof(float)));
     }
 
-    // _varcmp
+    // ---- _varcmp (float) ----
     {
-        std::vector<float> vc_buf(num_varcmp);
-        for(int i = 0; i < num_varcmp; i++) vc_buf[i] = static_cast<float>(_varcmp[i]);
-        outfile.write(reinterpret_cast<const char*>(vc_buf.data()), num_varcmp * sizeof(float));
+        Eigen::VectorXf vc_f =
+            Eigen::Map<const Eigen::VectorXd>(_varcmp.data(), hdr.num_varcmp).cast<float>();
+        outfile.write(reinterpret_cast<const char*>(vc_f.data()),
+                      static_cast<std::streamsize>(hdr.num_varcmp * sizeof(float)));
     }
 
-    // _r_indx
-    outfile.write(reinterpret_cast<const char*>(_r_indx.data()), num_r_indx * sizeof(int));
+    // ---- _r_indx (int32) ----
+    outfile.write(reinterpret_cast<const char*>(_r_indx.data()),
+                  static_cast<std::streamsize>(hdr.num_r_indx * sizeof(int)));
 
-    outfile.close();
-    LOGGER << "Saved REML state (n=" << n << ", covariates=" << x_c
-           << ", variance components=" << num_varcmp << ") to [" << filename << "]." << std::endl;
+    outfile.flush();
+    if(!outfile)
+        LOGGER.e(0, "write error on ["+filename+"]: disk full or I/O failure.");
+
+    const size_t tri_bytes  = static_cast<size_t>(hdr.n) * (hdr.n + 1) / 2 * sizeof(float);
+    const size_t full_bytes = static_cast<size_t>(hdr.n) * hdr.n * sizeof(float);
+    LOGGER << "Saved REML state (n=" << _n << ", covariates=" << _X_c
+           << ", variance components=" << hdr.num_varcmp << ") to [" << filename << "] ("
+           << tri_bytes / (1<<20) << " MiB vs " << full_bytes / (1<<20) << " MiB dense)." << std::endl;
 }
 
-void gcta::load_reml_state(std::string filename, bool no_adj_covar)
+void gcta::load_reml_state(const std::string& filename, bool no_adj_covar)
 {
     std::ifstream infile(filename, std::ios::binary);
-    if(!infile.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to read. Make sure you have run --mlma --save-reml first with matching --out prefix.");
+    if(!infile.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to read. "
+        "Make sure you have run --mlma --save-reml first with matching --out prefix.");
 
-    // magic
-    char magic[4];
-    infile.read(magic, 4);
-    if(std::string_view(magic, 4) != "REML")
+    auto must_read = [&](void* dst, std::streamsize n){
+        infile.read(reinterpret_cast<char*>(dst), n);
+        if(infile.gcount() != n)
+            LOGGER.e(0, "unexpected end of file reading ["+filename+"] — file may be truncated.");
+    };
+
+    // ---- Header ----
+    struct Header {
+        char    magic[4];
+        int32_t n, x_c, num_varcmp, num_r_indx;
+    } hdr;
+    must_read(&hdr, sizeof(hdr));
+
+    if(std::string_view(hdr.magic, 4) != "GOBY")
         LOGGER.e(0, "file ["+filename+"] is not a valid REML state file.");
+    if(hdr.n <= 0 || hdr.x_c < 0 || hdr.num_varcmp <= 0 || hdr.num_r_indx <= 0)
+        LOGGER.e(0, "file ["+filename+"] contains invalid dimensions — file may be corrupt.");
+    if(hdr.n != static_cast<int32_t>(_n))
+        LOGGER.e(0, "sample size mismatch: REML state has n=" + std::to_string(hdr.n)
+                  + " but current dataset has n=" + std::to_string(_n));
+    if(hdr.x_c != static_cast<int32_t>(_X_c))
+        LOGGER.e(0, "number of covariates mismatch: REML state has "
+                  + std::to_string(hdr.x_c) + " but current dataset has " + std::to_string(_X_c));
 
-    // dimensions
-    int n = 0, x_c = 0, num_varcmp = 0, num_r_indx = 0;
-    infile.read(reinterpret_cast<char*>(&n),          sizeof(int));
-    infile.read(reinterpret_cast<char*>(&x_c),        sizeof(int));
-    infile.read(reinterpret_cast<char*>(&num_varcmp), sizeof(int));
-    infile.read(reinterpret_cast<char*>(&num_r_indx), sizeof(int));
-
-    if(n != _n)
-        LOGGER.e(0, "sample size mismatch: REML state has n=" + std::to_string(n) + " but current dataset has n=" + std::to_string(_n));
-    if(x_c != _X_c)
-        LOGGER.e(0, "number of covariates mismatch: REML state has " + std::to_string(x_c) + " covariates but current dataset has " + std::to_string(_X_c));
-
-    // _Vi (row-major) — bulk read
-    _Vi.resize(n, n);
+    // ---- _Vi: packed lower triangle → full symmetric matrix ----
+    // Read float triangle, upcast to double, and reconstruct the full n×n _Vi
+    // by reflecting the lower triangle into the upper half.
     {
-        size_t vi_floats = static_cast<size_t>(n) * n;
-        std::vector<float> vi_buf(vi_floats);
-        infile.read(reinterpret_cast<char*>(vi_buf.data()),
-                    static_cast<std::streamsize>(vi_floats * sizeof(float)));
-        for(int i = 0; i < n; i++)
-            for(int j = 0; j < n; j++)
-                _Vi(i, j) = vi_buf[static_cast<size_t>(i) * n + j];
+        const int32_t n = hdr.n;
+        const size_t tri_size = static_cast<size_t>(n) * (n + 1) / 2;
+        std::vector<float> tri(tri_size);
+        must_read(tri.data(), static_cast<std::streamsize>(tri_size * sizeof(float)));
+
+        _Vi.resize(n, n);
+        size_t idx = 0;
+        for(int32_t j = 0; j < n; ++j) {
+            for(int32_t i = j; i < n; ++i) {
+                const double v = static_cast<double>(tri[idx++]);
+                _Vi(i, j) = v;
+                _Vi(j, i) = v;   // reflect to upper triangle
+            }
+        }
+        _Vi_use_llt = false;
     }
 
-    // _b
+    // ---- _b ----
     if(!no_adj_covar) {
-        _b.resize(x_c);
-        std::vector<float> b_buf(x_c);
-        infile.read(reinterpret_cast<char*>(b_buf.data()), x_c * sizeof(float));
-        for(int i = 0; i < x_c; i++) _b(i) = b_buf[i];
+        Eigen::VectorXf b_f(hdr.x_c);
+        must_read(b_f.data(), static_cast<std::streamsize>(hdr.x_c * sizeof(float)));
+        _b = b_f.cast<double>();
     }
 
-    // _varcmp
-    _varcmp.resize(num_varcmp);
+    // ---- _varcmp ----
     {
-        std::vector<float> vc_buf(num_varcmp);
-        infile.read(reinterpret_cast<char*>(vc_buf.data()), num_varcmp * sizeof(float));
-        for(int i = 0; i < num_varcmp; i++) _varcmp[i] = vc_buf[i];
+        Eigen::VectorXf vc_f(hdr.num_varcmp);
+        must_read(vc_f.data(), static_cast<std::streamsize>(hdr.num_varcmp * sizeof(float)));
+        _varcmp.resize(hdr.num_varcmp);
+        Eigen::Map<Eigen::VectorXd>(_varcmp.data(), hdr.num_varcmp) = vc_f.cast<double>();
     }
 
-    // _r_indx
-    _r_indx.resize(num_r_indx);
-    infile.read(reinterpret_cast<char*>(_r_indx.data()), num_r_indx * sizeof(int));
+    // ---- _r_indx ----
+    _r_indx.resize(hdr.num_r_indx);
+    must_read(_r_indx.data(),
+              static_cast<std::streamsize>(hdr.num_r_indx * sizeof(int)));
 
-    infile.close();
-    LOGGER << "Loaded REML state from [" << filename << "]: n=" << n
-           << ", covariates=" << x_c << ", variance components=" << num_varcmp << std::endl;
+    LOGGER << "Loaded REML state from [" << filename << "]: n=" << hdr.n
+           << ", covariates=" << hdr.x_c
+           << ", variance components=" << hdr.num_varcmp << std::endl;
 }

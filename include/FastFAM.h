@@ -63,9 +63,8 @@ public:
     void output_res(const vector<uint8_t> &isValids, const vector<uint32_t> markerIndex);
     void output_res_2df(const vector<uint8_t> &isValids, const vector<uint32_t> markerIndex);
 
-    //void readGenoSample(uint64_t *buf, int num_marker);
-    void genRandY(uint64_t *buf, int num_marker);
-    void estBeta(uint64_t *buf, int num_marker);
+    void genRandY(uintptr_t *buf, const std::vector<uint32_t> &markerIndex);
+    void estBeta(uintptr_t *buf, const std::vector<uint32_t> &markerIndex);
 
     //void output(string filename);
     //void initMarkerVars();

@@ -24,10 +24,16 @@
 #include "Pheno.h"
 #include "Marker.h"
 #include "Logger.h"
-#include "AsyncBuffer.hpp"
+#include "GenoBackend.h"     // GenoBlock, GenoBackend, GenoScheduler
 #include <functional>
 #include "tables.h"
 #include <unordered_map>
+
+// Forward declarations for the three concrete backends (needed for friend).
+class BedBackend;
+class BgenBackend;
+class PgenBackend;
+class VcfBackend;
 
 using std::function;
 using std::string;
@@ -87,18 +93,9 @@ class Geno {
 public:
     Geno(Pheno* pheno, Marker* marker);
     ~Geno();
-    void loop_64block(const vector<uint32_t>& raw_marker_index, vector<function<void (uint64_t *buf, int num_marker)>> callbacks = vector<function<void (uint64_t *buf, int num_marker)>>(), bool showLog = true);
-    void freq(uint8_t *buf, int num_marker);
-    void freq2(uint8_t *buf, int num_marker);
-    void freq64(uint64_t *buf, int num_marker);
+    // Used internally by bgen2bed for BED output
     void save_bed(uint64_t *buf, int num_marker);
-    void sum_geno(uint64_t *buf, int num_marker);
-    void sum_geno_x(uint64_t *buf, int num_marker);
     void closeOut();
-    void init_keep();
-    void freq64_x(uint64_t *buf, int num_marker);
-    void resetFreq();
-    void resetLoop();
     void setMAF(double val);
     void setMaxMAF(double val);
     void setFilterInfo(double val);
@@ -107,31 +104,16 @@ public:
     double getMAF();
     double getFilterMiss();
             
-    bool check_bed();
+    bool check_bed() = delete;
     void out_freq(string filename);
-    void makeMarkerX(uint64_t *buf, int cur_marker, double *w_buf, bool center, bool std, uint32_t num_sample=0);
-    static void move_geno(uint8_t *buf, uint64_t *keep_list, uint32_t num_raw_sample, 
-            uint32_t num_keep_sample, uint32_t num_marker, uint64_t *geno_buf);
     static int registerOption(map<string, vector<string>>& options_in);
     static void processMain();
     bool filterMAF();
     static void setSexMode();
     uint32_t getTotalMarker();
 
-// seq read start;
-    void preProcess(GenoBuf *gbuf, int numMarkerBuf, vector<uint32_t> *rawMarkerIndexProceed = NULL);
-    void getGenoArray(const vector<uint32_t>& raw_marker_index, GenoBuf *gbuf);
-    void getGenoArrayExtract(const vector<uint32_t>& extract_index, GenoBuf *gbuf);
-    void getGenoArrayExtractFull(const vector<uint32_t> & fullExtractIndex, uint32_t start, uint32_t num, vector<uint32_t> &keptIndex, uint32_t &totalReadMarker, GenoBuf *gbuf);
-    void endProcess();
-
-    void loopDoubleFull(const vector<uint32_t> &extractMarkerIndex, GenoBuf *gbuf, vector<function<void (GenoBuf *gbuf, const vector<uint32_t> &markerIndex)>> callbacks = vector<function<void (GenoBuf *gbuf, const vector<uint32_t> &markerIndex)>>());
-    void loopDoublePre(const vector<uint32_t> &extractMarkerIndex, GenoBuf *gbuf, vector<function<void (GenoBuf *gbuf, const vector<uint32_t> &markerIndex)>> callbacks = vector<function<void (GenoBuf *gbuf, const vector<uint32_t> &markerIndex)>>());
-
-    // new loop subset manner
-    void preGenoDouble(int numMarkerBuf, bool bMakeGeno, bool bGenoCenter, bool bGenoStd, bool bMakeMiss);
+    // coroutine-based loop — pre/end now handled by GenoBackend RAII
     void getGenoDouble(uintptr_t *buf, int bufIndex, GenoBufItem* gbuf);
-    void endGenoDouble();
 
     void loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf, bool bMakeGeno, bool bGenoCenter, bool bGenoStd, bool bMakeMiss, vector<function<void (uintptr_t *buf, const vector<uint32_t> &exIndex)>> callbacks = vector<function<void (uintptr_t *buf, const vector<uint32_t> &exIndex)>>(), bool showLog = true);
 
@@ -144,14 +126,6 @@ private:
     Pheno* pheno;
     Marker* marker;
     FILE* hOut = NULL;
-    int64_t num_byte_per_marker;
-    int last_byte_NA_sample;
-    int64_t num_byte_buffer;
-    int num_blocks;
-    int num_finished_markers = 0;
-    int num_marker_freq = 0;
-    bool bFreqFiltered = false;
-    AsyncBuffer<uint8_t>* asyncBuffer = NULL;
 
     GBitCountTable g_table;
     vector<double> AFA1;
@@ -170,10 +144,7 @@ private:
     static void addOneFileOption(string key_store, string append_string, string key_name,
                                  map<string, vector<string>> options_in);
 
-    void read_bed(const vector<uint32_t> &raw_marker_index);
-
     void init_AF(string alleleFileName);
-    void init_AsyncBuffer();
     uint64_t num_item_1geno;
     uint64_t num_raw_sample;
     uint64_t num_keep_sample;
@@ -190,7 +161,6 @@ private:
 // seq read start;
     string genoFormat = "";
     vector<string> geno_files;
-    vector<FILE *> gFiles;
     vector<int> compressFormats;
     vector<uint32_t> rawCountSamples;
     vector<uint32_t> rawCountSNPs;
@@ -198,7 +168,6 @@ private:
 
     bool bHasPreAF = false;
     int numMarkerBlock;
-    vector<uint32_t> rawMarkerIndexProceed;
 
     double min_maf = 0.0;
     double max_maf = 0.5;
@@ -207,80 +176,18 @@ private:
     double dFilterMiss = 0; // 1 - missingrate
     void deterFilterMAF();
 
-    // define map to calls
-    typedef void (Geno::*PreProcessFunc)(GenoBuf *gbuf);
-    typedef std::unordered_map<string, PreProcessFunc> PreProcessFuncs;
+    // Concrete backend classes need access to private members.
+    friend class BedBackend;
+    friend class BgenBackend;
+    friend class PgenBackend;
+    friend class VcfBackend;
 
-    typedef void (Geno::*GetGenoArrayFunc)(const vector<uint32_t>& raw_marker_index, GenoBuf * gbuf);
-    typedef std::unordered_map<string, GetGenoArrayFunc> GetGenoArrayFuncs;
-
-    typedef void (Geno::*EndProcessFunc)(void);
-    typedef std::unordered_map<string, EndProcessFunc> EndProcessFuncs;
-
-
-    AsyncBuffer<uint8_t>* asyncBufn = NULL;
-    bool asyncMode = false;
-
-    PreProcessFuncs preProcessFuncs;
-    GetGenoArrayFuncs getGenoArrayFuncs;
-    EndProcessFuncs endProcessFuncs;
-
-    void openGFiles();
-    void closeGFiles();
-
-    void setGenoBufSize(GenoBuf *gbuf, uint32_t n_marker);
-
-    //bgen format
-    void preProcess_bgen(GenoBuf *gbuf);
-    void getGenoArray_bgen(const vector<uint32_t>& raw_marker_index, GenoBuf * gbuf);
-    void endProcess_bgen();
-
-    //BED format
-    void preProcess_bed(GenoBuf *gbuf);
-    void getGenoArray_bed(const vector<uint32_t>& raw_marker_index, GenoBuf * gbuf);
-    void endProcess_bed();
-    int64_t numBytePerMarker; // (raw_sample + 3) / 4
-    vector<int32_t> bedIndexLookup; // in new define
-    uint64_t bedGenoBuf1Size; // how many 64bit geno of keep sample save in 64bit// bedGenoBufSize = (sampleKeepIndex.size() + 31) /32;
-    uint64_t *keepMask64 = NULL;
-    uint64_t *maleMask64 = NULL; 
-    uint32_t countMale = 0; 
-    
-    void freq64_bed(uint64_t *buf, const vector<uint32_t> &markerIndex, GenoBuf * gbuf);
-    void freq64_bedX(uint64_t *buf, const vector<uint32_t> &markerIndex, GenoBuf * gbuf);
-    uint8_t *bed_buf8 = NULL;
-    uint64_t *bed_buf64 = NULL;
-
-    //pre read bed
-    void read_bed2(const vector<uint32_t> &raw_marker_index, int numMakersBlock);
-    void bed64ToDouble(uint64_t * g64buf, GenoBuf * gbuf, const vector<uint32_t> &raw_marker_index);
-
-    //TODO:  X chromosome not work
-    
-    /**** for subset reading ****
-     * ****/
-
-    typedef void (Geno::*PreGenoDoubleFunc)();
-    typedef std::unordered_map<string, PreGenoDoubleFunc> PreGenoDoubleFuncs;
-
+    // getGenoDouble dispatch map (processing only; I/O moved to backends).
     typedef void (Geno::*GetGenoDoubleFunc)(uintptr_t *buf, int idx, GenoBufItem* gbuf);
     typedef std::unordered_map<string, GetGenoDoubleFunc> GetGenoDoubleFuncs;
-
-    typedef void (Geno::*EndGenoDoubleFunc)(void);
-    typedef std::unordered_map<string, EndGenoDoubleFunc> EndGenoDoubleFuncs;
-
-    typedef void (Geno::*ReadGenoFunc)(const vector<uint32_t> &extractIndex);
-    typedef std::unordered_map<string, ReadGenoFunc> ReadGenoFuncs;
-
-    PreGenoDoubleFuncs preGenoDoubleFuncs;
     GetGenoDoubleFuncs getGenoDoubleFuncs;
-    EndGenoDoubleFuncs endGenoDoubleFuncs;
-    ReadGenoFuncs readGenoFuncs;
-    
-    void readGeno(const vector<uint32_t> &extractIndex);
 
     bool hasInfo = false;
-    AsyncBuffer<uintptr_t>* asyncBuf64 = NULL;
 
     bool bMakeGeno;
     bool bGenoCenter;
@@ -301,21 +208,12 @@ private:
     vector<int> fileIndexBuf;
     vector<int32_t> baseIndexLookup;
 
-    //BED format;
-    void preGenoDouble_bed();
+    // Format-specific getGenoDouble (processing/unpacking — unchanged).
+    // pre/read/endGeno* moved to BedBackend / BgenBackend / PgenBackend.
     void getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf);
-    void endGenoDouble_bed();
-    void readGeno_bed(const vector<uint32_t> &extractIndex);
-    //BGEN format;
-    void preGenoDouble_bgen();
     void getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf);
-    void endGenoDouble_bgen();
-    void readGeno_bgen(const vector<uint32_t> &extractIndex);
-    //PGEN format;
-    void preGenoDouble_pgen();
     void getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf);
-    void endGenoDouble_pgen();
-    void readGeno_pgen(const vector<uint32_t> &extractIndex);
+    void getGenoDouble_vcf(uintptr_t *buf, int idx, GenoBufItem* gbuf);
  
     //BED
     int bedRawGenoBuf1PtrSize; // how many 64bit geno of raw sample save 
@@ -348,6 +246,9 @@ private:
     int pgenGenoPtrSize;
     int pgenDosagePresentPtrSize;
     int pgenDosageMainPtrSize;
+
+    //VCF — one uint8_t per kept sample per marker, padded to uintptr_t alignment
+    int vcfRawGenoBuf1PtrSize;
 
     std::ofstream osOut;
     FILE * bOut = NULL;

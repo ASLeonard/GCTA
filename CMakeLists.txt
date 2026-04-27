@@ -1,11 +1,12 @@
-CMAKE_MINIMUM_REQUIRED(VERSION 3.28)
+cmake_minimum_required(VERSION 3.28...4.3)
 
 project(GCTA2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 23)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
-set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(CMAKE_COMPILER_IS_GNUCC)
@@ -74,7 +75,11 @@ endif()
 
 # Fetch 3rd parties
 include(FetchContent)
-set(FETCHCONTENT_QUIET OFF)
+if(CMAKE_VERBOSE_MAKEFILE)
+    set(FETCHCONTENT_QUIET OFF)
+else()
+    set(FETCHCONTENT_QUIET ON)
+endif()
 
 FetchContent_Declare(
     zlib
@@ -105,6 +110,12 @@ FetchContent_Declare(
 FetchContent_Declare(
     sqlite
     URL https://www.sqlite.org/2026/sqlite-amalgamation-3510200.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    EXCLUDE_FROM_ALL)
+
+FetchContent_Declare(
+    stdexec
+    URL https://github.com/NVIDIA/stdexec/archive/refs/tags/nvhpc-25.09.tar.gz
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     EXCLUDE_FROM_ALL)
 
@@ -152,6 +163,7 @@ set(CMAKE_SKIP_INSTALL_RULES OFF)
 # sqlite has no options to isolate, and sqlite_SOURCE_DIR must be visible
 # in the parent scope for the add_library(sqlite3) call below.
 FetchContent_MakeAvailable(sqlite)
+FetchContent_MakeAvailable(stdexec)
 
 # Ensure a consistent ZLIB::ZLIB target exists for downstream linking.
 # - System zlib: find_package (via FIND_PACKAGE_ARGS) already created ZLIB::ZLIB
@@ -186,6 +198,48 @@ target_include_directories(sqlite3 PUBLIC ${sqlite_SOURCE_DIR})
 
 find_package(Threads REQUIRED)
 
+# htslib uses autotools, not CMake — build it with ExternalProject.
+include(ExternalProject)
+set(HTSLIB_INSTALL_DIR "${CMAKE_BINARY_DIR}/htslib-install")
+file(MAKE_DIRECTORY "${HTSLIB_INSTALL_DIR}/include")
+ExternalProject_Add(
+    htslib_build
+    URL "https://github.com/samtools/htslib/releases/download/1.23.1/htslib-1.23.1.tar.bz2"
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_DIR  "${CMAKE_BINARY_DIR}/htslib-src"
+    BINARY_DIR  "${CMAKE_BINARY_DIR}/htslib-build"
+    INSTALL_DIR "${HTSLIB_INSTALL_DIR}"
+    CONFIGURE_COMMAND
+        "${CMAKE_BINARY_DIR}/htslib-src/configure"
+        "--prefix=${HTSLIB_INSTALL_DIR}"
+        "--enable-static"
+        "--disable-shared"
+        "--disable-libcurl"
+        "--without-libdeflate"
+        "--disable-bz2"
+        "--disable-lzma"
+        "CC=${CMAKE_C_COMPILER}"
+    BUILD_COMMAND   $(MAKE) lib-static
+    INSTALL_COMMAND $(MAKE) install
+    BUILD_IN_SOURCE FALSE
+    BUILD_BYPRODUCTS "${HTSLIB_INSTALL_DIR}/lib/libhts.a"
+    LOG_CONFIGURE TRUE
+    LOG_BUILD     TRUE
+    LOG_INSTALL   TRUE)
+
+add_library(htslib STATIC IMPORTED GLOBAL)
+add_dependencies(htslib htslib_build)
+set_target_properties(htslib PROPERTIES
+    IMPORTED_LOCATION             "${HTSLIB_INSTALL_DIR}/lib/libhts.a"
+    INTERFACE_INCLUDE_DIRECTORIES "${HTSLIB_INSTALL_DIR}/include")
+message(STATUS "htslib will be built from source")
+
+# htslib built with --without-libdeflate --disable-bz2 --disable-lzma; only
+# zlib is required for VCF/BCF support and is already exposed via ZLIB::ZLIB.
+if(TARGET ZLIB::ZLIB)
+    target_link_libraries(htslib INTERFACE ZLIB::ZLIB)
+endif()
+
 if(NOT WIN32)
     # NOTE: Install gsl with your system package manager
     find_package(GSL REQUIRED)
@@ -214,7 +268,6 @@ endif()
 
 find_package(OpenMP REQUIRED)
 
-set(OPENBLAS_INCLUDE_DIR "" CACHE PATH "Path to OpenBLAS headers (used when GCTA_BLAS_BACKEND=OpenBLAS)")
 set(GCTA_BLAS_LIBS "")
 set(GCTA_BLAS_INCLUDE_DIRS "")
 set(GCTA_BLAS_DEFINES "")
@@ -241,6 +294,21 @@ if(NOT APPLE AND _GCTA_BLAS STREQUAL "Accelerate")
     message(FATAL_ERROR "Accelerate is only available on macOS. Use MKL or OpenBLAS.")
 endif()
 
+# Map our backend choice to FindBLAS/LAPACK vendor names so find_package
+# can prefer the requested vendor when possible.
+if(_GCTA_BLAS STREQUAL "Accelerate")
+    set(_BLA_VENDOR_NAME "Apple")
+elseif(_GCTA_BLAS STREQUAL "OpenBLAS")
+    set(_BLA_VENDOR_NAME "OpenBLAS")
+elseif(_GCTA_BLAS STREQUAL "MKL")
+    set(_BLA_VENDOR_NAME "Intel")
+endif()
+
+if(DEFINED _BLA_VENDOR_NAME)
+    set(BLA_VENDOR ${_BLA_VENDOR_NAME} CACHE STRING "Preferred BLAS/LAPACK vendor" FORCE)
+    message(STATUS "Setting BLA_VENDOR=${_BLA_VENDOR_NAME} to prefer requested BLAS vendor")
+endif()
+
 if(_GCTA_BLAS STREQUAL "Accelerate")
     find_library(ACCELERATE_LIBRARY Accelerate REQUIRED)
     list(APPEND GCTA_BLAS_LIBS ${ACCELERATE_LIBRARY})
@@ -257,33 +325,35 @@ if(_GCTA_BLAS STREQUAL "Accelerate")
     list(APPEND GCTA_BLAS_INCLUDE_DIRS ${VECLIB_INCLUDE_DIR})
 
 elseif(_GCTA_BLAS STREQUAL "OpenBLAS")
-    # Check Homebrew path first (macOS), then fall back to find_package
-    set(_openblas_prefix "/opt/homebrew/opt/openblas")
-    if(APPLE AND EXISTS "${_openblas_prefix}/lib/libopenblas.dylib")
-        list(APPEND GCTA_BLAS_LIBS "${_openblas_prefix}/lib/libopenblas.dylib")
-        list(APPEND GCTA_BLAS_INCLUDE_DIRS "${_openblas_prefix}/include")
+    # Find OpenBLAS via its CMake package config. Respect OpenBLAS_DIR if set.
+    if(OpenBLAS_DIR)
+        find_package(OpenBLAS REQUIRED CONFIG HINTS ${OpenBLAS_DIR})
     else()
-        find_package(BLAS REQUIRED)
-        find_package(LAPACK REQUIRED)
-        list(APPEND GCTA_BLAS_LIBS ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
-        if(OPENBLAS_INCLUDE_DIR)
-            list(APPEND GCTA_BLAS_INCLUDE_DIRS ${OPENBLAS_INCLUDE_DIR})
+        find_package(OpenBLAS REQUIRED CONFIG HINTS "/opt/homebrew/opt/openblas/lib/cmake/openblas")
+    endif()
+
+    if(NOT TARGET OpenBLAS::OpenBLAS)
+        # Fallback for conda/broken config files that don't define the imported target
+        if(APPLE)
+            add_library(OpenBLAS::OpenBLAS SHARED IMPORTED)
+            set_target_properties(OpenBLAS::OpenBLAS PROPERTIES
+                IMPORTED_LOCATION "${_OpenBLAS_ROOT_DIR}/lib/libopenblas.dylib"
+                INTERFACE_INCLUDE_DIRECTORIES "${OpenBLAS_INCLUDE_DIRS}")
         else()
-            find_path(LAPACKE_INCLUDE_DIR lapacke.h
-                HINTS
-                    /usr/include/openblas
-                    /usr/local/include/openblas
-                    /usr/include/x86_64-linux-gnu/openblas-pthread
-                    /usr/include
-                    /usr/local/include)
-            if(LAPACKE_INCLUDE_DIR)
-                list(APPEND GCTA_BLAS_INCLUDE_DIRS ${LAPACKE_INCLUDE_DIR})
-                message(STATUS "Found lapacke.h in: ${LAPACKE_INCLUDE_DIR}")
+            add_library(OpenBLAS::OpenBLAS SHARED IMPORTED)
+            set_target_properties(OpenBLAS::OpenBLAS PROPERTIES
+                IMPORTED_LOCATION "${_OpenBLAS_ROOT_DIR}/lib/libopenblas.a"
+                INTERFACE_INCLUDE_DIRECTORIES "${OpenBLAS_INCLUDE_DIRS}")
+            find_library(GFORTRAN_LIBRARY gfortran
+                HINTS "${_OpenBLAS_ROOT_DIR}/lib")
+            if(GFORTRAN_LIBRARY)
+                list(APPEND GCTA_BLAS_LIBS ${GFORTRAN_LIBRARY})
             else()
-                message(WARNING "lapacke.h not found. Set OPENBLAS_INCLUDE_DIR to the directory containing lapacke.h")
+                message(FATAL_ERROR "libgfortran not found, required for static OpenBLAS linking")
             endif()
         endif()
     endif()
+    list(APPEND GCTA_BLAS_LIBS OpenBLAS::OpenBLAS)
     list(APPEND GCTA_BLAS_DEFINES GCTA_USE_OPENBLAS EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
     set(GCTA_BLAS_PROVIDER "OpenBLAS" CACHE INTERNAL "")
 
@@ -307,7 +377,7 @@ elseif(_GCTA_BLAS STREQUAL "MKL")
     find_package(MKL REQUIRED)
     list(APPEND GCTA_BLAS_LIBS MKL::MKL)
     list(APPEND GCTA_BLAS_INCLUDE_DIRS ${MKL_INCLUDE})
-    list(APPEND GCTA_BLAS_DEFINES GCTA_USE_MKL EIGEN_USE_MKL EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
+    list(APPEND GCTA_BLAS_DEFINES GCTA_USE_MKL EIGEN_USE_MKL_ALL)
     set(GCTA_BLAS_PROVIDER "MKL" CACHE INTERNAL "")
 
 else()
@@ -319,43 +389,84 @@ message(STATUS "BLAS/LAPACK provider: ${GCTA_BLAS_PROVIDER}")
 set(COMMON_INCLUDES ${CMAKE_SOURCE_DIR}/include)
 set(MAIN_SOURCE "${CMAKE_SOURCE_DIR}/src/main.cpp")
 
-file(GLOB SRCS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/*.cpp")
-list(REMOVE_ITEM SRCS "${MAIN_SOURCE}")
+set(SRCS
+    ${CMAKE_SOURCE_DIR}/src/Covar.cpp
+    ${CMAKE_SOURCE_DIR}/src/FastFAM.cpp
+    ${CMAKE_SOURCE_DIR}/src/GRM.cpp
+    ${CMAKE_SOURCE_DIR}/src/Geno.cpp
+    ${CMAKE_SOURCE_DIR}/src/BedBackend.cpp
+    ${CMAKE_SOURCE_DIR}/src/BgenBackend.cpp
+    ${CMAKE_SOURCE_DIR}/src/PgenBackend.cpp
+    ${CMAKE_SOURCE_DIR}/src/VcfBackend.cpp
+    ${CMAKE_SOURCE_DIR}/src/LD.cpp
+    ${CMAKE_SOURCE_DIR}/src/Logger.cpp
+    ${CMAKE_SOURCE_DIR}/src/Marker.cpp
+    ${CMAKE_SOURCE_DIR}/src/OptionIO.cpp
+    ${CMAKE_SOURCE_DIR}/src/Pheno.cpp
+    ${CMAKE_SOURCE_DIR}/src/StatLib.cpp
+    ${CMAKE_SOURCE_DIR}/src/ThreadPool.cpp
+    ${CMAKE_SOURCE_DIR}/src/mem.cpp
+    ${CMAKE_SOURCE_DIR}/src/tables.cpp
+    ${CMAKE_SOURCE_DIR}/src/utils.cpp)
+
+add_executable(gcta64 ${MAIN_SOURCE})
 
 # acat.c is pure C — keep it in its own small library so the C++ PCH
-# applied to gcta_core does not bleed into C compilation units.
+# applied to gcta64 does not bleed into C compilation units.
 add_library(acat_c OBJECT "${CMAKE_SOURCE_DIR}/src/acat.c")
 target_include_directories(acat_c PUBLIC ${COMMON_INCLUDES})
 
-add_library(gcta_core OBJECT ${SRCS})
+target_sources(gcta64 PRIVATE ${SRCS})
 
-target_include_directories(gcta_core PUBLIC
+target_include_directories(gcta64 PRIVATE
+    ${CMAKE_SOURCE_DIR}
     ${COMMON_INCLUDES}
     ${GCTA_BLAS_INCLUDE_DIRS}
     "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include"
     "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/simde")
 
-target_link_libraries(gcta_core PRIVATE
+target_link_libraries(gcta64 PRIVATE
     Boost::algorithm Boost::math Boost::crc Boost::iostreams
     Eigen3::Eigen
     Spectra
-    sqlite3
+    STDEXEC::stdexec
     ${GCTA_ZSTD_LIBS})
 
-target_precompile_headers(gcta_core PRIVATE
+target_precompile_headers(gcta64 PRIVATE
     <Eigen/Dense>
     <boost/algorithm/string.hpp>
     <boost/math/distributions.hpp>)
 
-set(GCTA_LIBS gcta_core acat_c)
+set(GCTA_LIBS acat_c)
 
-add_executable(gcta64 ${MAIN_SOURCE})
+target_sources(gcta64 PRIVATE
+    main/CommFunc.cpp
+    main/StatFunc.cpp
+    main/StrFunc.cpp
+    main/bivar_reml.cpp
+    main/data.cpp
+    main/edata.cpp
+    main/ejma.cpp
+    main/est_hsq.cpp
+    main/gbat.cpp
+    main/grm.cpp
+    main/gsmr.cpp
+    main/gwas_simu.cpp
+    main/joint_meta.cpp
+    main/ld.cpp
+    main/LinAlg.cpp
+    main/mbat.cpp
+    main/mlm_assoc.cpp
+    main/mtcojo.cpp
+    main/option.cpp
+    main/pc_adjust.cpp
+    main/popu_genet.cpp
+    main/raw_geno.cpp
+    main/reml_within_family.cpp
+    main/sbat.cpp)
+target_link_libraries(gcta64 PRIVATE htslib)
 
-add_subdirectory(main)
-target_include_directories(mainV1 PUBLIC ${COMMON_INCLUDES} ${GCTA_BLAS_INCLUDE_DIRS})
-target_link_libraries(mainV1 PRIVATE Eigen3::Eigen Boost::math Boost::iostreams Spectra)
-
-set(GCTA_TARGETS gcta64 mainV1 ${GCTA_LIBS})
+set(GCTA_TARGETS gcta64 ${GCTA_LIBS})
 
 set(GCTA_IPO_ENABLED OFF)
 if(GCTA_ENABLE_IPO AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
@@ -398,11 +509,33 @@ if(CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
     endif()
 endif()
 
-add_subdirectory(third_party)
+add_library(Pgenlib
+    third_party/Pgenlib/PgenReader.cpp
+    third_party/plink-ng/2.0/include/pgenlib_ffi_support.cc
+    third_party/plink-ng/2.0/include/pgenlib_misc.cc
+    third_party/plink-ng/2.0/include/pgenlib_read.cc
+    third_party/plink-ng/2.0/include/pgenlib_write.cc
+    third_party/plink-ng/2.0/include/plink2_base.cc
+    third_party/plink-ng/2.0/include/plink2_bgzf.cc
+    third_party/plink-ng/2.0/include/plink2_bitmap.cc
+    third_party/plink-ng/2.0/include/plink2_bits.cc
+    third_party/plink-ng/2.0/include/plink2_fmath.cc
+    third_party/plink-ng/2.0/include/plink2_htable.cc
+    third_party/plink-ng/2.0/include/plink2_memory.cc
+    third_party/plink-ng/2.0/include/plink2_stats.cc
+    third_party/plink-ng/2.0/include/plink2_string.cc
+    third_party/plink-ng/2.0/include/plink2_text.cc
+    third_party/plink-ng/2.0/include/plink2_thread.cc
+    third_party/plink-ng/2.0/include/plink2_zstfile.cc
+    third_party/plink-ng/2.0/include/pvar_ffi_support.cc)
+target_include_directories(Pgenlib PUBLIC "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include")
+if(NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    target_compile_options(Pgenlib PRIVATE -mavx2 -mbmi -mbmi2 -mlzcnt)
+endif()
 
 target_include_directories(Pgenlib PRIVATE ${GCTA_ZLIB_INCLUDE_DIRS})
 
-target_link_libraries(gcta64 PRIVATE mainV1 gcta_core acat_c Pgenlib sqlite3 ${GCTA_ZSTD_LIBS} Threads::Threads Eigen3::Eigen)
+target_link_libraries(gcta64 PRIVATE acat_c Pgenlib sqlite3 Threads::Threads)
 
 # Link BLAS before GSL so OpenBLAS/Accelerate/MKL cblas symbols take precedence
 # over libgslcblas in dyld (macOS) and ld.so (Linux) symbol resolution order
@@ -428,17 +561,6 @@ if(UNIX AND NOT APPLE AND NOT _GCTA_BLAS STREQUAL "None")
     target_link_libraries(gcta64 PRIVATE ${GCTA_BLAS_LIBS})
 endif()
 
-foreach(target IN LISTS GCTA_TARGETS)
-    if(NOT target STREQUAL "gcta64")
-        target_link_libraries(${target} PRIVATE ${GCTA_BLAS_LIBS})
-    endif()
-endforeach()
-
-# TODO: testing disabled pending fixes
-# enable_testing()
-# add_subdirectory(test)
-
-
 # List all targets (verbose, only if requested)
 if(CMAKE_VERBOSE_MAKEFILE OR GCTA_LIST_TARGETS)
     foreach(prop IN ITEMS IMPORTED_TARGETS BUILDSYSTEM_TARGETS)
@@ -459,7 +581,7 @@ endif()
 if(LINUX OR APPLE)
     set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
-    install(TARGETS gcta64 mainV1
+    install(TARGETS gcta64
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)
@@ -475,7 +597,7 @@ if(LINUX)
         ${CMAKE_SOURCE_DIR}/resources/gcta64.svg
         DESTINATION share/icons/hicolor/scalable/apps)
 elseif(WIN32)
-    install(TARGETS gcta64 mainV1 DESTINATION bin)
+    install(TARGETS gcta64 DESTINATION bin)
 
     file(GLOB RUNTIME_DLLS "${CMAKE_BINARY_DIR}/*.dll")
     install(FILES
@@ -504,3 +626,8 @@ if(NOT WIN32)
 endif()
 message(STATUS "==========================================")
 message(STATUS "")
+
+set_property(DIRECTORY PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/src"
+    "${CMAKE_SOURCE_DIR}/main"
+    "${CMAKE_SOURCE_DIR}/third_party/Pgenlib")

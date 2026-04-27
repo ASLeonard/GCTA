@@ -19,6 +19,7 @@ enum INVmethod{
     INV_ERR = 100
 };
 
+/*
 template<typename MatrixType>
 bool _LLT(MatrixType &A, double &logdet){
     //MatrixType::Scalar * vi = A.data();
@@ -71,6 +72,35 @@ bool _LU(MatrixType &A, double &logdet) {
     std::vector<double> work(lwork);
     dgetri(&n, vi, &n, ipiv.data(), work.data(), &lwork, &info);
     if (info != 0) { A = A_orig; return false; }
+    return true;
+}
+*/
+
+template<typename MatrixType>
+bool _LLT(MatrixType &A, double &logdet) {
+    auto diag = A.diagonal().eval();
+
+    Eigen::LLT<MatrixType> llt(A);
+    if (llt.info() != Eigen::Success) {
+        A.diagonal() = diag;
+        return false;
+    }
+
+    logdet = llt.matrixL().nestedExpression().diagonal().array().log().sum() * 2.0;
+    A = llt.solve(MatrixType::Identity(A.rows(), A.cols()));
+    return true;
+}
+
+template<typename MatrixType>
+bool _LU(MatrixType &A, double &logdet) {
+    Eigen::PartialPivLU<MatrixType> lu(A);
+
+    logdet = lu.matrixLU().diagonal().array().abs().log().sum();
+    if (!std::isfinite(logdet)) {
+        return false;
+    }
+
+    A = lu.inverse();
     return true;
 }
 

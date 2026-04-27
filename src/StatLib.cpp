@@ -75,7 +75,7 @@ namespace StatLib{
             return boost::math::cdf(boost::math::complement(norm_dist, x));
         }
     }
-
+    /*
     //n rank size,  Z shall be n * n double memory.
     // return true, success; false, unsuccess
     bool rankContrast(int n, double * Z){
@@ -118,6 +118,24 @@ namespace StatLib{
                 c[base_index + j] = c[base_index + j] * rdiv;
             }
         }
+
+        return true;
+    }
+    */
+
+    bool rankContrast(int n, Eigen::MatrixXd &Z) {
+        double mean = 1.0 - (1.0 + n) / 2.0;
+
+        Eigen::MatrixXd X(n, n);
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+                X(j, i) = std::pow(j + mean, i);
+
+        Eigen::HouseholderQR<Eigen::MatrixXd> qr(X);
+        Z = qr.householderQ().transpose() * Eigen::MatrixXd::Identity(n, n);
+
+        for (int i = 0; i < n; i++)
+            Z.row(i).normalize();
 
         return true;
     }

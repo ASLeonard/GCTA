@@ -407,6 +407,10 @@ bool Covar::setCovarMapping(bool is_rcovar, vector<vector<string>> *map_order){
     vector<int> start_col_X;
     start_col_X.push_back(0);
 
+    // TODO: labels_covar_mapping and labels_rcovar_mapping are effectively
+    // fixed-size 2D tables (all inner vectors have the same length n).
+    // Replace with Eigen::MatrixXd to eliminate the jagged allocation and
+    // simplify the index arithmetic in getCovarX / getCovarXRaw.
     auto *plabels_covar = &this->labels_covar;
     auto *pcovar = &this->covar;
     auto *plabels_covar_mapping = &this->labels_covar_mapping;
@@ -464,14 +468,14 @@ bool Covar::setCovarMapping(bool is_rcovar, vector<vector<string>> *map_order){
             }
         }else{
             int n = elements.size();
-            std::vector<double> Z(static_cast<size_t>(n) * n);
-            if(StatLib::rankContrast(n, Z.data())){
+            Eigen::MatrixXd Z(n, n);
+            if(StatLib::rankContrast(n, Z)){
                 for(int j = 1; j < n; j++){
-                    vector<double> item(n);
-                    int base_index_z = j * n;
-                    std::ranges::transform(elements, item.begin(),
-                            [&map_item, &Z, &base_index_z](string t){return Z[base_index_z + map_item[t]];});
-
+                    std::vector<double> item(n);
+                    for(auto const& [key, idx] : map_item){
+                        if(key != "LABEL_MAX_VALUE")
+                            item[idx] = Z(idx, j);  // direct indexing, no manual offset arithmetic
+                    }
                     labels_covar_mapping[start_col_X[i] + j - 1] = item;
                 }
             }else{

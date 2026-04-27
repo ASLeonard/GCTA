@@ -59,6 +59,11 @@ public:
     vector<uint32_t>& getMaleRawIndex();
     vector<uint32_t>& getMaleExtractIndex();
 
+    /// Return just the IID (individual ID) for the given raw sample index.
+    const std::string& getRawIID(uint32_t rawIndex) const { return pid[rawIndex]; }
+    /// Return just the FID (family ID) for the given raw sample index.
+    const std::string& getRawFID(uint32_t rawIndex) const { return fid[rawIndex]; }
+
     static int registerOption(map<string, vector<string>>& options);
     static void processMain();
     static vector<string> read_sublist(string sublist_file, vector<vector<double>> *phenos = NULL, vector<int> *keep_row = NULL);
@@ -91,6 +96,7 @@ private:
     void read_sample(string sample_file);
     void read_psam(string psam_file);
     void read_checkMPSample(string m_file);
+    void read_vcf_samples(const string& vcf_file);
     void update_pheno(vector<string>& indi_marks, vector<double>& phenos);
     void update_sex(vector<string>& indi_marks, vector<double>& sex);
     void init_mask_block();

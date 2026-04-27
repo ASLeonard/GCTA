@@ -1311,27 +1311,6 @@ void GRM::calculate_GRM(uint64_t *buf, int num_marker) {
     //out_message << std::fixed << std::setprecision(2) << finished_marker * 100.0 / geno->marker->count_extract();
     //LOGGER.i(0, out_message.str() + "% has been finished");
 
-bool write_GRM(float *grm, float *N, FILE *grm_out, FILE *N_out, uint32_t row_index, float thresh=-99){
-    if(thresh == -99){
-        //binary output
-        fwrite(grm, sizeof(float), row_index + 1, grm_out);
-        fwrite(N, sizeof(float), row_index + 1, N_out);
-    }else{
-        std::stringstream ss;
-        ss << std::setprecision( std::numeric_limits<float>::digits10+2); 
-        for(int i = 0; i <= row_index; i++){
-            float tmp_grm = grm[i];
-            if(tmp_grm >= thresh){
-                ss << row_index << "\t" << i << "\t" << tmp_grm << "\n";
-            }
-        }
-        const string tmp = ss.str();
-        if(tmp.size() > 0){
-            fputs(tmp.c_str(), grm_out);
-        }
-    }
-    return true;
-}
 
 
 void GRM::deduce_GRM(){
@@ -1404,10 +1383,7 @@ void GRM::deduce_GRM(){
     std::vector<float> w_grm(num_sample);
     std::vector<float> w_N(num_sample);
 
-    double *po_grm = grm;
     uint32_t *po_N = N;
-
-    uint64_t m = part_keep_indices.second - part_keep_indices.first + 1;
     //LOGGER << "mtd weight: " << mtd_weight << std::endl;
    
     /*
@@ -1419,25 +1395,44 @@ void GRM::deduce_GRM(){
     */
     
     if(bBLAS){
-        for(int pair1 = part_keep_indices.first; pair1 != part_keep_indices.second + 1; pair1++){
-            uint32_t sub_miss1 = numValidMarkers - sub_miss[pair1];
-            for(int pair2 = 0; pair2 != pair1 + 1; pair2++){
-                uint32_t sub_N = *(po_N + pair2) + sub_miss1 - sub_miss[pair2];
-                w_N[pair2] = (float)sub_N;
+        // The BLAS GRM buffer is column-major [grm_m × grm_n_write] (doubles).
+        // Writing row by row requires stride-m reads (one cache miss per column step).
+        // Fix: transpose to a row-major float buffer first, using Eigen's blocked copy,
+        // so the inner write loop reads contiguously.
+        const int grm_n_write = static_cast<int>(part_keep_indices.second + 1);
+        std::vector<float> grm_rm(static_cast<size_t>(grm_m) * grm_n_write);
+        {
+            using RowMajF = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+            Eigen::Map<const Eigen::MatrixXd> G_cm(grm, grm_m, grm_n_write);
+            Eigen::Map<RowMajF>(grm_rm.data(), grm_m, grm_n_write) = G_cm.cast<float>();
+        }
 
-                if(sub_N){
-                    w_grm[pair2] = (float)((*(po_grm + (uint64_t)pair2 * m))/sub_N) * mtd_weight;
-                }else{
-                    w_grm[pair2] = 0.0;
-                }
-                //po_N++;
-                //po_grm++;
+        for(int pair1 = part_keep_indices.first; pair1 != part_keep_indices.second + 1; pair1++){
+            const int local_pair1 = pair1 - static_cast<int>(part_keep_indices.first);
+            const uint32_t sub_miss1 = numValidMarkers - sub_miss[pair1];
+            // Sequential read: row local_pair1 of the row-major buffer
+            const float *row = grm_rm.data() + static_cast<size_t>(local_pair1) * grm_n_write;
+
+            for(int pair2 = 0; pair2 != pair1 + 1; pair2++){
+                const uint32_t sub_N = *(po_N + pair2) + sub_miss1 - sub_miss[pair2];
+                w_N[pair2]   = static_cast<float>(sub_N);
+                w_grm[pair2] = sub_N ? row[pair2] / sub_N * mtd_weight : 0.0f;
             }
-            //fwrite(w_grm, sizeof(float), pair1 + 1, grm_out);
-            //fwrite(w_N, sizeof(float), pair1 + 1, N_out);
-            write_GRM(w_grm.data(), w_N.data(), grm_out, N_out, pair1, thresh);
-            po_N = po_N + pair1 + 1;
-            po_grm = po_grm + 1;
+            if(!isSparse){
+                fwrite(w_grm.data(), sizeof(float), pair1 + 1, grm_out);
+                fwrite(w_N.data(),  sizeof(float), pair1 + 1, N_out);
+            }else{
+                std::stringstream ss;
+                ss << std::setprecision(std::numeric_limits<float>::digits10 + 2);
+                for(int i = 0; i <= pair1; i++){
+                    if(w_grm[i] >= thresh){
+                        ss << pair1 << "\t" << i << "\t" << w_grm[i] << "\n";
+                    }
+                }
+                const string tmp = ss.str();
+                if(!tmp.empty()) fputs(tmp.c_str(), grm_out);
+            }
+            po_N += pair1 + 1;
         }
     }
     /* // don't need special case

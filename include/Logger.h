@@ -46,7 +46,7 @@ public:
     enum Type{INFO, PROMPT, PROGRESS, WARN, ERROR, DEBUG};
 
     void Log(int level, Type type, const string& prompt, const string& message);
-    void e(int level, const string& message, const string& title = empty);
+    [[noreturn]] void e(int level, const string& message, const string& title = empty);
     void i(int level, const string& message, const string& title = empty);
     void d(int level, const string& message, const string& title = empty);
     void w(int level, const string& message, const string& title = empty);
