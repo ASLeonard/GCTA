@@ -200,13 +200,6 @@ target_include_directories(sqlite3 PUBLIC ${sqlite_SOURCE_DIR})
 
 find_package(Threads REQUIRED)
 
-
-
-if(NOT WIN32)
-    # NOTE: Install gsl with your system package manager
-    find_package(GSL REQUIRED)
-endif()
-
 # Find OpenMP
 if(APPLE)
     # Use manual flags for OpenMP with Apple Clang
@@ -286,6 +279,18 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS")
     endif()
     find_package(OpenBLAS REQUIRED CONFIG PATHS "${OpenBLAS_DIR}" NO_DEFAULT_PATH)
 
+    # Some conda OpenBLAS CMake configs omit OpenBLAS_INCLUDE_DIRS from the
+    # exported targets, so cblas.h / lapacke.h won't be on the include path
+    # and EIGEN_USE_LAPACKE silently becomes a no-op. Derive the prefix from
+    # OpenBLAS_DIR (<prefix>/lib/cmake/openblas) and add it explicitly.
+    if(NOT OpenBLAS_INCLUDE_DIRS)
+        get_filename_component(_openblas_prefix "${OpenBLAS_DIR}/../../.." ABSOLUTE)
+        set(OpenBLAS_INCLUDE_DIRS "${_openblas_prefix}/include")
+        message(STATUS "Derived OpenBLAS_INCLUDE_DIRS: ${OpenBLAS_INCLUDE_DIRS}")
+        unset(_openblas_prefix)
+    endif()
+    list(APPEND GCTA_BLAS_INCLUDE_DIRS "${OpenBLAS_INCLUDE_DIRS}")
+
     if(NOT TARGET OpenBLAS::OpenBLAS)
         if(APPLE)
             add_library(OpenBLAS::OpenBLAS SHARED IMPORTED)
@@ -293,8 +298,9 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS")
                 IMPORTED_LOCATION "${OpenBLAS_DIR}/../../libopenblas.dylib"
                 INTERFACE_INCLUDE_DIRECTORIES "${OpenBLAS_INCLUDE_DIRS}")
         else()
+            # OpenBLAS_DIR = <prefix>/lib/cmake/openblas, so the lib dir is <prefix>/lib
             find_library(OpenBLAS_SO openblas
-                HINTS "${OpenBLAS_DIR}/../../lib"
+                HINTS "${OpenBLAS_DIR}/../.."
                 NO_DEFAULT_PATH)
             if(OpenBLAS_SO)
                 add_library(OpenBLAS::OpenBLAS SHARED IMPORTED)
@@ -333,7 +339,41 @@ elseif(_GCTA_BLAS STREQUAL "MKL")
         message(FATAL_ERROR "MKL_DIR is required. Set it to the MKL CMake config directory containing MKLConfig.cmake")
     endif()
     message(STATUS "Using exact MKL config directory: ${MKL_DIR}")
+    # Intel's MKLConfig.cmake defaults the threading layer to "intel_thread"
+    # (libiomp5). On Linux this loads a second OpenMP runtime alongside the
+    # libgomp already pulled in by find_package(OpenMP), which serialises all
+    # parallel regions and causes extreme slowdown. Force "gnu_thread" on Linux
+    # so MKL uses the same libgomp as the rest of the build. Let the user
+    # override via -DMKL_THREADING=... if they know what they are doing.
+    if(NOT DEFINED MKL_THREADING)
+        if(LINUX)
+            set(MKL_THREADING "gnu_thread")
+        else()
+            set(MKL_THREADING "intel_thread")
+        endif()
+    endif()
+    if(NOT DEFINED MKL_LINK)
+        set(MKL_LINK "dynamic")
+    endif()
+    if(NOT DEFINED MKL_INTERFACE)
+        set(MKL_INTERFACE "lp64")
+    endif()
     find_package(MKL REQUIRED CONFIG PATHS "${MKL_DIR}" NO_DEFAULT_PATH)
+    # Add the MKL library directory to RPATH on Linux so the binary finds MKL
+    # at runtime without relying on LD_LIBRARY_PATH (important in conda envs).
+    # MKL_ROOT is set by MKLConfig.cmake; libs live in <root>/lib or
+    # <root>/lib/intel64 depending on the installation type.
+    if(LINUX AND DEFINED MKL_ROOT)
+        foreach(_mkl_lib_subdir IN ITEMS "lib" "lib/intel64")
+            set(_mkl_lib_path "${MKL_ROOT}/${_mkl_lib_subdir}")
+            if(EXISTS "${_mkl_lib_path}")
+                list(APPEND CMAKE_BUILD_RPATH "${_mkl_lib_path}")
+                list(APPEND CMAKE_INSTALL_RPATH "${_mkl_lib_path}")
+            endif()
+        endforeach()
+        unset(_mkl_lib_path)
+        unset(_mkl_lib_subdir)
+    endif()
     list(APPEND GCTA_BLAS_LIBS MKL::MKL)
     list(APPEND GCTA_BLAS_INCLUDE_DIRS ${MKL_INCLUDE})
     list(APPEND GCTA_BLAS_DEFINES GCTA_USE_MKL EIGEN_USE_MKL_ALL)
@@ -352,6 +392,9 @@ if(CMAKE_VERBOSE_MAKEFILE OR GCTA_VERBOSE_BLAS)
     message(STATUS "  Resolved BLAS backend: ${_GCTA_BLAS}")
     message(STATUS "  OpenBLAS_DIR: ${OpenBLAS_DIR}")
     message(STATUS "  MKL_DIR: ${MKL_DIR}")
+    message(STATUS "  MKL_THREADING: ${MKL_THREADING}")
+    message(STATUS "  MKL_LINK: ${MKL_LINK}")
+    message(STATUS "  MKL_INTERFACE: ${MKL_INTERFACE}")
     message(STATUS "  Accelerate_DIR: ${Accelerate_DIR}")
     message(STATUS "  GCTA_BLAS_INCLUDE_DIRS: ${GCTA_BLAS_INCLUDE_DIRS}")
     message(STATUS "  GCTA_BLAS_DEFINES: ${GCTA_BLAS_DEFINES}")
@@ -397,8 +440,7 @@ set(SRCS
     ${CMAKE_SOURCE_DIR}/src/ThreadPool.cpp
     ${CMAKE_SOURCE_DIR}/src/mem.cpp
     ${CMAKE_SOURCE_DIR}/src/tables.cpp
-    ${CMAKE_SOURCE_DIR}/src/utils.cpp
-    ${CMAKE_SOURCE_DIR}/src/acat.cpp)
+    ${CMAKE_SOURCE_DIR}/src/utils.cpp)
 
 add_executable(gcta64 ${MAIN_SOURCE})
 
@@ -471,8 +513,7 @@ foreach(target IN LISTS GCTA_TARGETS)
     target_include_directories(${target} PRIVATE
         ${GCTA_ZSTD_INCLUDE_DIRS}
         ${GCTA_ZLIB_INCLUDE_DIRS}
-        ${GCTA_BLAS_INCLUDE_DIRS}
-        $<$<NOT:$<BOOL:${WIN32}>>:${GSL_INCLUDE_DIRS}>)
+        ${GCTA_BLAS_INCLUDE_DIRS})
     target_compile_definitions(${target} PRIVATE
         ${GCTA_BLAS_DEFINES}
         GCTA_BLAS_BACKEND_STR="${GCTA_BLAS_PROVIDER}")
@@ -528,25 +569,11 @@ target_include_directories(Pgenlib PRIVATE ${GCTA_ZLIB_INCLUDE_DIRS})
 
 target_link_libraries(gcta64 PRIVATE Pgenlib sqlite3 Threads::Threads)
 
-# Link BLAS before GSL so OpenBLAS/Accelerate/MKL cblas symbols take precedence
-# over libgslcblas in dyld (macOS) and ld.so (Linux) symbol resolution order
+# Link BLAS early so OpenBLAS/Accelerate/MKL cblas symbols take precedence
+# over other cblas implementations in dyld (macOS) and ld.so (Linux) symbol resolution order
 target_link_libraries(gcta64 PRIVATE ${GCTA_BLAS_LIBS})
 
-if (NOT WIN32)
-    # Link only GSL (not gslcblas) when a BLAS backend is available,
-    # so GSL uses our BLAS for cblas symbols rather than its own scalar cblas.
-    # On Linux wrap in --as-needed/--no-as-needed to prevent GSL from pulling
-    # in its own transitive libopenblas which would override our BLAS backend.
-    if(_GCTA_BLAS STREQUAL "None")
-        target_link_libraries(gcta64 PRIVATE GSL::gsl GSL::gslcblas)
-    elseif(UNIX AND NOT APPLE)
-        target_link_libraries(gcta64 PRIVATE -Wl,--as-needed GSL::gsl -Wl,--no-as-needed)
-    else()
-        target_link_libraries(gcta64 PRIVATE GSL::gsl)
-    endif()
-endif()
-
-# On Linux, re-link BLAS after GSL to ensure it appears last in NEEDED and
+# On Linux, re-link BLAS to ensure it appears last in NEEDED and
 # its cblas symbols take precedence via ld.so's first-match ordering.
 if(UNIX AND NOT APPLE AND NOT _GCTA_BLAS STREQUAL "None")
     target_link_libraries(gcta64 PRIVATE ${GCTA_BLAS_LIBS})
@@ -564,7 +591,10 @@ endif()
 
 # Installation
 if(LINUX)
-    set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
+    # PREPEND so $ORIGIN/../lib is first but BLAS-specific paths appended
+    # earlier (e.g. the conda OpenBLAS or MKL lib dir) are preserved.
+    # Using set() here would overwrite those previously-appended entries.
+    list(PREPEND CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
 elseif(APPLE)
     set(CMAKE_INSTALL_RPATH "@executable_path/../lib")
 endif()
@@ -612,9 +642,7 @@ message(STATUS "  BLAS/LAPACK:       ${GCTA_BLAS_PROVIDER}")
 message(STATUS "  Compiler:          ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "  Install prefix:    ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "  OpenMP:            ${OpenMP_CXX_VERSION}")
-if(NOT WIN32)
-    message(STATUS "  GSL:               ${GSL_VERSION}")
-endif()
+
 message(STATUS "==========================================")
 message(STATUS "")
 
