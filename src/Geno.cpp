@@ -158,20 +158,6 @@ Geno::Geno(Pheno* pheno, Marker* marker) {
         hasInfo = true;
     }
 
-    if(options.find("vcf_file") != options.end()){
-        genoFormat = "VCF";
-        geno_files.push_back(options["vcf_file"]);
-        num_geno++;
-        hasInfo = false;
-    }
-
-    if(options.find("mvcf_file") != options.end()){
-        genoFormat = "VCF";
-        boost::split(geno_files, options["mvcf_file"], boost::is_any_of("\t "));
-        num_geno++;
-        hasInfo = false;
-    }
-
     if(num_geno == 0){
         LOGGER.e(0, "no genotype file is specified");
     }
@@ -191,7 +177,6 @@ Geno::Geno(Pheno* pheno, Marker* marker) {
     getGenoDoubleFuncs["BED"]  = &Geno::getGenoDouble_bed;
     getGenoDoubleFuncs["PGEN"] = &Geno::getGenoDouble_pgen;
     getGenoDoubleFuncs["BGEN"] = &Geno::getGenoDouble_bgen;
-    getGenoDoubleFuncs["VCF"]  = &Geno::getGenoDouble_vcf;
     // preGenoDouble*/endGenoDouble*/readGeno* maps removed:
     // those are now handled by BedBackend / BgenBackend / PgenBackend.
 
@@ -505,97 +490,6 @@ void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
         }
         if(bMakeMiss){
             gbuf->missing.resize(missPtrSize, 0);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// VCF — buf layout: keepSampleCT uint8_t per marker (0/1/2/255=missing),
-//                   padded to vcfRawGenoBuf1PtrSize uintptr_t words.
-// ---------------------------------------------------------------------------
-void Geno::getGenoDouble_vcf(uintptr_t *buf, int idx, GenoBufItem* gbuf) {
-    const uint8_t *raw =
-        reinterpret_cast<const uint8_t *>(buf + static_cast<std::size_t>(idx) * vcfRawGenoBuf1PtrSize);
-    uint8_t isSexXY = isMarkersSexXYs[curBufferIndex];
-
-    // ── Compute counts ──────────────────────────────────────────────────
-    uint32_t count1 = 0, count2 = 0, countMiss = 0;
-    for (uint32_t s = 0; s < keepSampleCT; ++s) {
-        uint8_t g = raw[s];
-        if (g == 255) { ++countMiss; }
-        else {
-            if (g == 1) ++count1;
-            else if (g == 2) ++count2;
-        }
-    }
-    uint32_t nValid = keepSampleCT - countMiss;
-    if (nValid == 0) { gbuf->valid = false; return; }
-
-    // AF of ALT (a1 = effect allele)
-    double af = (count1 + 2.0 * count2) / (2.0 * nValid);
-
-    uint32_t curExtractIndex = gbuf->extractedMarkerIndex;
-    bool isEffRev = marker->isEffecRev(curExtractIndex);
-    if (isEffRev) af = 1.0 - af;
-    if (bHasPreAF) af = AFA1[curExtractIndex];
-
-    double maf      = std::min(af, 1.0 - af);
-    double missRate = static_cast<double>(nValid) / keepSampleCT;
-
-    if (maf < min_maf || maf > max_maf || missRate < dFilterMiss) {
-        gbuf->valid = false;
-        return;
-    }
-
-    double mu = 2.0 * af;
-    double sd = 2.0 * af * (1.0 - af);
-
-    gbuf->valid       = true;
-    gbuf->af          = af;
-    gbuf->nValidN     = nValid;
-    gbuf->nValidAllele= 2 * nValid;
-    gbuf->mean        = mu;
-    gbuf->sd          = sd;
-
-    if (bMakeGeno) {
-        if (sd < 1.0e-50) { gbuf->valid = false; return; }
-
-        double center_value = bGenoCenter ? mu : 0.0;
-        double rdev         = bGenoStd    ? std::sqrt(1.0 / sd) : 1.0;
-
-        double raw0 = isEffRev ? 2.0 : 0.0;
-        double raw2 = isEffRev ? 0.0 : 2.0;
-        double a0 = (raw0 - center_value) * rdev;
-        double a1 = (1.0  - center_value) * rdev;
-        double a2 = (raw2 - center_value) * rdev;
-        double na = (mu   - center_value) * rdev;  // missing imputed to mean
-
-        gbuf->geno.resize(keepSampleCT);
-        for (uint32_t s = 0; s < keepSampleCT; ++s) {
-            uint8_t g = raw[s];
-            if      (g == 0)   gbuf->geno[s] = a0;
-            else if (g == 1)   gbuf->geno[s] = a1;
-            else if (g == 2)   gbuf->geno[s] = a2;
-            else               gbuf->geno[s] = na;  // missing → mean imputation
-        }
-
-        if (isSexXY == 1) {
-            double weight;
-            bool needWeight;
-            setMaleWeight(weight, needWeight);
-            if (needWeight) {
-                for (int i = 0; i < keepMaleSampleCT; ++i)
-                    gbuf->geno[keepMaleExtractIndex[i]] *= weight;
-            }
-        }
-    }
-
-    if (bMakeMiss) {
-        gbuf->missing.assign(static_cast<std::size_t>(missPtrSize), 0);
-        constexpr uint32_t BITS = sizeof(uintptr_t) * 8;
-        for (uint32_t s = 0; s < keepSampleCT; ++s) {
-            if (raw[s] == 255)
-                gbuf->missing[s / BITS] |= (uintptr_t(1) << (s % BITS));
         }
     }
 }
@@ -1067,8 +961,6 @@ void Geno::loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf,
         backend = makePgenBackend(*this);
     } else if (genoFormat == "BGEN") {
         backend = makeBgenBackend(*this);
-    } else if (genoFormat == "VCF") {
-        backend = makeVcfBackend(*this);
     } else {
         LOGGER.e(0, "loopDouble: unknown genotype format: " + genoFormat);
     }
@@ -1766,13 +1658,11 @@ int Geno::registerOption(map<string, vector<string>>& options_in) {
     addOneFileOption("bgen_file", "", "--bgen", options_in);
     addOneFileOption("pgen_file", ".pgen", "--pfile", options_in);
     addOneFileOption("pgen_file", ".pgen", "--bpfile", options_in);
-    addOneFileOption("vcf_file", "", "--vcf", options_in);
 
     addMFileListsOption("m_file", ".bed", "--mbfile", options_in, options);
     addMFileListsOption("mbgen_file", ".bgen", "--mbgen", options_in, options);
     addMFileListsOption("mpgen_file", ".pgen", "--mbpfile", options_in, options);
     addMFileListsOption("mpgen_file", ".pgen", "--mpfile", options_in, options);
-    addMFileListsOption("mvcf_file", "", "--mvcf", options_in, options);
 
     options_d["min_maf"] = 0.0;
     options_d["max_maf"] = 0.5;

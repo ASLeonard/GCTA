@@ -77,7 +77,6 @@ public:
     uint64_t getMaxGenoMarkerUptrSize();
     std::vector<std::pair<string, std::vector<uint32_t>>> read_gene(string gfile);
 
-    /// Raw-index accessors used by VcfBackend for position-based htslib seeks.
     const std::string& getRawChr(uint32_t i)  const { return chr[i]; }
     uint32_t           getRawBp(uint32_t i)    const { return pd[i]; }
     const std::string& getRawName(uint32_t i)  const { return name[i]; }
@@ -107,8 +106,6 @@ private:
 
     void read_bim(string bim_file);
     void read_mbim(string bim_file);
-    void read_vcf(string vcf_file);    ///< scan BCF/VCF.gz to populate marker arrays
-    void read_mvcf(string mvcf_file);  ///< split-whitespace list of VCF/BCF files
     void read_bgen(string bgen_file);
     void read_mbgen(string mbgen_file);
 
