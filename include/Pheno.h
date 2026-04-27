@@ -96,7 +96,6 @@ private:
     void read_sample(string sample_file);
     void read_psam(string psam_file);
     void read_checkMPSample(string m_file);
-    void read_vcf_samples(const string& vcf_file);
     void update_pheno(vector<string>& indi_marks, vector<double>& phenos);
     void update_sex(vector<string>& indi_marks, vector<double>& sex);
     void init_mask_block();

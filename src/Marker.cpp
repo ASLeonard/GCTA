@@ -28,8 +28,6 @@
 #include <memory>
 #include <utility>
 #include <sqlite3.h>
-#include "htslib/vcf.h"
-#include "htslib/tbx.h"
 
 using std::to_string;
 using std::unique_ptr;
@@ -76,17 +74,6 @@ Marker::Marker() {
     if(options.find("mbgen_file") != options.end()){
         has_marker = true;
         read_mbgen(options["mbgen_file"]);
-    }
-
-    if(options.find("vcf_file") != options.end()){
-        has_marker = true;
-        read_vcf(options["vcf_file"]);
-        raw_limits.push_back(num_marker);
-    }
-
-    if(options.find("mvcf_file") != options.end()){
-        has_marker = true;
-        read_mvcf(options["mvcf_file"]);
     }
 
     if(!has_marker){
@@ -800,139 +787,6 @@ MarkerParam Marker::getBgenMarkerParam(FILE *h_bgen, std::string &outputs){
 
 #define RCSTR(TEMP) std::string(reinterpret_cast<const char*>(TEMP))
 
-// ---------------------------------------------------------------------------
-// VCF / BCF marker reader
-// ---------------------------------------------------------------------------
-
-void Marker::read_vcf(string vcf_file) {
-    LOGGER.i(0, "Reading variants from VCF/BCF file [" + vcf_file + "]...");
-
-    // ── Format detection ────────────────────────────────────────────────
-    htsFile *fp = hts_open(vcf_file.c_str(), "r");
-    if (!fp)
-        LOGGER.e(0, "cannot open [" + vcf_file + "]");
-
-    const htsFormat &fmt = fp->format;
-    if (fmt.format == vcf && fmt.compression == no_compression) {
-        hts_close(fp);
-        LOGGER.e(0, "plain uncompressed VCF [" + vcf_file + "] is not supported. "
-                    "Convert to BCF or bgzipped VCF with a CSI index:\n"
-                    "  bcftools view -O b -o out.bcf in.vcf\n"
-                    "  bcftools index out.bcf");
-    }
-    if (fmt.format != bcf && !(fmt.format == vcf && fmt.compression == bgzf)) {
-        hts_close(fp);
-        LOGGER.e(0, "unrecognised format for [" + vcf_file + "]. Use BCF or bgzipped VCF.");
-    }
-
-    // ── Index check ──────────────────────────────────────────────────────
-    hts_idx_t *idx = bcf_index_load2(vcf_file.c_str(), nullptr);
-    if (!idx) {
-        hts_close(fp);
-        LOGGER.e(0, "no index found for [" + vcf_file + "]. "
-                    "Create one with:\n"
-                    "  bcftools index --csi " + vcf_file);
-    }
-    if (hts_idx_fmt(idx) == HTS_FMT_TBI) {
-        LOGGER << "Warning: tabix index (.tbi) found for [" << vcf_file << "]. "
-               << "CSI index is recommended for chromosomes > 512 Mbp. "
-               << "Recreate with: bcftools index --csi " << vcf_file << std::endl;
-    }
-    hts_idx_destroy(idx);
-
-    // ── Read header ──────────────────────────────────────────────────────
-    bcf_hdr_t *hdr = bcf_hdr_read(fp);
-    if (!hdr) {
-        hts_close(fp);
-        LOGGER.e(0, "cannot read VCF/BCF header from [" + vcf_file + "]");
-    }
-    int nVcfSamples = bcf_hdr_nsamples(hdr);
-
-    // ── Scan all records ─────────────────────────────────────────────────
-    uint32_t prevTotal      = static_cast<uint32_t>(name.size());
-    uint32_t nSkipMulti     = 0;
-    uint32_t nSkipMono      = 0;
-    bcf1_t  *rec            = bcf_init();
-
-    while (bcf_read(fp, hdr, rec) >= 0) {
-        bcf_unpack(rec, BCF_UN_SHR);  // CHROM/POS/ID/REF/ALT only
-
-        // Skip multiallelic sites
-        if (rec->n_allele != 2) { nSkipMulti++; continue; }
-
-        const char *seqname = bcf_hdr_id2name(hdr, rec->rid);
-        string chr_str(seqname);
-
-        // Normalise chromosome names: strip leading "chr" if not already bare int/XY
-        // (allow_chrs uses unstripped names as stored by read_bim, so we keep as-is)
-
-        // Genetic distance not available in VCF — store 0.
-        chr.push_back(chr_str);
-        gd.push_back(0.0f);
-        pd.push_back(static_cast<uint32_t>(rec->pos + 1));  // 0-based → 1-based
-
-        // Marker ID
-        string snp_id;
-        if (rec->d.id && strcmp(rec->d.id, ".") != 0)
-            snp_id = rec->d.id;
-        else
-            snp_id = chr_str + ":" + to_string(rec->pos + 1);
-        name.push_back(snp_id);
-
-        // Alleles: REF = a2, ALT = a1 (alt is the effect allele, matching PLINK convention)
-        string ref_allele(rec->d.allele[0]);
-        string alt_allele(rec->d.allele[1]);
-        std::transform(ref_allele.begin(), ref_allele.end(), ref_allele.begin(), ::toupper);
-        std::transform(alt_allele.begin(), alt_allele.end(), alt_allele.begin(), ::toupper);
-        a1.push_back(alt_allele);
-        a2.push_back(ref_allele);
-        A_rev.push_back(false);
-
-        // byte_start/byte_size not used for VCF (htslib does position-based seek)
-        byte_start.push_back(0);
-        byte_size.push_back(0);
-
-        // Chr filter for index_extract
-        if (allowed_chrs.empty() || allowed_chrs.count(chr_str)) {
-            index_extract.push_back(static_cast<uint32_t>(name.size() - 1));
-        }
-    }
-
-    bcf_destroy(rec);
-    bcf_hdr_destroy(hdr);
-    hts_close(fp);
-
-    num_marker   = static_cast<uint32_t>(name.size());
-    num_extract  = static_cast<uint32_t>(index_extract.size());
-
-    uint32_t nInFile = num_marker - prevTotal;
-    LOGGER.i(0, to_string(nInFile) + " SNPs read from [" + vcf_file + "].");
-    if (nSkipMulti > 0)
-        LOGGER.i(0, to_string(nSkipMulti) + " multiallelic sites skipped.");
-    if (nInFile != num_extract - (num_extract > (num_marker - prevTotal) ? 0 : 0))
-        LOGGER.i(0, to_string(num_extract) + " SNPs on valid chromosomes retained.");
-
-    // ── MarkerParam for this file ────────────────────────────────────────
-    MarkerParam param;
-    param.rawCountSNP      = nInFile;
-    param.rawCountSample   = static_cast<uint32_t>(nVcfSamples);
-    param.compressFormat   = 0;
-    param.posGenoDataStart = 0;
-    markerParams.push_back(param);
-}
-
-void Marker::read_mvcf(string mvcf_file) {
-    raw_limits.clear();
-    std::vector<string> mfiles;
-    boost::split(mfiles, mvcf_file, boost::is_any_of("\t "));
-    for (auto &mfile : mfiles) {
-        read_vcf(mfile);
-        raw_limits.push_back(num_marker);
-    }
-}
-
-// ---------------------------------------------------------------------------
-
 void Marker::read_bgen_index(string bgen_file){
     sqlite3 *db;
     int rc;
@@ -1533,13 +1387,11 @@ int Marker::registerOption(map<string, std::vector<string>>& options_in){
     addOneFileOption("exclude_file", "", "--exclude", options_in);
     addOneFileOption("update_ref_allele_file", "", "--update-ref-allele", options_in);
     addOneFileOption("bgen_file", "", "--bgen", options_in);
-    addOneFileOption("vcf_file", "", "--vcf", options_in);
 
     addOneFileOption("pvar_file", ".pvar", "--pfile", options_in);
     addOneFileOption("marker_file", ".bim", "--bpfile", options_in);
 
     addMFileListsOption("mbgen_file", ".bgen", "--mbgen", options_in, options);
-    addMFileListsOption("mvcf_file", "", "--mvcf", options_in, options);
     addMFileListsOption("m_pvar", ".pvar", "--mpfile", options_in, options);
     addMFileListsOption("m_file", ".bim", "--mbpfile", options_in, options);
     addMFileListsOption("m_file", ".bim", "--mbfile", options_in, options);

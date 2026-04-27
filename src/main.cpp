@@ -102,7 +102,6 @@ int main(int argc, char *argv[]){
         "--pfile", "--bpfile", "--mpfile", "--mbpfile", "--model-only", "--load-model", "--seed", "--fastGWA-mlm-binary", "--num-vec", "--trace-exact", "--cv-threshold", "--tao-start",
         "--acat", "--gene-list", "--snp-list", "--min-mac", "--max-maf", "--wind",
         "--envir", "--optimal-rho", "--noSandwich", "--grid-size",
-        "--vcf", "--mvcf",
     };
     map<string, vector<string>> options;
     vector<string> keys;

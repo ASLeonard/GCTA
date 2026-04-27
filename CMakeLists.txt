@@ -196,47 +196,7 @@ target_include_directories(sqlite3 PUBLIC ${sqlite_SOURCE_DIR})
 
 find_package(Threads REQUIRED)
 
-# htslib uses autotools, not CMake — build it with ExternalProject.
-include(ExternalProject)
-set(HTSLIB_INSTALL_DIR "${CMAKE_BINARY_DIR}/htslib-install")
-file(MAKE_DIRECTORY "${HTSLIB_INSTALL_DIR}/include")
-ExternalProject_Add(
-    htslib_build
-    URL "https://github.com/samtools/htslib/releases/download/1.23.1/htslib-1.23.1.tar.bz2"
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    SOURCE_DIR  "${CMAKE_BINARY_DIR}/htslib-src"
-    BINARY_DIR  "${CMAKE_BINARY_DIR}/htslib-build"
-    INSTALL_DIR "${HTSLIB_INSTALL_DIR}"
-    CONFIGURE_COMMAND
-        "${CMAKE_BINARY_DIR}/htslib-src/configure"
-        "--prefix=${HTSLIB_INSTALL_DIR}"
-        "--enable-static"
-        "--disable-shared"
-        "--disable-libcurl"
-        "--without-libdeflate"
-        "--disable-bz2"
-        "--disable-lzma"
-        "CC=${CMAKE_C_COMPILER}"
-    BUILD_COMMAND   $(MAKE) lib-static
-    INSTALL_COMMAND $(MAKE) install
-    BUILD_IN_SOURCE FALSE
-    BUILD_BYPRODUCTS "${HTSLIB_INSTALL_DIR}/lib/libhts.a"
-    LOG_CONFIGURE TRUE
-    LOG_BUILD     TRUE
-    LOG_INSTALL   TRUE)
 
-add_library(htslib STATIC IMPORTED GLOBAL)
-add_dependencies(htslib htslib_build)
-set_target_properties(htslib PROPERTIES
-    IMPORTED_LOCATION             "${HTSLIB_INSTALL_DIR}/lib/libhts.a"
-    INTERFACE_INCLUDE_DIRECTORIES "${HTSLIB_INSTALL_DIR}/include")
-message(STATUS "htslib will be built from source")
-
-# htslib built with --without-libdeflate --disable-bz2 --disable-lzma; only
-# zlib is required for VCF/BCF support and is already exposed via ZLIB::ZLIB.
-if(TARGET ZLIB::ZLIB)
-    target_link_libraries(htslib INTERFACE ZLIB::ZLIB)
-endif()
 
 if(NOT WIN32)
     # NOTE: Install gsl with your system package manager
@@ -412,7 +372,6 @@ set(SRCS
     ${CMAKE_SOURCE_DIR}/src/BedBackend.cpp
     ${CMAKE_SOURCE_DIR}/src/BgenBackend.cpp
     ${CMAKE_SOURCE_DIR}/src/PgenBackend.cpp
-    ${CMAKE_SOURCE_DIR}/src/VcfBackend.cpp
     ${CMAKE_SOURCE_DIR}/src/LD.cpp
     ${CMAKE_SOURCE_DIR}/src/Logger.cpp
     ${CMAKE_SOURCE_DIR}/src/Marker.cpp
@@ -475,7 +434,6 @@ target_sources(gcta64 PRIVATE
     main/raw_geno.cpp
     main/reml_within_family.cpp
     main/sbat.cpp)
-target_link_libraries(gcta64 PRIVATE htslib)
 
 set(GCTA_TARGETS gcta64)
 
