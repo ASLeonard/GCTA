@@ -86,7 +86,8 @@ void option(int option_num, char* option_str[])
     // GRM
     bool ibc = false, ibc_all = false, grm_flag = false, grm_bin_flag = true, m_grm_flag = false, m_grm_bin_flag = true, make_grm_flag = false, make_grm_inbred_flag = false, dominance_flag = false, make_grm_xchar_flag = false, grm_out_bin_flag = true, make_grm_f3_flag = false;
     bool align_grm_flag = false;
-    bool pca_flag = false, pcl_flag = false, pca_approx_flag = false;
+    bool pca_flag = false, pcl_flag = false;
+    std::string pca_approx_flag = "";
     bool project_flag = false;
     double grm_adj_fac = -2.0, grm_cutoff = -2.0, rm_high_ld_cutoff = -1.0, bK_threshold = -10.0;
     int dosage_compen = -2, out_pc_num = 20, make_grm_mtd = 0;
@@ -554,11 +555,16 @@ void option(int option_num, char* option_str[])
             LOGGER << "--pca " << out_pc_num << std::endl;
             if (out_pc_num < 1) LOGGER.e(0, "\n the value to be specified after --pca should be positive.\n");
         } else if (flag == "--pca-approx") {
-            pca_approx_flag = true;
-            LOGGER << "--pca-approx" << std::endl;
-        } else if (flag == "--no-pca-approx") {
-            pca_approx_flag = false;
-            LOGGER << "--no-pca-approx (full eigendecomposition)" << std::endl;
+            i++;
+            if (i >= argc || std::string_view{argv[i]}.substr(0, 2) == "--") {
+                pca_approx_flag = "Lanczos";
+                i--;
+            } else {
+                pca_approx_flag = argv[i];
+                if (pca_approx_flag != "Lanczos" && pca_approx_flag != "SVD")
+                    LOGGER.e(0, "--pca-approx: unrecognised method '" + pca_approx_flag + "'. Use 'Lanczos' or 'SVD'.");
+            }
+            LOGGER << "--pca-approx " << pca_approx_flag << std::endl;
         } else if (flag == "--pc-loading") {
             pcl_flag = true;
             thread_flag = true;

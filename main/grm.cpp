@@ -674,7 +674,7 @@ void gcta::grm_bK(std::string grm_file, std::string keep_indi_file, std::string 
     output_grm(grm_out_bin_flag);
 }
 
-void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num, bool pca_approx)
+void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num, std::string pca_approx)
 {
     manipulate_grm(grm_file, keep_indi_file, remove_indi_file, "", grm_cutoff, -2.0, -2, merge_grm_flag, true);
     _grm_N.resize(0, 0);
@@ -682,22 +682,49 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
     if (out_pc_num > n) out_pc_num = n;
     LOGGER << "\nPerforming principal component analysis ..." << _grm.rows() << "x" << _grm.cols() << std::endl;
 
-    Eigen::MatrixXd grm_dbl = _grm.cast<double>();
+    //_grm is either MatrixXf or MatrixXd; if it's MatrixXf, we need to cast it to MatrixXd. If it's already MatrixXd, we can use it directly.
+    Eigen::MatrixXd grm_dbl_storage;
+    const Eigen::MatrixXd& grm_dbl = [&]() -> const Eigen::MatrixXd& {
+        if constexpr (std::is_same_v<eigenMatrix, Eigen::MatrixXd>) {
+            return _grm;
+        } else {
+            grm_dbl_storage = _grm.cast<double>();
+            return grm_dbl_storage;
+        }
+    }();
     Eigen::VectorXd eval;
     Eigen::MatrixXd evec;
 
-    if (pca_approx) {
-        // TODO: parallelize the Lanczos mat-vec by replacing DenseSymMatProd with a custom operator
-        // that wraps perform_op() in an OpenMP parallel loop over rows (EIGEN_USE_OPENMP won't help — it only parallelizes gemm, not symv).
-        Spectra::DenseSymMatProd<double> op(grm_dbl);
-        int ncv = std::min(n, std::max(2 * out_pc_num + 1, 20));
-        Spectra::SymEigsSolver<Spectra::DenseSymMatProd<double>> eigs(op, out_pc_num, ncv);
-        eigs.init();
-        eigs.compute(Spectra::SortRule::LargestAlge);
-        if (eigs.info() != Spectra::CompInfo::Successful)
-            LOGGER.e(0, "eigenvalue decomposition failed.");
-        eval = eigs.eigenvalues();
-        evec = eigs.eigenvectors();
+    if (!pca_approx.empty()) {
+        if (pca_approx == "SVD") {
+            // Randomized SVD
+            int oversample = 10;
+            int pca_power_iter = 2;
+            int k = out_pc_num + oversample;
+            Eigen::MatrixXd omega = Eigen::MatrixXd::Random(n, k);
+            Eigen::MatrixXd Y = grm_dbl * omega;
+            for (int i = 0; i < pca_power_iter; ++i)
+                Y = grm_dbl * (grm_dbl * Y);
+            Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
+            Eigen::MatrixXd Q = qr.householderQ() * Eigen::MatrixXd::Identity(n, k);
+            Eigen::MatrixXd B = Q.transpose() * grm_dbl * Q;
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(B);
+            eval = es.eigenvalues().reverse().head(out_pc_num);
+            evec = Q * es.eigenvectors().rowwise().reverse().leftCols(out_pc_num);
+        } else if (pca_approx == "Lanczos") {
+            // Spectra Lanczos path
+            Spectra::DenseSymMatProd<double> op(grm_dbl);
+            int ncv = std::min(n, std::max(3 * out_pc_num + 1, 30));
+            Spectra::SymEigsSolver<Spectra::DenseSymMatProd<double>> eigs(op, out_pc_num, ncv);
+            eigs.init();
+            eigs.compute(Spectra::SortRule::LargestAlge);
+            if (eigs.info() != Spectra::CompInfo::Successful)
+                LOGGER.e(0, "eigenvalue decomposition failed.");
+            eval = eigs.eigenvalues();
+            evec = eigs.eigenvectors();
+        } else {
+            LOGGER.e(0, "--pca-approx: unrecognised method '" + pca_approx + "'. Use 'Lanczos' or 'SVD'.");
+        }
     } else {
         LOGGER << "Using full eigenvalue decomposition (--pca-approx not set)." << std::endl;
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(grm_dbl);
