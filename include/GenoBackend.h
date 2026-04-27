@@ -24,6 +24,8 @@
 #include <functional>
 #include <vector>
 
+#include "mem.hpp"
+
 // --------------------------------------------------------------------------
 // stdexec (P2300 reference implementation) — required for exec::task<void>
 // and exec::static_thread_pool.
@@ -40,7 +42,7 @@
 // need to interpret it call Geno::getGenoDouble(buf.data(), i, &item).
 // --------------------------------------------------------------------------
 struct GenoBlock {
-    std::vector<uintptr_t> buf;          ///< raw packed data, stride × numMarkers elements
+    std::vector<uintptr_t, AlignedAllocator<uintptr_t, 32>> buf;  ///< raw packed data, stride × numMarkers elements; 32-byte aligned for AVX2 vmovdqa
     std::vector<uint32_t>  extractIndex; ///< marker extract-indices for this block
     uint32_t               numMarkers = 0;
     uint8_t                isSexXY   = 0; ///< 0=autosome, 1=chrX, 2=chrY
