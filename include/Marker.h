@@ -61,7 +61,7 @@ public:
     static int registerOption(std::map<string, std::vector<string>>& options_in);
     static void processMain();
     static MarkerInfo extractBgenMarkerInfo(FILE *h_bgen, uint64_t &pos);
-    static MarkerParam getBgenMarkerParam(FILE *h_bgen, std::string &outputs);
+    
     void extract_marker(std::vector<string> markers, bool isExtract);
     void reset_exclude();
     void keep_raw_index(const std::vector<uint32_t>& keep_index);
@@ -76,6 +76,10 @@ public:
     MarkerParam getMarkerParams(int part_num);
     uint64_t getMaxGenoMarkerUptrSize();
     std::vector<std::pair<string, std::vector<uint32_t>>> read_gene(string gfile);
+
+   #ifdef BGEN_SUPPORT
+    static MarkerParam getBgenMarkerParam(FILE *h_bgen, std::string &outputs);
+   #endif
 
     const std::string& getRawChr(uint32_t i)  const { return chr[i]; }
     uint32_t           getRawBp(uint32_t i)    const { return pd[i]; }
@@ -92,11 +96,9 @@ private:
     std::vector<string> a2;
     std::vector<bool> A_rev; //effect allele;
     std::vector<uint64_t> byte_start;
-    std::vector<uint64_t> byte_size;
     std::vector<uint32_t> raw_limits;
 
-    //bgen
-    uint64_t maxGeno1ByteSize = 0;
+    
 
     std::vector<uint32_t> index_extract;
     std::vector<uint32_t> index_exclude;
@@ -106,8 +108,7 @@ private:
 
     void read_bim(string bim_file);
     void read_mbim(string bim_file);
-    void read_bgen(string bgen_file);
-    void read_mbgen(string mbgen_file);
+
 
     void read_pvar(string pvar_file);
     void read_mpvar(string mpvar_file);
@@ -117,9 +118,20 @@ private:
     static void addOneFileOption(string key_store, std::string append_string, std::string key_name,
                                  std::map<string, std::vector<string>> options_in);
     std::vector<string> read_snplist(string snplist_file);
-    void read_bgen_index(string bgen_file);
+
     static std::set<string> allowed_chrs;
     std::vector<MarkerParam> markerParams;
+
+   #ifdef BGEN_SUPPORT
+    //bgen
+    uint64_t maxGeno1ByteSize = 0;
+
+    std::vector<uint64_t> byte_size;
+
+    void read_bgen(string bgen_file);
+    void read_mbgen(string mbgen_file);
+    void read_bgen_index(string bgen_file);
+   #endif
 };
 
 

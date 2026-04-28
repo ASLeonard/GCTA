@@ -54,6 +54,7 @@ option(GCTA_LIST_TARGETS "List imported and local targets during configure" OFF)
 option(GCTA_UNITY_BUILD "Enable unity builds for faster compilation" ON)
 option(GCTA_ENABLE_IPO "Enable IPO/LTO in Release builds" ON)
 option(GCTA_VERBOSE_BLAS "Print verbose BLAS detection information during configure" ON)
+option(BGEN_SUPPORT "Enable BGEN file format support (requires SQLite)" OFF)
 
 # Initialize plink-ng submodule if needed
 if(EXISTS "${CMAKE_SOURCE_DIR}/.git" AND NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include/pgenlib_ffi_support.h")
@@ -110,11 +111,13 @@ FetchContent_Declare(
     URL https://github.com/boostorg/boost/releases/download/boost-1.90.0/boost-1.90.0-cmake.tar.xz
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     EXCLUDE_FROM_ALL)
-FetchContent_Declare(
-    sqlite
-    URL https://www.sqlite.org/2026/sqlite-amalgamation-3510200.zip
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    EXCLUDE_FROM_ALL)
+if(BGEN_SUPPORT)
+    FetchContent_Declare(
+        sqlite
+        URL https://www.sqlite.org/2026/sqlite-amalgamation-3510200.zip
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        EXCLUDE_FROM_ALL)
+endif()
 
 FetchContent_Declare(
     stdexec
@@ -171,7 +174,9 @@ set(CMAKE_SKIP_INSTALL_RULES OFF)
 
 # sqlite has no options to isolate, and sqlite_SOURCE_DIR must be visible
 # in the parent scope for the add_library(sqlite3) call below.
-FetchContent_MakeAvailable(sqlite)
+if(BGEN_SUPPORT)
+    FetchContent_MakeAvailable(sqlite)
+endif()
 FetchContent_MakeAvailable(stdexec)
 
 # If the user supplied a Boost_DIR, prefer that over fetching Boost.
@@ -212,8 +217,10 @@ else()
     set(GCTA_ZSTD_LIBS zstd::libzstd_shared)
 endif()
 
-add_library(sqlite3 STATIC ${sqlite_SOURCE_DIR}/sqlite3.c)
-target_include_directories(sqlite3 PUBLIC ${sqlite_SOURCE_DIR})
+if(BGEN_SUPPORT)
+    add_library(sqlite3 STATIC ${sqlite_SOURCE_DIR}/sqlite3.c)
+    target_include_directories(sqlite3 PUBLIC ${sqlite_SOURCE_DIR})
+endif()
 
 find_package(Threads REQUIRED)
 
@@ -600,7 +607,12 @@ endif()
 
 target_include_directories(Pgenlib PRIVATE ${GCTA_ZLIB_INCLUDE_DIRS})
 
-target_link_libraries(gcta64 PRIVATE Pgenlib sqlite3 Threads::Threads)
+if(BGEN_SUPPORT)
+    target_link_libraries(gcta64 PRIVATE sqlite3)
+    target_compile_definitions(gcta64 PRIVATE BGEN_SUPPORT)
+endif()
+# keep the unconditional parts:
+target_link_libraries(gcta64 PRIVATE Pgenlib Threads::Threads)
 
 # Link BLAS early so OpenBLAS/Accelerate/MKL cblas symbols take precedence
 # over other cblas implementations in dyld (macOS) and ld.so (Linux) symbol resolution order
@@ -675,6 +687,7 @@ message(STATUS "  BLAS/LAPACK:       ${GCTA_BLAS_PROVIDER}")
 message(STATUS "  Compiler:          ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "  Install prefix:    ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "  OpenMP:            ${OpenMP_CXX_VERSION}")
+message(STATUS "  BGEN support:      ${BGEN_SUPPORT}")
 
 message(STATUS "==========================================")
 message(STATUS "")
