@@ -27,7 +27,10 @@
 #include "OptionIO.h"
 #include <memory>
 #include <utility>
+
+#ifdef BGEN_SUPPORT
 #include <sqlite3.h>
+#endif
 
 using std::to_string;
 using std::unique_ptr;
@@ -62,6 +65,7 @@ Marker::Marker() {
         read_mpvar(options["m_pvar"]);
     }
 
+	#ifdef BGEN_SUPPORT
     if(options.find("bgen_file") != options.end()){
         has_marker = true;
         read_bgen_index(options["bgen_file"]);
@@ -75,6 +79,7 @@ Marker::Marker() {
         has_marker = true;
         read_mbgen(options["mbgen_file"]);
     }
+	#endif
 
     if(!has_marker){
         LOGGER.e(0, "no marker found.");
@@ -244,7 +249,7 @@ void Marker::read_mpvar(string mfile){
     }
 }
 
-
+#ifdef BGEN_SUPPORT
 void Marker::read_mbgen(string mbgen_file){
     std::vector<string> mfiles;
     boost::split(mfiles, mbgen_file, boost::is_any_of("\t"));
@@ -257,6 +262,7 @@ void Marker::read_mbgen(string mbgen_file){
     index_extract.resize(num_marker);
     std::iota(index_extract.begin(), index_extract.end(), 0); 
 }
+#endif
 
 
 //cur_marker_index:  is the index point to position of index_extract
@@ -712,6 +718,7 @@ void Marker::getStartPosSize(uint32_t raw_index, uint64_t &pos, uint64_t &size){
     size = byte_size[raw_index];
 }
 
+#ifdef BGEN_SUPPORT
 MarkerParam Marker::getBgenMarkerParam(FILE *h_bgen, std::string &outputs){
     // check file formats
     uint32_t start_byte = read1Byte<uint32_t>(h_bgen);
@@ -783,7 +790,6 @@ MarkerParam Marker::getBgenMarkerParam(FILE *h_bgen, std::string &outputs){
     param.posGenoDataStart = start_data_block;
     return param;
 }
-
 
 #define RCSTR(TEMP) std::string(reinterpret_cast<const char*>(TEMP))
 
@@ -981,6 +987,7 @@ void Marker::read_bgen_index(string bgen_file){
     LOGGER << "Total SNPs included: " << num_var_added  << "/" <<  num_marker << "." << std::endl;
  
 }
+#endif
 
 uint64_t Marker::getMaxGenoMarkerUptrSize(){
     int suptr = sizeof(uintptr_t);
@@ -1386,15 +1393,21 @@ int Marker::registerOption(map<string, std::vector<string>>& options_in){
     addOneFileOption("extract_file", "", "--extract", options_in);
     addOneFileOption("exclude_file", "", "--exclude", options_in);
     addOneFileOption("update_ref_allele_file", "", "--update-ref-allele", options_in);
-    addOneFileOption("bgen_file", "", "--bgen", options_in);
+    
 
     addOneFileOption("pvar_file", ".pvar", "--pfile", options_in);
     addOneFileOption("marker_file", ".bim", "--bpfile", options_in);
 
-    addMFileListsOption("mbgen_file", ".bgen", "--mbgen", options_in, options);
+    
     addMFileListsOption("m_pvar", ".pvar", "--mpfile", options_in, options);
     addMFileListsOption("m_file", ".bim", "--mbpfile", options_in, options);
     addMFileListsOption("m_file", ".bim", "--mbfile", options_in, options);
+
+	#ifdef BGEN_SUPPORT
+		addOneFileOption("bgen_file", "", "--bgen", options_in);
+		addMFileListsOption("mbgen_file", ".bgen", "--mbgen", options_in, options);
+	#endif
+	
         
     if(options_in.find("--autosome-num") != options_in.end()){
         if(options_in["--autosome-num"].size() == 1){
