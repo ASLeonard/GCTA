@@ -46,7 +46,8 @@ endif()
 
 set(GCTA_BLAS_BACKEND "Auto" CACHE STRING "BLAS/LAPACK backend: Auto, OpenBLAS, MKL, or Accelerate")
 set_property(CACHE GCTA_BLAS_BACKEND PROPERTY STRINGS Auto OpenBLAS MKL Accelerate)
-set(GCTA_BLAS_LIBRARY "" CACHE FILEPATH "Full path to the BLAS/LAPACK library (OpenBLAS/MKL only). E.g. /usr/lib/x86_64-linux-gnu/libopenblas.so or /opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so")
+set(GCTA_BLAS_LIBRARY "" CACHE FILEPATH "Primary BLAS library (OpenBLAS/MKL only). E.g. /usr/lib/x86_64-linux-gnu/libopenblas.so or /opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so")
+set(GCTA_LAPACKE_LIBRARY "" CACHE FILEPATH "Separate LAPACKE library, if needed (e.g. /usr/lib/x86_64-linux-gnu/liblapacke.so for apt OpenBLAS). Leave empty if your BLAS library bundles LAPACKE (MKL, conda OpenBLAS).")
 set(GCTA_BLAS_INCLUDE_DIR "" CACHE PATH "Directory containing BLAS/LAPACK headers (OpenBLAS/MKL only). E.g. /usr/include/x86_64-linux-gnu/openblas or /opt/intel/oneapi/mkl/latest/include")
 set(Boost_DIR "" CACHE PATH "Exact Boost CMake config directory containing BoostConfig.cmake. If set, Boost will be used from this location instead of fetching it.")
 option(GCTA_LIST_TARGETS "List imported and local targets during configure" OFF)
@@ -250,8 +251,10 @@ if(GCTA_BLAS_BACKEND STREQUAL "Auto")
             "Set -DGCTA_BLAS_BACKEND=OpenBLAS or -DGCTA_BLAS_BACKEND=MKL and supply:\n"
             "  -DGCTA_BLAS_LIBRARY=<full path to .so/.a>\n"
             "  -DGCTA_BLAS_INCLUDE_DIR=<directory containing cblas.h / mkl.h>\n"
+            "  -DGCTA_LAPACKE_LIBRARY=<separate lapacke .so if needed, else omit>\n"
             "OpenBLAS example (Ubuntu x86-64):\n"
             "  -DGCTA_BLAS_LIBRARY=/usr/lib/x86_64-linux-gnu/libopenblas.so\n"
+            "  -DGCTA_LAPACKE_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapacke.so\n"
             "  -DGCTA_BLAS_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/openblas\n"
             "MKL example (set MKL_THREADING_LAYER=GNU in the environment at runtime):\n"
             "  -DGCTA_BLAS_LIBRARY=/opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so\n"
@@ -310,6 +313,7 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL")
             "GCTA_BLAS_LIBRARY must be set for the ${_GCTA_BLAS} backend.\n"
             "Examples:\n"
             "  OpenBLAS: -DGCTA_BLAS_LIBRARY=/usr/lib/x86_64-linux-gnu/libopenblas.so\n"
+            "            -DGCTA_LAPACKE_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapacke.so\n"
             "  MKL:      -DGCTA_BLAS_LIBRARY=/opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so")
     endif()
     if(NOT GCTA_BLAS_INCLUDE_DIR)
@@ -327,16 +331,30 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL")
     endif()
 
     message(STATUS "${_GCTA_BLAS} library:     ${GCTA_BLAS_LIBRARY}")
+    if(GCTA_LAPACKE_LIBRARY)
+        message(STATUS "${_GCTA_BLAS} LAPACKE library: ${GCTA_LAPACKE_LIBRARY}")
+    endif()
     message(STATUS "${_GCTA_BLAS} include dir: ${GCTA_BLAS_INCLUDE_DIR}")
 
     if(LINUX)
         get_filename_component(_blas_lib_dir "${GCTA_BLAS_LIBRARY}" DIRECTORY)
         list(APPEND CMAKE_BUILD_RPATH   "${_blas_lib_dir}")
         list(APPEND CMAKE_INSTALL_RPATH "${_blas_lib_dir}")
+        if(GCTA_LAPACKE_LIBRARY)
+            get_filename_component(_lapack_lib_dir "${GCTA_LAPACKE_LIBRARY}" DIRECTORY)
+            list(APPEND CMAKE_BUILD_RPATH   "${_lapack_lib_dir}")
+            list(APPEND CMAKE_INSTALL_RPATH "${_lapack_lib_dir}")
+        endif()
     endif()
 
     list(APPEND GCTA_BLAS_INCLUDE_DIRS "${GCTA_BLAS_INCLUDE_DIR}")
     list(APPEND GCTA_BLAS_LIBS         "${GCTA_BLAS_LIBRARY}")
+    if(GCTA_LAPACKE_LIBRARY)
+        if(NOT EXISTS "${GCTA_LAPACKE_LIBRARY}")
+            message(FATAL_ERROR "GCTA_LAPACKE_LIBRARY does not exist: ${GCTA_LAPACKE_LIBRARY}")
+        endif()
+        list(APPEND GCTA_BLAS_LIBS "${GCTA_LAPACKE_LIBRARY}")
+    endif()
 
     if(_GCTA_BLAS STREQUAL "OpenBLAS")
         list(APPEND GCTA_BLAS_DEFINES GCTA_USE_OPENBLAS EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
@@ -358,6 +376,7 @@ if(CMAKE_VERBOSE_MAKEFILE OR GCTA_VERBOSE_BLAS)
     message(STATUS "  GCTA_BLAS_BACKEND: ${GCTA_BLAS_BACKEND}")
     message(STATUS "  Resolved BLAS backend: ${_GCTA_BLAS}")
     message(STATUS "  GCTA_BLAS_LIBRARY: ${GCTA_BLAS_LIBRARY}")
+    message(STATUS "  GCTA_LAPACKE_LIBRARY: ${GCTA_LAPACKE_LIBRARY}")
     message(STATUS "  GCTA_BLAS_INCLUDE_DIR: ${GCTA_BLAS_INCLUDE_DIR}")
     message(STATUS "  GCTA_BLAS_INCLUDE_DIRS: ${GCTA_BLAS_INCLUDE_DIRS}")
     message(STATUS "  GCTA_BLAS_DEFINES: ${GCTA_BLAS_DEFINES}")
