@@ -404,29 +404,13 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS")
     set(GCTA_BLAS_PROVIDER "OpenBLAS" CACHE INTERNAL "")
 
 elseif(_GCTA_BLAS STREQUAL "MKL")
-    # Intel's FindBLAS integration selects the right libraries for the chosen
-    # threading layer, link mode, and interface width — no need to hand-pick
-    # MKLConfig.cmake or walk lib/intel64 subdirectories manually.
+    # BLA_VENDOR=Intel10_64lp: lp64 interface + intel_thread (iomp5) -- fully parallel.
+    # Intel10_64lp_seq is sequential and must not be used here.
     #
-    # BLA_VENDOR encodes threading layer + interface:
-    #   Intel10_64lp   = lp64  + intel_thread (libiomp5)
-    #   Intel10_64lp_seq = lp64 + sequential
-    #   Intel10_64ilp  = ilp64 + intel_thread
-    # On Linux default to the GNU-thread variant to avoid loading a second
-    # OpenMP runtime alongside libgomp (which serialises all parallel regions).
-    if(NOT DEFINED MKL_THREADING)
-        if(LINUX)
-            set(MKL_THREADING "gnu_thread")
-        else()
-            set(MKL_THREADING "intel_thread")
-        endif()
-    endif()
-    if(MKL_THREADING STREQUAL "gnu_thread")
-        set(BLA_VENDOR Intel10_64lp_seq)   # FindBLAS picks sequential; we add
-        #                                    gomp ourselves via OpenMP::OpenMP_CXX
-    else()
-        set(BLA_VENDOR Intel10_64lp)
-    endif()
+    # The dual-runtime concern (iomp5 + libgomp loaded simultaneously) is real,
+    # but the correct fix is to replace libgomp with iomp5 for the whole build,
+    # not to use sequential MKL.  We do this below after finding iomp5.
+    set(BLA_VENDOR Intel10_64lp)
 
     # Steer the search when MKL_DIR is given (may be MKLConfig.cmake dir
     # or the MKL root itself).
@@ -446,6 +430,32 @@ elseif(_GCTA_BLAS STREQUAL "MKL")
 
     find_package(BLAS  REQUIRED)
     find_package(LAPACK REQUIRED)
+
+    # On Linux, replace libgomp with iomp5 so the whole build shares one OpenMP
+    # runtime.  FindBLAS already linked iomp5 via BLAS_LIBRARIES; we just need
+    # find_package(OpenMP) to use it too instead of pulling in libgomp as well.
+    # Setting OpenMP_CXX_LIB_NAMES before find_package(OpenMP) overrides the
+    # runtime it selects — FindOpenMP then finds the iomp5 that MKL ships.
+    if(LINUX)
+        find_library(_gcta_iomp5 iomp5
+            HINTS "${MKL_ROOT}" "$ENV{MKLROOT}"
+            PATH_SUFFIXES "../compiler/lib" "../compiler/lib/intel64"
+                          "lib" "lib/intel64"
+            NO_DEFAULT_PATH)
+        if(_gcta_iomp5)
+            get_filename_component(_gcta_iomp5_dir "${_gcta_iomp5}" DIRECTORY)
+            set(OpenMP_CXX_LIB_NAMES "iomp5" CACHE STRING "" FORCE)
+            set(OpenMP_iomp5_LIBRARY "${_gcta_iomp5}" CACHE STRING "" FORCE)
+            list(APPEND CMAKE_BUILD_RPATH   "${_gcta_iomp5_dir}")
+            list(APPEND CMAKE_INSTALL_RPATH "${_gcta_iomp5_dir}")
+            message(STATUS "MKL: using iomp5 as OpenMP runtime: ${_gcta_iomp5}")
+        else()
+            message(WARNING
+                "MKL: iomp5 not found adjacent to MKL — libgomp and iomp5 may "
+                "both be loaded, which can serialise parallel regions. "
+                "Set MKL_DIR or MKLROOT to point at the oneAPI root.")
+        endif()
+    endif()
 
     # MKL include dir: prefer MKL_ROOT set by MKLConfig if it was found via
     # config mode, otherwise search standard locations.
@@ -493,7 +503,7 @@ if(CMAKE_VERBOSE_MAKEFILE OR GCTA_VERBOSE_BLAS)
     message(STATUS "  Resolved BLAS backend: ${_GCTA_BLAS}")
     message(STATUS "  OpenBLAS_DIR hint: ${OpenBLAS_DIR}")
     message(STATUS "  MKL_DIR hint: ${MKL_DIR}")
-    message(STATUS "  MKL_THREADING: ${MKL_THREADING}")
+    message(STATUS "  MKL iomp5: ${_gcta_iomp5}")
     message(STATUS "  GCTA_BLAS_INCLUDE_DIRS: ${GCTA_BLAS_INCLUDE_DIRS}")
     message(STATUS "  GCTA_BLAS_DEFINES: ${GCTA_BLAS_DEFINES}")
     message(STATUS "  GCTA_BLAS_LIBS entries: ${GCTA_BLAS_LIBS}")
