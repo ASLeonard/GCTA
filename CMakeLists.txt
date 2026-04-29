@@ -44,10 +44,10 @@ if(CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
     add_compile_options(-O3 ${_arch_flag} -pipe)
 endif()
 
-set(GCTA_BLAS_BACKEND "Auto" CACHE STRING "BLAS/LAPACK backend: Auto, MKL, OpenBLAS, or Accelerate")
-set_property(CACHE GCTA_BLAS_BACKEND PROPERTY STRINGS Auto MKL OpenBLAS Accelerate)
-set(OpenBLAS_DIR "" CACHE PATH "Optional OpenBLAS install prefix (or lib/cmake/openblas subdir). Leave empty to auto-detect.")
-set(MKL_DIR "" CACHE PATH "Optional MKL install prefix (or cmake subdir). Leave empty to use MKLROOT env var or system search.")
+set(GCTA_BLAS_BACKEND "Auto" CACHE STRING "BLAS/LAPACK backend: Auto, OpenBLAS, MKL, or Accelerate")
+set_property(CACHE GCTA_BLAS_BACKEND PROPERTY STRINGS Auto OpenBLAS MKL Accelerate)
+set(GCTA_BLAS_LIBRARY "" CACHE FILEPATH "Full path to the BLAS/LAPACK library (OpenBLAS/MKL only). E.g. /usr/lib/x86_64-linux-gnu/libopenblas.so or /opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so")
+set(GCTA_BLAS_INCLUDE_DIR "" CACHE PATH "Directory containing BLAS/LAPACK headers (OpenBLAS/MKL only). E.g. /usr/include/x86_64-linux-gnu/openblas or /opt/intel/oneapi/mkl/latest/include")
 set(Boost_DIR "" CACHE PATH "Exact Boost CMake config directory containing BoostConfig.cmake. If set, Boost will be used from this location instead of fetching it.")
 option(GCTA_LIST_TARGETS "List imported and local targets during configure" OFF)
 option(GCTA_UNITY_BUILD "Enable unity builds for faster compilation" ON)
@@ -238,48 +238,24 @@ set(GCTA_BLAS_LIBS "")
 set(GCTA_BLAS_INCLUDE_DIRS "")
 set(GCTA_BLAS_DEFINES "")
 
-# Resolve "Auto" to a concrete backend.
-# On Linux, probe quietly for OpenBLAS (apt, conda, Homebrew) then MKL,
-# rather than the old broken hint-loop that never set _GCTA_OPENBLAS_HINTS.
+# Resolve "Auto" backend.
+# On Linux/Windows the user must supply explicit paths — CMake's FindBLAS linker
+# probes are too fragile across distros and package managers to be reliable.
 if(GCTA_BLAS_BACKEND STREQUAL "Auto")
     if(APPLE)
         set(_GCTA_BLAS "Accelerate")
     else()
-        # Prepend user/env prefixes so FindBLAS looks there first
-        set(_blas_auto_prefix_save "${CMAKE_PREFIX_PATH}")
-        foreach(_pfx IN ITEMS
-                "$ENV{CONDA_PREFIX}"
-                "/opt/homebrew/opt/openblas"
-                "/usr/local/opt/openblas")
-            if(EXISTS "${_pfx}")
-                list(PREPEND CMAKE_PREFIX_PATH "${_pfx}")
-            endif()
-        endforeach()
-
-        set(BLA_VENDOR OpenBLAS)
-        find_package(BLAS QUIET)
-        if(BLAS_FOUND)
-            set(_GCTA_BLAS "OpenBLAS")
-            message(STATUS "Auto-detected OpenBLAS")
-        else()
-            set(BLA_VENDOR Intel10_64lp)
-            find_package(BLAS QUIET)
-            if(BLAS_FOUND)
-                set(_GCTA_BLAS "MKL")
-                message(STATUS "Auto-detected MKL")
-            else()
-                message(FATAL_ERROR
-                    "Auto BLAS detection failed: neither OpenBLAS nor MKL found.\n"
-                    "Install OpenBLAS (e.g. apt install libopenblas-dev) or set "
-                    "-DGCTA_BLAS_BACKEND=OpenBLAS / MKL explicitly.")
-            endif()
-        endif()
-        unset(BLA_VENDOR)
-        unset(BLAS_FOUND)   # force re-find below with correct settings
-        unset(BLAS_LIBRARIES CACHE)
-        unset(BLAS_LINKER_FLAGS CACHE)
-        set(CMAKE_PREFIX_PATH "${_blas_auto_prefix_save}")
-        unset(_blas_auto_prefix_save)
+        message(FATAL_ERROR
+            "GCTA_BLAS_BACKEND=Auto is not supported on Linux/Windows.\n"
+            "Set -DGCTA_BLAS_BACKEND=OpenBLAS or -DGCTA_BLAS_BACKEND=MKL and supply:\n"
+            "  -DGCTA_BLAS_LIBRARY=<full path to .so/.a>\n"
+            "  -DGCTA_BLAS_INCLUDE_DIR=<directory containing cblas.h / mkl.h>\n"
+            "OpenBLAS example (Ubuntu x86-64):\n"
+            "  -DGCTA_BLAS_LIBRARY=/usr/lib/x86_64-linux-gnu/libopenblas.so\n"
+            "  -DGCTA_BLAS_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/openblas\n"
+            "MKL example (set MKL_THREADING_LAYER=GNU in the environment at runtime):\n"
+            "  -DGCTA_BLAS_LIBRARY=/opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so\n"
+            "  -DGCTA_BLAS_INCLUDE_DIR=/opt/intel/oneapi/mkl/latest/include")
     endif()
 else()
     set(_GCTA_BLAS "${GCTA_BLAS_BACKEND}")
@@ -297,15 +273,11 @@ if(NOT APPLE AND _GCTA_BLAS STREQUAL "Accelerate")
 endif()
 
 if(_GCTA_BLAS STREQUAL "Accelerate")
-    # Accelerate is a macOS system framework — no DIR hint needed.
-    # BLA_VENDOR=Apple tells FindBLAS to link -framework Accelerate and
-    # produce the BLAS::BLAS / LAPACK::LAPACK targets automatically.
+    # Accelerate is a macOS system framework — no user-supplied paths needed.
     set(BLA_VENDOR Apple)
-    find_package(BLAS  REQUIRED)
+    find_package(BLAS   REQUIRED)
     find_package(LAPACK REQUIRED)
 
-    # vecLib headers (cblas.h, lapacke.h, Accelerate.h) live inside the SDK.
-    # cmake --system-information gives us CMAKE_OSX_SYSROOT; fall back to xcrun.
     if(NOT CMAKE_OSX_SYSROOT)
         execute_process(
             COMMAND xcrun --sdk macosx --show-sdk-path
@@ -324,174 +296,58 @@ if(_GCTA_BLAS STREQUAL "Accelerate")
     message(STATUS "Accelerate include dir: ${GCTA_ACCELERATE_INCLUDE_DIR}")
 
     list(APPEND GCTA_BLAS_INCLUDE_DIRS "${GCTA_ACCELERATE_INCLUDE_DIR}")
-    list(APPEND GCTA_BLAS_LIBS ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
-    list(APPEND GCTA_BLAS_DEFINES GCTA_USE_ACCELERATE ACCELERATE_NEW_LAPACK EIGEN_USE_BLAS EIGEN_USE_LAPACK)
+    list(APPEND GCTA_BLAS_LIBS         ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
+    list(APPEND GCTA_BLAS_DEFINES      GCTA_USE_ACCELERATE ACCELERATE_NEW_LAPACK EIGEN_USE_BLAS EIGEN_USE_LAPACK)
     set(GCTA_BLAS_PROVIDER "Accelerate" CACHE INTERNAL "")
 
-elseif(_GCTA_BLAS STREQUAL "OpenBLAS")
-    # Steer FindBLAS toward the user-supplied prefix when given.
-    # OpenBLAS_DIR may be the cmake config dir (<prefix>/lib/cmake/openblas)
-    # or the install root — derive the prefix either way and prepend it.
-    if(OpenBLAS_DIR)
-        cmake_path(GET OpenBLAS_DIR PARENT_PATH _ob_p1)
-        cmake_path(GET _ob_p1 PARENT_PATH _ob_p2)
-        cmake_path(GET _ob_p2 PARENT_PATH _ob_p3)
-        # Walk up until we find a directory that looks like an install root
-        foreach(_candidate IN ITEMS "${_ob_p3}" "${_ob_p2}" "${_ob_p1}" "${OpenBLAS_DIR}")
-            if(EXISTS "${_candidate}/include" OR EXISTS "${_candidate}/lib")
-                list(PREPEND CMAKE_PREFIX_PATH "${_candidate}")
-                break()
-            endif()
-        endforeach()
-    endif()
-    foreach(_pfx IN ITEMS
-            "$ENV{CONDA_PREFIX}"
-            "/opt/homebrew/opt/openblas"
-            "/usr/local/opt/openblas")
-        if(EXISTS "${_pfx}")
-            list(PREPEND CMAKE_PREFIX_PATH "${_pfx}")
-        endif()
-    endforeach()
-
-    set(BLA_VENDOR OpenBLAS)
-    find_package(BLAS  REQUIRED)
-    find_package(LAPACK REQUIRED)
-
-    # FindBLAS does not set include dirs — locate the OpenBLAS headers explicitly.
-    # Use lapacke.h as the discriminating name: vecLib ships cblas.h but NOT
-    # lapacke.h, so this correctly rejects the macOS SDK on Apple builds.
-    # NO_CMAKE_SYSTEM_PATH prevents the SDK / system prefix list from being
-    # searched, ensuring we never pick up a framework header by accident.
-    find_path(GCTA_OPENBLAS_INCLUDE_DIR
-        NAMES lapacke.h
-        PATH_SUFFIXES
-            openblas-openmp openblas-pthread openblas-serial   # apt multiarch
-            openblas include/openblas include                  # everything else
-        HINTS
-            "${OpenBLAS_DIR}" "$ENV{CONDA_PREFIX}"
-            "/opt/homebrew/opt/openblas"
-            "/usr/local/opt/openblas"
-        PATHS
-            "/usr/include/x86_64-linux-gnu"
-            "/usr/include/aarch64-linux-gnu"
-            "/usr/include"
-            "/usr/local/include"
-        NO_CMAKE_SYSTEM_PATH
-        DOC "Directory containing lapacke.h for OpenBLAS")
-
-    if(NOT GCTA_OPENBLAS_INCLUDE_DIR)
+elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL")
+    # Both OpenBLAS and MKL require the user to supply explicit paths.
+    # This avoids the fragile FindBLAS / BLA_VENDOR linker-probe machinery.
+    # For MKL, pass libmkl_rt.so (the single-library interface) and set
+    # MKL_THREADING_LAYER=GNU in the environment at runtime to use libgomp.
+    if(NOT GCTA_BLAS_LIBRARY)
         message(FATAL_ERROR
-            "OpenBLAS headers (cblas.h / lapacke.h) not found.\n"
-            "On Debian/Ubuntu: sudo apt install libopenblas-dev\n"
-            "Or set -DOpenBLAS_DIR=<install-prefix> to point at a custom install.")
+            "GCTA_BLAS_LIBRARY must be set for the ${_GCTA_BLAS} backend.\n"
+            "Examples:\n"
+            "  OpenBLAS: -DGCTA_BLAS_LIBRARY=/usr/lib/x86_64-linux-gnu/libopenblas.so\n"
+            "  MKL:      -DGCTA_BLAS_LIBRARY=/opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so")
     endif()
-    message(STATUS "OpenBLAS include dir: ${GCTA_OPENBLAS_INCLUDE_DIR}")
-
-    # Add the library directory to RPATH on Linux
-    if(LINUX)
-        foreach(_blib IN LISTS BLAS_LIBRARIES)
-            if(EXISTS "${_blib}" AND NOT IS_DIRECTORY "${_blib}")
-                get_filename_component(_blib_dir "${_blib}" DIRECTORY)
-                list(APPEND CMAKE_BUILD_RPATH   "${_blib_dir}")
-                list(APPEND CMAKE_INSTALL_RPATH "${_blib_dir}")
-            endif()
-        endforeach()
-    endif()
-
-    list(APPEND GCTA_BLAS_INCLUDE_DIRS "${GCTA_OPENBLAS_INCLUDE_DIR}")
-    list(APPEND GCTA_BLAS_LIBS ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
-    list(APPEND GCTA_BLAS_DEFINES GCTA_USE_OPENBLAS EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
-    set(GCTA_BLAS_PROVIDER "OpenBLAS" CACHE INTERNAL "")
-
-elseif(_GCTA_BLAS STREQUAL "MKL")
-    # BLA_VENDOR=Intel10_64lp: lp64 interface + intel_thread (iomp5) -- fully parallel.
-    # Intel10_64lp_seq is sequential and must not be used here.
-    #
-    # The dual-runtime concern (iomp5 + libgomp loaded simultaneously) is real,
-    # but the correct fix is to replace libgomp with iomp5 for the whole build,
-    # not to use sequential MKL.  We do this below after finding iomp5.
-    set(BLA_VENDOR Intel10_64lp)
-
-    # Steer the search when MKL_DIR is given (may be MKLConfig.cmake dir
-    # or the MKL root itself).
-    if(MKL_DIR)
-        cmake_path(GET MKL_DIR PARENT_PATH _mkl_p1)
-        cmake_path(GET _mkl_p1 PARENT_PATH _mkl_p2)
-        foreach(_candidate IN ITEMS "${_mkl_p2}" "${_mkl_p1}" "${MKL_DIR}")
-            if(EXISTS "${_candidate}/include" OR EXISTS "${_candidate}/lib")
-                list(PREPEND CMAKE_PREFIX_PATH "${_candidate}")
-                break()
-            endif()
-        endforeach()
-    endif()
-    if(DEFINED ENV{MKLROOT})
-        list(PREPEND CMAKE_PREFIX_PATH "$ENV{MKLROOT}")
-    endif()
-
-    find_package(BLAS  REQUIRED)
-    find_package(LAPACK REQUIRED)
-
-    # On Linux, replace libgomp with iomp5 so the whole build shares one OpenMP
-    # runtime.  FindBLAS already linked iomp5 via BLAS_LIBRARIES; we just need
-    # find_package(OpenMP) to use it too instead of pulling in libgomp as well.
-    # Setting OpenMP_CXX_LIB_NAMES before find_package(OpenMP) overrides the
-    # runtime it selects — FindOpenMP then finds the iomp5 that MKL ships.
-    if(LINUX)
-        find_library(_gcta_iomp5 iomp5
-            HINTS "${MKL_ROOT}" "$ENV{MKLROOT}"
-            PATH_SUFFIXES "../compiler/lib" "../compiler/lib/intel64"
-                          "lib" "lib/intel64"
-            NO_DEFAULT_PATH)
-        if(_gcta_iomp5)
-            get_filename_component(_gcta_iomp5_dir "${_gcta_iomp5}" DIRECTORY)
-            set(OpenMP_CXX_LIB_NAMES "iomp5" CACHE STRING "" FORCE)
-            set(OpenMP_iomp5_LIBRARY "${_gcta_iomp5}" CACHE STRING "" FORCE)
-            list(APPEND CMAKE_BUILD_RPATH   "${_gcta_iomp5_dir}")
-            list(APPEND CMAKE_INSTALL_RPATH "${_gcta_iomp5_dir}")
-            message(STATUS "MKL: using iomp5 as OpenMP runtime: ${_gcta_iomp5}")
-        else()
-            message(WARNING
-                "MKL: iomp5 not found adjacent to MKL — libgomp and iomp5 may "
-                "both be loaded, which can serialise parallel regions. "
-                "Set MKL_DIR or MKLROOT to point at the oneAPI root.")
-        endif()
-    endif()
-
-    # MKL include dir: prefer MKL_ROOT set by MKLConfig if it was found via
-    # config mode, otherwise search standard locations.
-    find_path(GCTA_MKL_INCLUDE_DIR
-        NAMES mkl.h mkl_cblas.h
-        HINTS "${MKL_ROOT}" "${MKL_DIR}" "$ENV{MKLROOT}"
-        PATH_SUFFIXES include
-        PATHS
-            "/opt/intel/oneapi/mkl/latest"
-            "/opt/intel/mkl"
-        DOC "Directory containing mkl.h")
-
-    if(NOT GCTA_MKL_INCLUDE_DIR)
+    if(NOT GCTA_BLAS_INCLUDE_DIR)
         message(FATAL_ERROR
-            "MKL headers (mkl.h) not found.\n"
-            "Set -DMKL_DIR=<mkl-root> or ensure MKLROOT is set in the environment.")
+            "GCTA_BLAS_INCLUDE_DIR must be set for the ${_GCTA_BLAS} backend.\n"
+            "Examples:\n"
+            "  OpenBLAS: -DGCTA_BLAS_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/openblas\n"
+            "  MKL:      -DGCTA_BLAS_INCLUDE_DIR=/opt/intel/oneapi/mkl/latest/include")
     endif()
-    message(STATUS "MKL include dir: ${GCTA_MKL_INCLUDE_DIR}")
+    if(NOT EXISTS "${GCTA_BLAS_LIBRARY}")
+        message(FATAL_ERROR "GCTA_BLAS_LIBRARY does not exist: ${GCTA_BLAS_LIBRARY}")
+    endif()
+    if(NOT IS_DIRECTORY "${GCTA_BLAS_INCLUDE_DIR}")
+        message(FATAL_ERROR "GCTA_BLAS_INCLUDE_DIR does not exist: ${GCTA_BLAS_INCLUDE_DIR}")
+    endif()
+
+    message(STATUS "${_GCTA_BLAS} library:     ${GCTA_BLAS_LIBRARY}")
+    message(STATUS "${_GCTA_BLAS} include dir: ${GCTA_BLAS_INCLUDE_DIR}")
 
     if(LINUX)
-        foreach(_blib IN LISTS BLAS_LIBRARIES)
-            if(EXISTS "${_blib}" AND NOT IS_DIRECTORY "${_blib}")
-                get_filename_component(_blib_dir "${_blib}" DIRECTORY)
-                list(APPEND CMAKE_BUILD_RPATH   "${_blib_dir}")
-                list(APPEND CMAKE_INSTALL_RPATH "${_blib_dir}")
-            endif()
-        endforeach()
+        get_filename_component(_blas_lib_dir "${GCTA_BLAS_LIBRARY}" DIRECTORY)
+        list(APPEND CMAKE_BUILD_RPATH   "${_blas_lib_dir}")
+        list(APPEND CMAKE_INSTALL_RPATH "${_blas_lib_dir}")
     endif()
 
-    list(APPEND GCTA_BLAS_INCLUDE_DIRS "${GCTA_MKL_INCLUDE_DIR}")
-    list(APPEND GCTA_BLAS_LIBS ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
-    list(APPEND GCTA_BLAS_DEFINES GCTA_USE_MKL EIGEN_USE_MKL_ALL)
-    set(GCTA_BLAS_PROVIDER "MKL" CACHE INTERNAL "")
+    list(APPEND GCTA_BLAS_INCLUDE_DIRS "${GCTA_BLAS_INCLUDE_DIR}")
+    list(APPEND GCTA_BLAS_LIBS         "${GCTA_BLAS_LIBRARY}")
+
+    if(_GCTA_BLAS STREQUAL "OpenBLAS")
+        list(APPEND GCTA_BLAS_DEFINES GCTA_USE_OPENBLAS EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
+        set(GCTA_BLAS_PROVIDER "OpenBLAS" CACHE INTERNAL "")
+    else()
+        list(APPEND GCTA_BLAS_DEFINES GCTA_USE_MKL EIGEN_USE_MKL_ALL)
+        set(GCTA_BLAS_PROVIDER "MKL" CACHE INTERNAL "")
+    endif()
 
 else()
-    message(FATAL_ERROR "Unknown GCTA_BLAS_BACKEND: '${GCTA_BLAS_BACKEND}'. Use Auto, MKL, OpenBLAS, or Accelerate.")
+    message(FATAL_ERROR "Unknown GCTA_BLAS_BACKEND: '${GCTA_BLAS_BACKEND}'. Use Auto, OpenBLAS, MKL, or Accelerate.")
 endif()
 
 message(STATUS "BLAS/LAPACK provider: ${GCTA_BLAS_PROVIDER}")
@@ -501,9 +357,8 @@ if(CMAKE_VERBOSE_MAKEFILE OR GCTA_VERBOSE_BLAS)
     message(STATUS "---- BLAS detection details ----")
     message(STATUS "  GCTA_BLAS_BACKEND: ${GCTA_BLAS_BACKEND}")
     message(STATUS "  Resolved BLAS backend: ${_GCTA_BLAS}")
-    message(STATUS "  OpenBLAS_DIR hint: ${OpenBLAS_DIR}")
-    message(STATUS "  MKL_DIR hint: ${MKL_DIR}")
-    message(STATUS "  MKL iomp5: ${_gcta_iomp5}")
+    message(STATUS "  GCTA_BLAS_LIBRARY: ${GCTA_BLAS_LIBRARY}")
+    message(STATUS "  GCTA_BLAS_INCLUDE_DIR: ${GCTA_BLAS_INCLUDE_DIR}")
     message(STATUS "  GCTA_BLAS_INCLUDE_DIRS: ${GCTA_BLAS_INCLUDE_DIRS}")
     message(STATUS "  GCTA_BLAS_DEFINES: ${GCTA_BLAS_DEFINES}")
     message(STATUS "  GCTA_BLAS_LIBS entries: ${GCTA_BLAS_LIBS}")
@@ -699,7 +554,7 @@ target_link_libraries(gcta64 PRIVATE ${GCTA_BLAS_LIBS})
 
 # On Linux, re-link BLAS to ensure it appears last in NEEDED and
 # its cblas symbols take precedence via ld.so's first-match ordering.
-if(UNIX AND NOT APPLE AND NOT _GCTA_BLAS STREQUAL "None")
+if(LINUX)
     target_link_libraries(gcta64 PRIVATE ${GCTA_BLAS_LIBS})
 endif()
 
