@@ -13,6 +13,8 @@
   #define GCTA_CPU_ARM 0
 #endif
 
+//Can replace this header entirely with a CMake file(GENERATE) approach:
+
 #if defined(GCTA_USE_MKL)
   #include <mkl.h>
   typedef int gcta_blas_int;
