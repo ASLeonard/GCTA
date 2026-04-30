@@ -25,7 +25,7 @@
 #include <ranges>
 #include <Eigen/SparseCholesky>
 
-#if GCTA_CPU_x86
+#if defined(GCTA_USE_MKL)
 #include <Eigen/PardisoSupport>
 #endif
 
