@@ -783,7 +783,7 @@ void gcta::reml(bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, std:
     }
 
     if (mlmassoc) {
-        eigenVector2Vector(varcmp, _varcmp);
+        _varcmp = eigenVector2Vector(varcmp);
         return;
     }
 
@@ -1233,73 +1233,106 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
     return lgL;
 }
 
-void gcta::calcu_Vp(double &Vp, double &Vp2, double &VarVp, double &VarVp2, eigenVector &varcmp, eigenMatrix &Hi) {
-    int i = 0, j = 0;
-    Vp = 0.0;
-    VarVp = 0.0;
-    Vp2 = 0.0;
-    VarVp2 = 0.0;
-    if (_bivar_reml) {
-        for (i = 0; i < _bivar_pos[0].size(); i++) {
-            Vp += varcmp[_bivar_pos[0][i]];
-            for (j = 0; j < _bivar_pos[0].size(); j++) VarVp += Hi(_bivar_pos[0][i], _bivar_pos[0][j]);
-        }
-        for (i = 0; i < _bivar_pos[1].size(); i++) {
-            Vp2 += varcmp[_bivar_pos[1][i]];
-            for (j = 0; j < _bivar_pos[1].size(); j++) VarVp2 += Hi(_bivar_pos[1][i], _bivar_pos[1][j]);
-        }
-        return;
-    }
-    for (i = 0; i < _r_indx.size(); i++) {
-        Vp += varcmp[i];
-        for (j = 0; j < _r_indx.size(); j++) VarVp += Hi(i, j);
-    }
+// Helper: sum all entries of Hi over an index set (replaces manual double loops)
+static double sumSubmatrix(const eigenMatrix &Hi, const std::vector<int> &pos) {
+    double total = 0.0;
+    for (int i : pos)
+        total += Hi.row(i)(Eigen::Map<const Eigen::VectorXi>(pos.data(), pos.size())).sum();
+    return total;
 }
 
-void gcta::calcu_hsq(int i, double Vp, double Vp2, double VarVp, double VarVp2, double &hsq, double &var_hsq, eigenVector &varcmp, eigenMatrix &Hi) {
-    int j = 0;
-    double V1 = varcmp[i], VarV1 = Hi(i, i), Cov12 = 0.0;
+// Or with Eigen 3.4+ slicing (cleaner):
+// return Hi(pos, pos).sum();  // using Eigen::indexing
+
+
+void gcta::calcu_Vp(double &Vp, double &Vp2, double &VarVp, double &VarVp2,
+                    const eigenVector &varcmp, const eigenMatrix &Hi) {
+    Vp = Vp2 = VarVp = VarVp2 = 0.0;
+
+    auto accumulate = [&](const std::vector<int> &pos, double &vp, double &varVp) {
+        for (int ii : pos) {
+            vp += varcmp[ii];
+            for (int jj : pos)
+                varVp += Hi(ii, jj);
+        }
+    };
 
     if (_bivar_reml) {
-        auto iter = find(_bivar_pos[0].begin(), _bivar_pos[0].end(), i);
-        if (iter != _bivar_pos[0].end()) {
-            for (j = 0; j < _bivar_pos[0].size(); j++) {
-                Cov12 += Hi(*iter, _bivar_pos[0][j]);
-            }
-            hsq = V1 / Vp;
-            var_hsq = (V1 / Vp)*(V1 / Vp)*(VarV1 / (V1 * V1) + VarVp / (Vp * Vp)-(2 * Cov12) / (V1 * Vp));
-            return;
-        }
-        iter = find(_bivar_pos[1].begin(), _bivar_pos[1].end(), i);
-        if (iter != _bivar_pos[1].end()) {
-            for (j = 0; j < _bivar_pos[1].size(); j++) {
-                Cov12 += Hi(*iter, _bivar_pos[1][j]);
-            }
-            hsq = V1 / Vp2;
-            var_hsq = (V1 / Vp2)*(V1 / Vp2)*(VarV1 / (V1 * V1) + VarVp2 / (Vp2 * Vp2)-(2 * Cov12) / (V1 * Vp2));
-            return;
-        }
-        hsq = var_hsq = -2;
+        accumulate(_bivar_pos[0], Vp,  VarVp);
+        accumulate(_bivar_pos[1], Vp2, VarVp2);
         return;
     }
 
-    for (j = 0; j < _r_indx.size(); j++) {
-        Cov12 += Hi(i, j);
-    }
-    hsq = V1 / Vp;
-    var_hsq = (V1 / Vp)*(V1 / Vp)*(VarV1 / (V1 * V1) + VarVp / (Vp * Vp)-(2 * Cov12) / (V1 * Vp));
+    // Non-bivariate: treat _r_indx as the index set
+    // varcmp[0..n-1] and full Hi block
+    const Eigen::Index n = static_cast<Eigen::Index>(_r_indx.size());
+    Vp    = varcmp.head(n).sum();
+    VarVp = Hi.topLeftCorner(n, n).sum();
 }
 
-void gcta::calcu_sum_hsq(double Vp, double VarVp, double &sum_hsq, double &var_sum_hsq, eigenVector &varcmp, eigenMatrix &Hi) {
-    int i = 0, j = 0;
-    double V1 = 0.0, VarV1 = 0.0, Cov12 = 0.0;
-    for(i = 0; i < _r_indx.size()-1; i++) {
-        V1 += varcmp[i];
-        for(j = 0; j < _r_indx.size()-1; j++) VarV1 += Hi(i, j);
-        for(j = 0; j < _r_indx.size(); j++) Cov12 += Hi(i, j);
+
+void gcta::calcu_hsq(int i, double Vp, double Vp2, double VarVp, double VarVp2,
+                     double &hsq, double &var_hsq,
+                     const eigenVector &varcmp, const eigenMatrix &Hi) {
+    const double V1    = varcmp[i];
+    const double VarV1 = Hi(i, i);
+
+    // Compute hsq and var_hsq given a resolved Vp and covariance row sum
+    auto compute_hsq = [&](double vp, double varVp, double cov12) {
+        const double ratio = V1 / vp;
+        hsq     = ratio;
+        var_hsq = ratio * ratio * (VarV1 / (V1 * V1)
+                                 + varVp / (vp * vp)
+                                 - (2.0 * cov12) / (V1 * vp));
+    };
+
+    if (_bivar_reml) {
+        // Try each bivariate partition
+        auto try_partition = [&](const std::vector<int> &pos, double vp, double varVp) -> bool {
+            auto iter = std::find(pos.begin(), pos.end(), i);
+            if (iter == pos.end()) return false;
+
+            // Sum Hi row i over the partition indices (Eigen row slice)
+            double cov12 = 0.0;
+            for (int j : pos) cov12 += Hi(*iter, j);
+            // Eigen 3.4+: cov12 = Hi.row(*iter)(pos).sum();
+
+            compute_hsq(vp, varVp, cov12);
+            return true;
+        };
+
+        if (try_partition(_bivar_pos[0], Vp,  VarVp) ||
+            try_partition(_bivar_pos[1], Vp2, VarVp2))
+            return;
+
+        hsq = var_hsq = -2.0;
+        return;
     }
-    sum_hsq = V1/Vp;
-    var_sum_hsq = (V1/Vp)*(V1/Vp)*(VarV1/(V1*V1)+VarVp/(Vp*Vp)-(2*Cov12)/(V1*Vp));
+
+    // Non-bivariate: covariance is sum of row i across all components
+    const double cov12 = Hi.row(i).head(static_cast<Eigen::Index>(_r_indx.size())).sum();
+    compute_hsq(Vp, VarVp, cov12);
+}
+
+
+void gcta::calcu_sum_hsq(double Vp, double VarVp,
+                         double &sum_hsq, double &var_sum_hsq,
+                         const eigenVector &varcmp, const eigenMatrix &Hi) {
+    // All components except the last (residual/error)
+    const Eigen::Index n = static_cast<Eigen::Index>(_r_indx.size()) - 1;
+
+    const double V1    = varcmp.head(n).sum();
+    const double VarV1 = Hi.topLeftCorner(n, n).sum();
+
+    // Cov12: row sums of Hi for the genetic components against ALL components
+    const Eigen::Index total = static_cast<Eigen::Index>(_r_indx.size());
+    const double cov12 = Hi.topLeftCorner(n, total).sum();
+
+    const double ratio = V1 / Vp;
+    sum_hsq     = ratio;
+    var_sum_hsq = ratio * ratio * (VarV1 / (V1 * V1)
+                                 + VarVp / (Vp * Vp)
+                                 - (2.0 * cov12) / (V1 * Vp));
 }
 
 bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, int &iter, bool factorize_only)
@@ -1582,35 +1615,31 @@ double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi
     return logdet_Xt_Vi_X;
 }
 
-// input P, calculate PA and Hi
-void gcta::calcu_Hi(eigenMatrix &P, eigenMatrix &Hi)
-{
-    //LOGGER << "Before calcu_Hi: " << getVMemKB() << " " << getMemKB() << ", "; 
+void gcta::calcu_Hi(eigenMatrix &P, eigenMatrix &Hi) {
+    // P is the REML projection matrix — symmetrise once to legitimise selfadjointView
+    P = (P + P.transpose()) * 0.5;
 
-    // Calculate PA
-    std::vector<eigenMatrix> PA(_r_indx.size());
-    for (int i = 0; i < _r_indx.size(); i++) {
-        (PA[i]).resize(_n, _n);
-        if (_bivar_reml || _within_family) (PA[i]) = P * (_Asp[_r_indx[i]]);
-        else (PA[i]) = P * (_A[_r_indx[i]]);
+    const int m = static_cast<int>(_r_indx.size());
+    std::vector<eigenMatrix> PA(m);
+
+    for (int i = 0; i < m; i++) {
+        PA[i] = P.selfadjointView<Eigen::Upper>()
+                * ((_bivar_reml || _within_family) ? _Asp[_r_indx[i]] : _A[_r_indx[i]]);
     }
 
-
-    // tr(PA_i * PA_j) = sum_{k,l} PA_i(k,l) * PA_j(l,k)
-    //                 = PA_i ⊙ PA_j^T  (Frobenius inner product)
-    // Eigen maps this to a single BLAS ddot-equivalent, no temporaries needed.
-    for (int i = 0; i < (int)_r_indx.size(); i++) {
+    for (int i = 0; i < m; i++) {
         for (int j = 0; j <= i; j++) {
             Hi(i, j) = Hi(j, i) = PA[i].cwiseProduct(PA[j].transpose()).sum();
         }
     }
 
-    if (!inverse_H(Hi)){
-        if(_reml_force_converge){
+    if (!inverse_H(Hi)) {
+        if (_reml_force_converge) {
             LOGGER.w(0, "the information matrix is not invertible.");
             _reml_AI_not_invertible = true;
+        } else {
+            LOGGER.e(0, "the information matrix is not invertible.");
         }
-        else LOGGER.e(0, "the information matrix is not invertible.");
     }
 }
 

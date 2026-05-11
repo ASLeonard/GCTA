@@ -208,8 +208,7 @@ void gcta::ecojo_slct_output(bool joint_only, std::vector<int> &slct, eigenVecto
 void gcta::ecojo_slct(std::vector<int> &slct, std::vector<int> &remain, eigenVector &bC, eigenVector &bC_se, eigenVector &pC)
 {
     int i = 0, i_buf = 0;
-    std::vector<double> p_buf;
-    eigenVector2Vector(_ecojo_pval, p_buf);
+    std::vector<double> p_buf = eigenVector2Vector(_ecojo_pval);
     int m = min_element(p_buf.begin(), p_buf.end()) - p_buf.begin();
     if (p_buf[m] >= _ecojo_p_cutoff) return;
     slct.push_back(m);
@@ -241,8 +240,7 @@ bool gcta::ecojo_slct_entry(std::vector<int> &slct, std::vector<int> &remain, ei
 {
     int i = 0, m = 0;
     ecojo_cond(slct, remain, bC, bC_se, pC);
-    std::vector<double> pC_buf;
-    eigenVector2Vector(pC, pC_buf);
+    std::vector<double> pC_buf = eigenVector2Vector(pC);
 
     while (true) {
         m = min_element(pC_buf.begin(), pC_buf.end()) - pC_buf.begin();
@@ -290,10 +288,9 @@ bool gcta::ecojo_slct_entry(std::vector<int> &slct, std::vector<int> &remain, ei
 
 void gcta::ecojo_slct_stay(std::vector<int> &slct, eigenVector &bJ, eigenVector &bJ_se, eigenVector &pJ)
 {
-    std::vector<double> pJ_buf;
     while(!slct.empty()){
         ecojo_joint(slct, bJ, bJ_se, pJ);
-        eigenVector2Vector(pJ, pJ_buf);
+        std::vector<double> pJ_buf = eigenVector2Vector(pJ);
         int m = max_element(pJ_buf.begin(), pJ_buf.end()) - pJ_buf.begin();
         if(pJ[m] > _ecojo_p_cutoff){
             slct.erase(slct.begin() + m);

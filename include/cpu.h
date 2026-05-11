@@ -23,6 +23,11 @@
   #include <lapacke.h>
   typedef lapack_int gcta_blas_int;
 
+#elif defined(GCTA_USE_AOCL)
+  #include <cblas.h>
+  #include <lapacke.h>
+  typedef lapack_int gcta_blas_int;
+
 #elif defined(GCTA_USE_ACCELERATE)
   #include <cblas_new.h>
   #include <lapack.h>

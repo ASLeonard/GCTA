@@ -674,6 +674,190 @@ void gcta::grm_bK(std::string grm_file, std::string keep_indi_file, std::string 
     output_grm(grm_out_bin_flag);
 }
 
+void gcta::grm_denseness(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, bool merge_grm_flag, std::string metric)
+{
+    static const std::vector<std::string> valid_metrics = {"all", "conditioning", "offdiag", "effective-rank"};
+    if (std::find(valid_metrics.begin(), valid_metrics.end(), metric) == valid_metrics.end())
+        LOGGER.e(0, "--denseness: unrecognised metric '" + metric + "'. Use 'conditioning', 'offdiag', 'effective-rank', or 'all'.");
+
+    manipulate_grm(grm_file, keep_indi_file, remove_indi_file, "", -2.0, -2.0, -2, merge_grm_flag, true);
+    _grm_N.resize(0, 0);
+    int n = _keep.size();
+
+    Eigen::MatrixXd grm_dbl_storage;
+    const Eigen::MatrixXd& grm_dbl = [&]() -> const Eigen::MatrixXd& {
+        if constexpr (std::is_same_v<eigenMatrix, Eigen::MatrixXd>) {
+            return _grm;
+        } else {
+            grm_dbl_storage = _grm.cast<double>();
+            return grm_dbl_storage;
+        }
+    }();
+
+    bool do_all     = (metric == "all");
+    bool do_offdiag = do_all || (metric == "offdiag");
+    bool do_cond    = do_all || (metric == "conditioning");
+    bool do_effrank = do_all || (metric == "effective-rank");
+
+    LOGGER << "\nGRM density metrics for " << n << " individuals:" << std::endl;
+
+    // -------------------------------------------------------------------------
+    // Off-diagonal statistics (lower triangle only, single pass)
+    // -------------------------------------------------------------------------
+    if (do_offdiag) {
+        double off_num         = 0.5 * n * (n - 1.0);
+        double off_sum         = 0.0;
+        double off_abs_sum     = 0.0;
+        double off_sum_sq      = 0.0;
+        double off_max_abs     = 0.0;
+        long long n_above_005  = 0;
+        long long n_above_0125 = 0;
+
+        const double threshold_nonzero = 0.05;
+        const double threshold_cousin  = 0.125;
+
+        for (int i = 1; i < n; i++) {
+            for (int j = 0; j < i; j++) {
+                double val     = grm_dbl(i, j);
+                double abs_val = std::abs(val);
+
+                off_sum     += val;
+                off_abs_sum += abs_val;
+                off_sum_sq  += val * val;
+
+                if (abs_val > off_max_abs)       off_max_abs = abs_val;
+                if (abs_val > threshold_nonzero) n_above_005++;
+                if (abs_val > threshold_cousin)  n_above_0125++;
+            }
+        }
+
+        double off_mean     = off_sum     / off_num;
+        double off_abs_mean = off_abs_sum / off_num;
+        // Single-pass variance: Var = E[x^2] - E[x]^2
+        double off_var      = (off_sum_sq / off_num) - (off_mean * off_mean);
+
+        LOGGER << "\nOff-diagonal statistics:" << std::endl;
+        LOGGER << "  Mean:                    " << off_mean     << std::endl;
+        LOGGER << "  Mean absolute value:     " << off_abs_mean << "  (primary density metric)" << std::endl;
+        LOGGER << "  Variance:                " << off_var      << std::endl;
+        LOGGER << "  SD:                      " << std::sqrt(off_var) << std::endl;
+        LOGGER << "  Max absolute value:      " << off_max_abs  << std::endl;
+        LOGGER << "  Proportion |off-diag| > " << threshold_nonzero << ": "
+               << (double)n_above_005  / off_num
+               << " (" << n_above_005  << " / " << (long long)off_num << ")" << std::endl;
+        LOGGER << "  Proportion |off-diag| > " << threshold_cousin  << " (~first-cousin): "
+               << (double)n_above_0125 / off_num
+               << " (" << n_above_0125 << " / " << (long long)off_num << ")" << std::endl;
+    }
+
+    // -------------------------------------------------------------------------
+    // Eigenvalue-based metrics
+    // Branching strategy:
+    //   - effective-rank needs all eigenvalues -> full SelfAdjointEigenSolver
+    //     with EigenvaluesOnly (skip eigenvector computation for speed)
+    //   - conditioning alone -> Spectra to get only lambda_max and lambda_min,
+    //     O(n^2 * k) instead of O(n^3)
+    // -------------------------------------------------------------------------
+    if (do_cond || do_effrank) {
+
+        // Helper: shared negative-eigenvalue warning, printed once regardless
+        // of which sub-metric triggered the decomposition.
+        auto warn_negative = [&](const Eigen::VectorXd& evals) {
+            int n_neg = (int)(evals.array() < 0.0).count();
+            if (n_neg > 0)
+                LOGGER << "\n  Warning: " << n_neg
+                       << " negative eigenvalue(s) detected (GRM is not positive semi-definite)." << std::endl;
+        };
+
+        // Helper: conditioning output, reused by both paths.
+        auto log_conditioning = [&](double eval_max, double eval_min) {
+            double cond_num = (std::abs(eval_min) > 0.0)
+                ? eval_max / std::abs(eval_min)
+                : std::numeric_limits<double>::infinity();
+            LOGGER << "\nConditioning:" << std::endl;
+            LOGGER << "  Largest eigenvalue:              " << eval_max << std::endl;
+            LOGGER << "  Smallest eigenvalue:             " << eval_min << std::endl;
+            LOGGER << "  Condition number (max / |min|):  " << cond_num << std::endl;
+        };
+
+        if (do_effrank) {
+            // -------------------------------------------------------------------
+            // Full decomposition path (EigenvaluesOnly — no eigenvectors computed)
+            // -------------------------------------------------------------------
+            LOGGER << "\nComputing eigendecomposition (values only)..." << std::endl;
+
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigs(grm_dbl, Eigen::EigenvaluesOnly);
+            if (eigs.info() != Eigen::Success)
+                LOGGER.e(0, "eigenvalue decomposition failed.");
+
+            const Eigen::VectorXd& evals = eigs.eigenvalues(); // ascending order
+            warn_negative(evals);
+
+            if (do_cond)
+                log_conditioning(evals(n - 1), evals(0));
+
+            // Effective rank -------------------------------------------------------
+            Eigen::VectorXd abs_evals = evals.cwiseAbs();
+            double sum1 = abs_evals.sum();
+            double sum2 = abs_evals.squaredNorm();
+
+            // Participation ratio == n_eff:
+            //   (sum lambda_i)^2 / sum(lambda_i^2)
+            //   Equals n for identity (all equal / unrelated), falls toward 1
+            //   for highly structured or related populations.
+            double participation_ratio = (sum2 > 0.0) ? (sum1 * sum1) / sum2 : 0.0;
+
+            // Entropy-based effective rank: exp(Shannon entropy of normalised eigenvalues).
+            // More sensitive to the full distribution shape than participation ratio.
+            // Guard log(0) with .select() — zero eigenvalues contribute 0 by convention.
+            Eigen::VectorXd p     = abs_evals / sum1;
+            Eigen::VectorXd log_p = (p.array() > 0.0).select(p.array().log(),
+                                                               Eigen::VectorXd::Zero(n));
+            double entropy      = -(p.array() * log_p.array()).sum();
+            double entropy_rank = std::exp(entropy);
+
+            LOGGER << "\nEffective rank:" << std::endl;
+            LOGGER << "  Participation ratio (n_eff):     " << participation_ratio
+                   << "  (out of " << n << ")" << std::endl;
+            LOGGER << "  Entropy-based effective rank:    " << entropy_rank
+                   << "  (out of " << n << ")" << std::endl;
+
+        } else {
+            // -------------------------------------------------------------------
+            // Fast path: conditioning only via Spectra (largest + smallest eval)
+            // O(n^2 * k) vs O(n^3) for full decomposition — significant for
+            // large GRMs (n > ~3000).
+            // -------------------------------------------------------------------
+            LOGGER << "\nComputing condition number (Spectra fast path)..." << std::endl;
+
+            Spectra::DenseSymMatProd<double> op(grm_dbl);
+            int ncv = std::min(n, 20); // Krylov subspace size; 20 is sufficient for k=1
+
+            Spectra::SymEigsSolver<Spectra::DenseSymMatProd<double>> solver_max(op, 1, ncv);
+            solver_max.init();
+            solver_max.compute(Spectra::SortRule::LargestAlge);
+
+            Spectra::SymEigsSolver<Spectra::DenseSymMatProd<double>> solver_min(op, 1, ncv);
+            solver_min.init();
+            solver_min.compute(Spectra::SortRule::SmallestAlge);
+
+            if (solver_max.info() != Spectra::CompInfo::Successful ||
+                solver_min.info() != Spectra::CompInfo::Successful)
+                LOGGER.e(0, "Spectra eigenvalue solver failed.");
+
+            double eval_max = solver_max.eigenvalues()(0);
+            double eval_min = solver_min.eigenvalues()(0);
+
+            // Spectra doesn't give us all eigenvalues, so warn only if eval_min < 0
+            if (eval_min < 0.0)
+                LOGGER << "\n  Warning: smallest eigenvalue is negative (" << eval_min
+                       << "); GRM may not be positive semi-definite." << std::endl;
+
+            log_conditioning(eval_max, eval_min);
+        }
+    }
+}
+
 void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num, std::string pca_approx)
 {
     manipulate_grm(grm_file, keep_indi_file, remove_indi_file, "", grm_cutoff, -2.0, -2, merge_grm_flag, true);
@@ -696,6 +880,7 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
     Eigen::MatrixXd evec;
 
     if (!pca_approx.empty()) {
+        //This is randomized SVD, not full SVD
         if (pca_approx == "SVD") {
             // Randomized SVD
             int oversample = 10;
@@ -711,7 +896,45 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
             Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(B);
             eval = es.eigenvalues().reverse().head(out_pc_num);
             evec = Q * es.eigenvectors().rowwise().reverse().leftCols(out_pc_num);
-        } else if (pca_approx == "Lanczos") {
+        } else if (pca_approx == "randomized") {
+
+            int oversample    = 20;          // bump from 10
+            int pca_power_iter = 3;          // one extra pass helps GRMs
+            int k = out_pc_num + oversample;
+
+            // Stage A: build a range approximation Q spanning the dominant subspace
+            Eigen::MatrixXd omega = Eigen::MatrixXd::Random(n, k);
+            Eigen::MatrixXd Y = grm_dbl.selfadjointView<Eigen::Upper>() * omega;
+
+            for (int i = 0; i < pca_power_iter; ++i) {
+                // Re-orthogonalize before each multiply — this is the critical fix
+                {
+                    Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
+                    Y = qr.householderQ() * Eigen::MatrixXd::Identity(n, k);
+                }
+                Y = grm_dbl.selfadjointView<Eigen::Upper>() * Y;
+            }
+
+            // Final QR to get orthonormal basis
+            Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
+            Eigen::MatrixXd Q = qr.householderQ() * Eigen::MatrixXd::Identity(n, k);
+
+            // Stage B: project to small k×k matrix; reuse AQ from last multiply
+            // grm_dbl * Q is the last Y before final QR, but Q has been re-orthogonalized,
+            // so we need one more multiply here
+            Eigen::MatrixXd AQ = grm_dbl.selfadjointView<Eigen::Upper>() * Q;
+            Eigen::MatrixXd B  = Q.transpose() * AQ;   // k×k, symmetric
+
+            // Eigen decomposition of the small projected problem
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(B);
+
+            // Eigenvalues come out ascending — reverse to get descending
+            eval = es.eigenvalues().reverse().head(out_pc_num);
+            evec = Q * es.eigenvectors().rowwise().reverse().leftCols(out_pc_num);
+
+        }
+ 
+        else if (pca_approx == "Lanczos") {
             // Spectra Lanczos path
             Spectra::DenseSymMatProd<double> op(grm_dbl);
             int ncv = std::min(n, std::max(3 * out_pc_num + 1, 30));
@@ -727,12 +950,12 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
         }
     } else {
         LOGGER << "Using full eigenvalue decomposition (--pca-approx not set)." << std::endl;
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(grm_dbl);
-        if (es.info() != Eigen::Success)
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigs(grm_dbl);
+        if (eigs.info() != Eigen::Success)
             LOGGER.e(0, "eigenvalue decomposition failed.");
         // SelfAdjointEigenSolver returns eigenvalues in ascending order; reverse to get largest first.
-        eval = es.eigenvalues().reverse().head(out_pc_num);
-        evec = es.eigenvectors().rowwise().reverse().leftCols(out_pc_num);
+        eval = eigs.eigenvalues().reverse().head(out_pc_num);
+        evec = eigs.eigenvectors().rowwise().reverse().leftCols(out_pc_num);
     }
 
     std::string eval_file = _out + ".eigenval";
