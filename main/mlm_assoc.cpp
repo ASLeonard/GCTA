@@ -306,48 +306,61 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
     unsigned long i = 0;
     std::vector<float> beta(m, 0.0f), se(m, 0.0f), pval(m, 2.0f);
 
-    // Symmetrise Vi once into a plain matrix so every downstream GEMM/GEMV
-    // dispatches through Eigen's full BLAS path rather than the slower
-    // selfadjointView fallback that activates for block-expression targets.
-   //TODO: is this true? 
+    // Symmetrise Vi into a plain dense float matrix for SSYMV below.
     Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
     _Vi.resize(0,0);
 
-    // Precompute Vi * y once (plain GEMV, Vi is now fully dense symmetric)
+    // Precompute Vi * y once (SSYMV/GEMV on the dense symmetric Vi).
     Eigen::Map<const Eigen::VectorXf> y_vec(y.data(), n);
     Eigen::VectorXf Vi_y(n);
     Vi_y.noalias() = Vi * y_vec;
 
+    // Cholesky-factor Vi = U^T U (U upper triangular) once.
+    // Per-block quadratic form x^T Vi x = (Ux)^T(Ux) = ||Ux||^2, evaluated
+    // via STRMM (triangular matrix-matrix multiply) rather than SGEMM on the
+    // full symmetric Vi.  STRMM reads only the n(n+1)/2 upper triangle of U
+    // (~half the memory traffic of SGEMM on the full n×n Vi) and computes
+    // half as many flops, yielding ~2× speedup on the dominant matrix multiply.
+    // Eigen dispatches to cblas_strmm because the RHS is a TriangularView
+    // product; the LHS being a plain MatrixXf eliminates an intermediate copy.
+    // Factorisation cost O(n^3/3) is negligible vs the O(n^2*m) GEMM total.
+    Eigen::LLT<Eigen::MatrixXf> Vi_llt(Vi);
+    if(Vi_llt.info() != Eigen::Success)
+        LOGGER.e(0, "mlma_calcu_stat: Vi is not positive definite.");
+    Vi.resize(0, 0);   // free n×n dense matrix; Vi_llt holds the triangular factor
+
     LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<std::endl;
 
     int k = 0, l = 0;
-    Eigen::MatrixXf X_block, Vi_X_block(n, max_block_size);
+    Eigen::MatrixXf X_block;
+    Eigen::MatrixXf UX_block;                    // n×bs; allocated on first block, reused thereafter
     // Pre-allocated temporaries — no heap activity inside the hot loop
     Eigen::VectorXf Xt_Vi_y_block(max_block_size);
-    Eigen::VectorXf xvx_diag(max_block_size);   // diag(X^T Vi X)
+    Eigen::VectorXf xvx_diag(max_block_size);    // diag(X^T Vi X)
     std::vector<int> indx;
 
     int last_pct = -1;
-    //TODO: can we do full matrix and let BLAS break up the problem?
     for(i = 0; i < m; ){
         int cur_pct = static_cast<int>(i * 100 / m);
         if(cur_pct != last_pct){
             LOGGER.p(0, std::to_string(i) + " / " + std::to_string(m) + " SNPs (" + std::to_string(cur_pct) + "%)");
             last_pct = cur_pct;
         }
-        //TODO: is block_size appropriate
         const Eigen::Index bs = static_cast<Eigen::Index>(
             std::min(static_cast<unsigned long>(max_block_size), m - i));
         indx.resize(bs);
         for(k = 0; k < bs; k++) indx[k] = i + k;
         make_XMat_subset(X_block, indx, false);  // X_block is n×bs
 
-        // Vi * X_block → Vi_X_block (n×bs); Vi is plain dense → full GEMM
-        Vi_X_block.leftCols(bs).noalias() = Vi * X_block;
+        // U * X_block via STRMM: RHS is a TriangularView product, which Eigen
+        // dispatches to cblas_strmm.  LHS is a plain MatrixXf so Eigen writes
+        // directly into UX_block without an intermediate temporary.
+        // UX_block is dynamically sized n×bs; Eigen reallocates only when bs
+        // changes (i.e. at most once, for the last partial block).
+        UX_block.noalias() = Vi_llt.matrixU() * X_block;
 
-        // diag(X^T Vi X): column-wise dot products via elementwise product + colwise sum
-        // Avoids O(bs²) full matrix multiply; reads each column once.
-        xvx_diag.head(bs) = (X_block.cwiseProduct(Vi_X_block.leftCols(bs))).colwise().sum();
+        // diag(X^T Vi X) = ||col_j(UX_block)||^2
+        xvx_diag.head(bs) = UX_block.colwise().squaredNorm();
 
         // X^T Vi_y (bs×1) — single GEMV, pre-allocated target
         Xt_Vi_y_block.head(bs).noalias() = X_block.transpose() * Vi_y;
@@ -357,7 +370,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
             if(std::isfinite(inv_xvx) && inv_xvx > 1.0e-30f){
                 beta[i + l] = inv_xvx * Xt_Vi_y_block[l];
                 se[i + l] = std::sqrt(inv_xvx);
-                const float chisq = beta[i + l] / se[i + l]; //TODO: is chisq really just sqrt(inv_xvx) * Xt_Vi_y_block[l];?
+                const float chisq = beta[i + l] / se[i + l];
                 pval[i + l] = StatFunc::pchisq(chisq * chisq, 1, _log_pval);
             }
         }
@@ -376,30 +389,25 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
     unsigned long i = 0;
     std::vector<float> beta(m, 0.0f), se(m, 0.0f), pval(m, 2.0f);
 
-    // Symmetrise Vi once into a plain dense matrix so all downstream GEMMs
-    // go through the full BLAS path (selfadjointView products on block-expression
-    // targets may fall back to a scalar path in some Eigen/BLAS configurations).
+    // Symmetrise Vi once into a plain dense float matrix.
     Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
     _Vi.resize(0,0);
 
-    // Precompute Vi * y once (plain GEMV on the now-dense Vi)
+    // Precompute Vi * y once (GEMV on the dense Vi).
     Eigen::Map<const Eigen::VectorXf> y_vec(y.data(), n);
     Eigen::VectorXf Vi_y(n);
     Vi_y.noalias() = Vi * y_vec;
 
-    // --- Schur complement precomputation (done once, not per SNP) ---
-    // C (n×p): fixed covariate matrix
+    // C (n×p): fixed covariate matrix.
+    // Vi_C = Vi * C (n×p) is retained for the hot loop: D = C^T Vi X = Vi_C^T X
+    // (Vi symmetric), avoiding the n×bs Vi*X_block intermediate each iteration.
     Eigen::MatrixXf C = _X.cast<float>();
-
-    // Vi_C = Vi * C  (n×p); plain GEMM, no block expressions
     Eigen::MatrixXf Vi_C(n, p);
     Vi_C.noalias() = Vi * C;
 
-    // A = C^T Vi_C  (p×p).  Use Vi_C^T * C = C^T * Vi_C (same result, Vi symmetric).
-    // Factor immediately; we never need the explicit inverse.
+    // A = C^T Vi C = Vi_C^T C  (p×p); factor immediately via LLT.
     Eigen::MatrixXf A_mat(p, p);
     A_mat.noalias() = Vi_C.transpose() * C;
-    Vi_C.resize(0, 0);  // no longer needed — free n×p memory before the SNP loop
     Eigen::LLT<Eigen::MatrixXf> A_llt(A_mat);
     if(A_llt.info() != Eigen::Success)
         LOGGER.e(0, "covariate matrix C^T Vi C is not positive-definite/invertible.");
@@ -409,15 +417,25 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
     t_vec.noalias() = C.transpose() * Vi_y;
     t_vec = A_llt.solve(t_vec);
 
+    // Cholesky-factor Vi = U^T U once.
+    // Per-block: x^T Vi x = ||Ux||^2 via STRMM (half the flops and memory
+    // traffic of SGEMM on the full n×n Vi).  Combined with D = Vi_C^T X, the
+    // n×bs Vi*X_block product is eliminated entirely from the hot loop.
+    // Vi_llt and Vi_C are both retained for the loop; the dense Vi is freed.
+    Eigen::LLT<Eigen::MatrixXf> Vi_llt(Vi);
+    if(Vi_llt.info() != Eigen::Success)
+        LOGGER.e(0, "mlma_calcu_stat_covar: Vi is not positive definite.");
+    Vi.resize(0, 0);
+
     LOGGER << "\nRunning association tests for " << m << " SNPs ..." << std::endl;
 
     int k = 0, l = 0;
     Eigen::MatrixXf X_block;
+    Eigen::MatrixXf UX_block;                    // n×bs, reused across blocks
     std::vector<int> indx;
 
-    // All block temporaries pre-allocated outside the loop — zero heap activity per SNP
-    Eigen::MatrixXf Vi_X_block(n, max_block_size);   // Vi * X_block
-    Eigen::MatrixXf D_block(p, max_block_size);      // C^T * Vi_X_block  (p×bs)
+    // Pre-allocated block temporaries — zero heap activity per SNP
+    Eigen::MatrixXf D_block(p, max_block_size);      // Vi_C^T * X_block  (p×bs)
     Eigen::MatrixXf E_block(p, max_block_size);      // A^{-1} * D_block  (p×bs)
     Eigen::VectorXf f_vec(max_block_size);           // X^T Vi_y          (bs×1)
     Eigen::VectorXf Dt_t_vec(max_block_size);        // D^T t             (bs×1)
@@ -437,13 +455,18 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
         for(k = 0; k < bs; k++) indx[k] = i + k;
         make_XMat_subset(X_block, indx, false);  // X_block is n×bs
 
-        // Vi * X_block → Vi_X_block (n×bs); plain GEMM
-        Vi_X_block.leftCols(bs).noalias() = Vi * X_block;
+        // U * X_block via STRMM: RHS is a TriangularView product, dispatched to
+        // cblas_strmm.  LHS is a plain MatrixXf, eliminating an intermediate copy.
+        UX_block.noalias() = Vi_llt.matrixU() * X_block;
 
-        // D = C^T * Vi_X_block  (p×bs); plain GEMM on evaluated sub-matrices
-        D_block.leftCols(bs).noalias() = C.transpose() * Vi_X_block.leftCols(bs);
+        // diag(X^T Vi X) = ||col_j(UX_block)||^2
+        xvx_diag.head(bs) = UX_block.colwise().squaredNorm();
 
-        // E = A^{-1} * D  (p×bs) via LLT; noalias safe since D and E are distinct
+        // D = C^T Vi X = Vi_C^T X  (p×bs); Vi symmetric so (Vi C)^T = C^T Vi.
+        // Cost O(p*n*bs) with p << n; replaces the O(n^2*bs) Vi*X_block SGEMM.
+        D_block.leftCols(bs).noalias() = Vi_C.transpose() * X_block;
+
+        // E = A^{-1} * D  (p×bs)
         E_block.leftCols(bs).noalias() = A_llt.solve(D_block.leftCols(bs));
 
         // f = X^T Vi_y  (bs×1)
@@ -452,9 +475,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
         // Dt_t = D^T t  (bs×1)
         Dt_t_vec.head(bs).noalias() = D_block.leftCols(bs).transpose() * t_vec;
 
-        // diag(X^T Vi X) and diag(D^T E) via elementwise product + colwise sum;
-        // avoids forming the full bs×bs products.
-        xvx_diag.head(bs)    = (X_block.cwiseProduct(Vi_X_block.leftCols(bs))).colwise().sum();
+        // diag(D^T E) via elementwise product + colwise sum
         d_dot_e_diag.head(bs) = (D_block.leftCols(bs).cwiseProduct(E_block.leftCols(bs))).colwise().sum();
 
         for(l = 0; l < bs; l++){
