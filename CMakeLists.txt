@@ -44,8 +44,8 @@ if(CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
     add_compile_options(-O3 ${_arch_flag} -pipe)
 endif()
 
-set(GCTA_BLAS_BACKEND "Auto" CACHE STRING "BLAS/LAPACK backend: Auto, OpenBLAS, MKL, or Accelerate")
-set_property(CACHE GCTA_BLAS_BACKEND PROPERTY STRINGS Auto OpenBLAS MKL Accelerate)
+set(GCTA_BLAS_BACKEND "Auto" CACHE STRING "BLAS/LAPACK backend: Auto, OpenBLAS, MKL, Accelerate, or AOCL")
+set_property(CACHE GCTA_BLAS_BACKEND PROPERTY STRINGS Auto OpenBLAS MKL Accelerate AOCL)
 set(GCTA_BLAS_LIBRARY "" CACHE FILEPATH "Primary BLAS library (OpenBLAS/MKL only). E.g. /usr/lib/x86_64-linux-gnu/libopenblas.so or /opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so")
 set(GCTA_LAPACKE_LIBRARY "" CACHE FILEPATH "Separate LAPACKE library, if needed (e.g. /usr/lib/x86_64-linux-gnu/liblapacke.so for apt OpenBLAS). Leave empty if your BLAS library bundles LAPACKE (MKL, conda OpenBLAS).")
 set(GCTA_BLAS_INCLUDE_DIR "" CACHE PATH "Directory containing BLAS/LAPACK headers (OpenBLAS/MKL only). E.g. /usr/include/x86_64-linux-gnu/openblas or /opt/intel/oneapi/mkl/latest/include")
@@ -271,8 +271,11 @@ endif()
 if(APPLE AND _GCTA_BLAS STREQUAL "MKL")
     message(FATAL_ERROR "MKL is not supported on macOS. Use Accelerate or OpenBLAS.")
 endif()
+if(APPLE AND _GCTA_BLAS STREQUAL "AOCL")
+    message(FATAL_ERROR "AOCL is not supported on macOS. Use Accelerate or OpenBLAS.")
+endif()
 if(NOT APPLE AND _GCTA_BLAS STREQUAL "Accelerate")
-    message(FATAL_ERROR "Accelerate is only available on macOS. Use MKL or OpenBLAS.")
+    message(FATAL_ERROR "Accelerate is only available on macOS. Use MKL, OpenBLAS, or AOCL.")
 endif()
 
 if(_GCTA_BLAS STREQUAL "Accelerate")
@@ -303,8 +306,8 @@ if(_GCTA_BLAS STREQUAL "Accelerate")
     list(APPEND GCTA_BLAS_DEFINES      GCTA_USE_ACCELERATE ACCELERATE_NEW_LAPACK EIGEN_USE_BLAS EIGEN_USE_LAPACK)
     set(GCTA_BLAS_PROVIDER "Accelerate" CACHE INTERNAL "")
 
-elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL")
-    # Both OpenBLAS and MKL require the user to supply explicit paths.
+elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL" OR _GCTA_BLAS STREQUAL "AOCL")
+    # OpenBLAS, MKL, and AOCL all require the user to supply explicit paths.
     # This avoids the fragile FindBLAS / BLA_VENDOR linker-probe machinery.
     # For MKL, pass libmkl_rt.so (the single-library interface) and set
     # MKL_THREADING_LAYER=GNU in the environment at runtime to use libgomp.
@@ -314,14 +317,17 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL")
             "Examples:\n"
             "  OpenBLAS: -DGCTA_BLAS_LIBRARY=/usr/lib/x86_64-linux-gnu/libopenblas.so\n"
             "            -DGCTA_LAPACKE_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapacke.so\n"
-            "  MKL:      -DGCTA_BLAS_LIBRARY=/opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so")
+            "  MKL:      -DGCTA_BLAS_LIBRARY=/opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so\n"
+            "  AOCL:     -DGCTA_BLAS_LIBRARY=/opt/AMD/aocl/aocl-linux-gcc-5.0.0/gcc/lib/libblis.so\n"
+            "            -DGCTA_LAPACKE_LIBRARY=/opt/AMD/aocl/aocl-linux-gcc-5.0.0/gcc/lib/libflame.so")
     endif()
     if(NOT GCTA_BLAS_INCLUDE_DIR)
         message(FATAL_ERROR
             "GCTA_BLAS_INCLUDE_DIR must be set for the ${_GCTA_BLAS} backend.\n"
             "Examples:\n"
             "  OpenBLAS: -DGCTA_BLAS_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/openblas\n"
-            "  MKL:      -DGCTA_BLAS_INCLUDE_DIR=/opt/intel/oneapi/mkl/latest/include")
+            "  MKL:      -DGCTA_BLAS_INCLUDE_DIR=/opt/intel/oneapi/mkl/latest/include\n"
+            "  AOCL:     -DGCTA_BLAS_INCLUDE_DIR=/opt/AMD/aocl/aocl-linux-gcc-5.0.0/gcc/include")
     endif()
     if(NOT EXISTS "${GCTA_BLAS_LIBRARY}")
         message(FATAL_ERROR "GCTA_BLAS_LIBRARY does not exist: ${GCTA_BLAS_LIBRARY}")
@@ -359,13 +365,16 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL")
     if(_GCTA_BLAS STREQUAL "OpenBLAS")
         list(APPEND GCTA_BLAS_DEFINES GCTA_USE_OPENBLAS EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
         set(GCTA_BLAS_PROVIDER "OpenBLAS" CACHE INTERNAL "")
+    elseif(_GCTA_BLAS STREQUAL "AOCL")
+        list(APPEND GCTA_BLAS_DEFINES GCTA_USE_AOCL EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
+        set(GCTA_BLAS_PROVIDER "AOCL" CACHE INTERNAL "")
     else()
         list(APPEND GCTA_BLAS_DEFINES GCTA_USE_MKL EIGEN_USE_MKL_ALL)
         set(GCTA_BLAS_PROVIDER "MKL" CACHE INTERNAL "")
     endif()
 
 else()
-    message(FATAL_ERROR "Unknown GCTA_BLAS_BACKEND: '${GCTA_BLAS_BACKEND}'. Use Auto, OpenBLAS, MKL, or Accelerate.")
+    message(FATAL_ERROR "Unknown GCTA_BLAS_BACKEND: '${GCTA_BLAS_BACKEND}'. Use Auto, OpenBLAS, MKL, Accelerate, or AOCL.")
 endif()
 
 message(STATUS "BLAS/LAPACK provider: ${GCTA_BLAS_PROVIDER}")
