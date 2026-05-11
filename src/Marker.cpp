@@ -1049,7 +1049,7 @@ MarkerParam Marker::getMarkerParams(int part_num){
     }
 }
 
-
+#ifdef BGEN_SUPPORT
 void Marker::read_bgen(string bgen_file){
     LOGGER << "Extracting biallelic SNPs from bgen [" << bgen_file << "]..." << std::endl;
     FILE* h_bgen = fopen(bgen_file.c_str(), "rb");
@@ -1187,6 +1187,7 @@ void Marker::read_bgen(string bgen_file){
         LOGGER.e(0, "no SNP remains for further analysis.");
     }
 }
+#endif
 
 uint32_t Marker::count_raw(int part) {
     if(part == -1){

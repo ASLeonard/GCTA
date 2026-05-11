@@ -122,11 +122,12 @@ private:
     static std::set<string> allowed_chrs;
     std::vector<MarkerParam> markerParams;
 
-   #ifdef BGEN_SUPPORT
-    //bgen
     uint64_t maxGeno1ByteSize = 0;
 
     std::vector<uint64_t> byte_size;
+   #ifdef BGEN_SUPPORT
+    //bgen
+
 
     void read_bgen(string bgen_file);
     void read_mbgen(string mbgen_file);
