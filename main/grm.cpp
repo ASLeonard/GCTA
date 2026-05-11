@@ -567,47 +567,106 @@ void gcta::save_grm(std::string grm_file, std::string keep_indi_file, std::strin
 void gcta::merge_grm(std::string merge_grm_file) {
     std::vector<std::string> grm_files, grm_id;
     read_grm_filenames(merge_grm_file, grm_files);
+    int K = (int)grm_files.size();
 
     int f = 0, i = 0, j = 0;
-    for (f = 0; f < grm_files.size(); f++) {
+    for (f = 0; f < K; f++) {
         read_grm(grm_files[f], grm_id, false, true);
         update_id_map_kp(grm_id, _id_map, _keep);
     }
     std::vector<std::string> uni_id;
-    for (i = 0; i < _keep.size(); i++) uni_id.push_back(_fid[_keep[i]] + ":" + _pid[_keep[i]]);
+    for (i = 0; i < (int)_keep.size(); i++) uni_id.push_back(_fid[_keep[i]] + ":" + _pid[_keep[i]]);
     _n = uni_id.size();
     if (_n == 0) LOGGER.e(0, "no individual is in common among the GRM files.");
     else LOGGER << _n << " individuals in common in the GRM files." << std::endl;
 
-    std::vector<int> kp;
-    eigenMatrix grm = eigenMatrix::Zero(_n, _n);
-    eigenMatrix grm_N = eigenMatrix::Zero(_n, _n);
-    for (f = 0; f < grm_files.size(); f++) {
-        LOGGER << "Reading the GRM from the " << f + 1 << "th file ..." << std::endl;
-        read_grm(grm_files[f], grm_id);
-        StrFunc::match(uni_id, grm_id, kp);
+    // Check whether all files share the same individuals in the same order.
+    // If so, files can be streamed row-by-row (O(K*n) extra memory instead of O(K*n^2)).
+    bool streaming = true;
+    for (f = 0; f < K && streaming; f++) {
+        std::vector<std::string> file_id;
+        int nf = read_grm_id(grm_files[f], file_id, false, false);
+        if (nf != _n) { streaming = false; break; }
+        std::vector<int> kp;
+        StrFunc::match(uni_id, file_id, kp);
         for (i = 0; i < _n; i++) {
-            for (j = 0; j <= i; j++) {
-                if (kp[i] >= kp[j]) {
-                    grm(i, j) += _grm(kp[i], kp[j]) * _grm_N(kp[i], kp[j]);
-                    grm_N(i, j) += _grm_N(kp[i], kp[j]);
-                } else {
-                    grm(i, j) += _grm(kp[j], kp[i]) * _grm_N(kp[j], kp[i]);
-                    grm_N(i, j) += _grm_N(kp[j], kp[i]);
+            if (kp[i] != i) { streaming = false; break; }
+        }
+    }
+
+    if (streaming) {
+        LOGGER << "Sample order is consistent across files; using streaming merge." << std::endl;
+        _grm.resize(_n, _n);
+        _grm_N.resize(_n, _n);
+
+        // Open all source file descriptors up front; reads will be sequential.
+        std::vector<int> bin_fds(K, -1), N_fds(K, -1);
+        for (f = 0; f < K; f++) {
+            bin_fds[f] = open((grm_files[f] + ".grm.bin").c_str(), O_RDONLY);
+            if (bin_fds[f] < 0) LOGGER.e(0, "cannot open [" + grm_files[f] + ".grm.bin] to read.");
+            N_fds[f] = open((grm_files[f] + ".grm.N.bin").c_str(), O_RDONLY);
+            if (N_fds[f] < 0) LOGGER.e(0, "cannot open [" + grm_files[f] + ".grm.N.bin] to read.");
+        }
+
+        std::vector<float> vbuf(_n), nbuf(_n);
+        std::vector<double> wsum(_n), wtN(_n);
+
+        for (i = 0; i < _n; i++) {
+            int row_len = i + 1;
+            ssize_t expect = (ssize_t)row_len * sizeof(float);
+            std::fill(wsum.begin(), wsum.begin() + row_len, 0.0);
+            std::fill(wtN.begin(),  wtN.begin()  + row_len, 0.0);
+            for (f = 0; f < K; f++) {
+                if (::read(bin_fds[f], vbuf.data(), expect) != expect)
+                    LOGGER.e(0, "unexpected end of file in [" + grm_files[f] + ".grm.bin].");
+                if (::read(N_fds[f],   nbuf.data(), expect) != expect)
+                    LOGGER.e(0, "unexpected end of file in [" + grm_files[f] + ".grm.N.bin].");
+                for (j = 0; j < row_len; j++) {
+                    wsum[j] += (double)vbuf[j] * (double)nbuf[j];
+                    wtN[j]  += (double)nbuf[j];
+                }
+            }
+            for (j = 0; j < row_len; j++) {
+                double v = (wtN[j] == 0.0) ? 0.0 : wsum[j] / wtN[j];
+                _grm(i, j) = _grm(j, i) = v;
+                _grm_N(i, j) = _grm_N(j, i) = (float)wtN[j];
+            }
+        }
+
+        for (f = 0; f < K; f++) { close(bin_fds[f]); close(N_fds[f]); }
+    } else {
+        LOGGER << "Warning: sample ordering not consistent across GRM files; falling back to bulk merge." << std::endl;
+
+        std::vector<int> kp;
+        eigenMatrix grm   = eigenMatrix::Zero(_n, _n);
+        eigenMatrix grm_N = eigenMatrix::Zero(_n, _n);
+        for (f = 0; f < K; f++) {
+            LOGGER << "Reading the GRM from the " << f + 1 << "th file ..." << std::endl;
+            read_grm(grm_files[f], grm_id);
+            StrFunc::match(uni_id, grm_id, kp);
+            #pragma omp parallel for schedule(dynamic, 64) private(j)
+            for (i = 0; i < _n; i++) {
+                for (j = 0; j <= i; j++) {
+                    int r = std::max(kp[i], kp[j]);
+                    int c = std::min(kp[i], kp[j]);
+                    grm(i, j)   += _grm(r, c) * _grm_N(r, c);
+                    grm_N(i, j) += _grm_N(r, c);
                 }
             }
         }
-    }
-    for (i = 0; i < _n; i++) {
-        for (j = 0; j <= i; j++) {
-            if (grm_N(i, j) == 0) _grm(i, j) = 0;
-            else _grm(i, j) = grm(i, j) / grm_N(i, j);
-            _grm_N(i, j) = grm_N(i, j);
+        _grm.resize(_n, _n);
+        _grm_N.resize(_n, _n);
+        #pragma omp parallel for schedule(dynamic, 64) private(j)
+        for (i = 0; i < _n; i++) {
+            for (j = 0; j <= i; j++) {
+                double v = (grm_N(i, j) == 0) ? 0.0 : grm(i, j) / grm_N(i, j);
+                _grm(i, j) = _grm(j, i) = v;
+                _grm_N(i, j) = _grm_N(j, i) = (float)grm_N(i, j);
+            }
         }
     }
-    grm.resize(0, 0);
-    grm_N.resize(0, 0);
-    LOGGER << "\n" << grm_files.size() << " GRMs have been merged together." << std::endl;
+
+    LOGGER << "\n" << K << " GRMs have been merged together." << std::endl;
 }
 
 void gcta::align_grm(std::string m_grm_file) {
