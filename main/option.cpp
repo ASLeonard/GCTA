@@ -554,8 +554,6 @@ void option(int option_num, char* option_str[])
                 i--;
             } else {
                 pca_approx_flag = argv[i];
-                if (pca_approx_flag != "Lanczos" && pca_approx_flag != "SVD")
-                    LOGGER.e(0, "--pca-approx: unrecognised method '" + pca_approx_flag + "'. Use 'Lanczos' or 'SVD'.");
             }
             LOGGER << "--pca-approx " << pca_approx_flag << std::endl;
         } else if (flag == "--pc-loading") {

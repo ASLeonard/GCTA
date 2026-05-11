@@ -21,8 +21,7 @@
 #include "Logger.h"
 #include "StrFunc.h"
 
-// Constant for missing dosage values
-const double DOSAGE_NA = std::numeric_limits<double>::infinity();
+// (DOSAGE_NA is declared in gcta.h)
 
 gcta::gcta(int autosome_num, double rm_ld_cutoff, std::string out)
 {
@@ -150,7 +149,7 @@ void gcta::make_uni_id(std::vector<std::string> &uni_id, std::map<std::string, i
         uni_id[i] = _fid[_keep[i]] + ":" + _pid[_keep[i]];
         uni_id_map.emplace(uni_id[i], static_cast<int>(i));
     }
-}
+}   
 
 void gcta::init_keep() {
     _keep.clear();
@@ -336,213 +335,115 @@ void gcta::read_bedfile(std::string bedfile)
  *   // Now _geno_dose matrix is filled with dosage values
  */
 
-// Helper function: Convert PLINK BED genotype bits to reference allele count
-// Returns: -1 for missing, 0-2 for reference allele count
-inline int gcta::bed_to_ref_allele_count(bool bit1, bool bit2, int snp_indx) {
-    // Check for missing genotype (01 in original encoding)
-    if (bit2 && !bit1) {
-        return -1; // Missing
-    }
-    
-    // Valid genotype: bit1 + bit2 gives count of allele1
-    int geno = bit1 + bit2; // geno: 2=homA1, 1=het, 0=homA2
-    
-    // Convert to reference allele count
-    if (_allele1[_include[snp_indx]] == _ref_A[_include[snp_indx]]) {
-        // allele1 is reference
-        return geno;
-    } else if (_allele2[_include[snp_indx]] == _ref_A[_include[snp_indx]]) {
-        // allele2 is reference
-        return 2 - geno;
-    } else {
-        // Neither allele matches reference (shouldn't happen)
-        LOGGER.e(0, "Reference allele [" + _ref_A[_include[snp_indx]] +
-                 "] for SNP [" + _snp_name[_include[snp_indx]] +
-                 "] doesn't match either allele1 [" + _allele1[_include[snp_indx]] +
-                 "] or allele2 [" + _allele2[_include[snp_indx]] + "]");
-        return -1; // unreachable
-    }
-}
-
-//TODO: can we use Eigen::map for faster memory loading and decoding?
 void gcta::read_bed_dosage(std::string bedfile)
 {
-    // This function reads plink bed files and fills _geno_dose matrix
-    // with dosage values calculated from genotypes and allele frequencies
-    // Uses a two-pass approach to avoid loading all genotypes into memory
-    
-    int i = 0, j = 0, k = 0;
-    
-    // Flag for reading individuals and SNPs
     std::vector<int> rindi, rsnp;
     get_rindi(rindi);
     get_rsnp(rsnp);
-    
+
     if (_include.size() == 0) LOGGER.e(0, "no SNP is retained for analysis.");
     if (_keep.size() == 0) LOGGER.e(0, "no individual is retained for analysis.");
-    
-    // Set dosage flag
+
     _dosage_flag = true;
-    
-    // Initialize _geno_dose matrix
-    _geno_dose.clear();
-    _geno_dose.resize(_keep.size());
-    for (i = 0; i < _keep.size(); i++) {
-        _geno_dose[i].resize(_include.size());
-    }
-    
-    LOGGER << "Reading PLINK BED file from [" + bedfile + "] in SNP-major format ..." << std::endl;
-    
-    // Calculate allele frequencies using _mu
-    _mu.clear();
-    _mu.resize(_snp_num, 0.0);
-    
-    // First pass: calculate allele frequencies
-    {
-        std::fstream BIT(bedfile.c_str(), std::ios::in | std::ios::binary);
-        if (!BIT) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
-        
-        char ch[1];
-        std::bitset<8> b;
-        bool missing_warned = false;
-        
-        // Skip the first three bytes (magic numbers)
-        for (i = 0; i < 3; i++) BIT.read(ch, 1);
-        
-        int snp_indx = 0;
-        for (j = 0, snp_indx = 0; j < _snp_num; j++) {
-            if (!rsnp[j]) {
-                // Skip SNPs not in _include
-                for (i = 0; i < _indi_num; i += 4) BIT.read(ch, 1);
-                continue;
-            }
-            
-            // Count alleles for frequency calculation
-            int allele_count = 0;
-            int valid_count = 0;
-            
-            for (i = 0; i < _indi_num;) {
-                BIT.read(ch, 1); //TODO: this is fixed right?
-                if (!BIT) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
-                b = ch[0];
-                
-                k = 0;
-                while (k < 7 && i < _indi_num) {
-                    bool bit1 = !b[k++];
-                    bool bit2 = !b[k++];
-                    
-                    if (rindi[i]) {
-                        int ref_allele_count = bed_to_ref_allele_count(bit1, bit2, snp_indx);
-                        
-                        if (ref_allele_count == -1) {
-                            // Missing genotype
-                            if (!missing_warned) {
-                                LOGGER.w(0, "missing values detected in the genotype data.");
-                                missing_warned = true;
-                            }
-                        } else {
-                            allele_count += ref_allele_count;
-                            valid_count++;
-                        }
+
+    const int n = static_cast<int>(_keep.size());
+    const int m = static_cast<int>(_include.size());
+    const size_t bytes_per_snp = (static_cast<size_t>(_indi_num) + 3) / 4;
+
+    // Load entire file into memory — avoids repeated disk I/O across SNPs.
+    std::ifstream BIT(bedfile.c_str(), std::ios::in | std::ios::binary);
+    if (!BIT) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
+    LOGGER << "Reading PLINK BED file from [" + bedfile + "] in SNP-major format (dosage mode) ..." << std::endl;
+    BIT.seekg(0, std::ios::end);
+    const size_t file_size = static_cast<size_t>(BIT.tellg());
+    BIT.seekg(0, std::ios::beg);
+    std::vector<unsigned char> bed_buf(file_size);
+    BIT.read(reinterpret_cast<char*>(bed_buf.data()), file_size);
+    BIT.close();
+
+    // Size _geno_dose and _mu compactly (dense SNP index 0..m-1).
+    _geno_dose.setZero(n, m);
+    _mu.assign(m, 0.0);
+
+    // BED 2-bit encoding (per pair of raw bits, LSB-first within byte):
+    //   00 = homA1,  01 = missing,  10 = het,  11 = homA2
+    // Per-SNP LUT maps raw 2-bit value → ref-allele count as float
+    // (or DOSAGE_NA for missing). Built once per SNP from the flip flag.
+    //
+    // Single pass: decode raw ref-allele counts into _geno_dose AND
+    // accumulate allele_count/valid_count for _mu simultaneously.
+    // For the nonadditive model a second O(n×m) in-memory transform is
+    // applied afterward — far cheaper than a second file scan.
+
+    bool missing_warned = false;
+    size_t buf_pos = 3; // skip 3-byte BED magic
+
+    int snp_indx = 0;
+    for (int j = 0; j < _snp_num; j++) {
+        if (!rsnp[j]) { buf_pos += bytes_per_snp; continue; }
+
+        // Precompute flip flag and 4-entry decode LUT for this SNP.
+        const int full_idx = _include[snp_indx];
+        const bool flip = (_allele2[full_idx] == _ref_A[full_idx]);
+        // lut[raw_2bit] = ref-allele count {0,1,2} or -1 (missing).
+        // raw: 00=homA1(2), 01=missing(-1), 10=het(1), 11=homA2(0)
+        const int8_t lut[4] = {
+            static_cast<int8_t>(flip ? 0 : 2),  // 00 homA1
+            -1,                                  // 01 missing
+            1,                                   // 10 het (same either way)
+            static_cast<int8_t>(flip ? 2 : 0),  // 11 homA2
+        };
+
+        int allele_count = 0, valid_count = 0;
+        int indi_indx = 0;
+
+        for (int i = 0; i < _indi_num; ) {
+            if (buf_pos >= file_size)
+                LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
+            const unsigned char byte = bed_buf[buf_pos++];
+
+            for (int bit = 0; bit < 8 && i < _indi_num; bit += 2, i++) {
+                if (!rindi[i]) continue;
+                const int8_t g = lut[(byte >> bit) & 3];
+                if (g < 0) {
+                    if (!missing_warned) {
+                        LOGGER.w(0, "missing values detected in the genotype data.");
+                        missing_warned = true;
                     }
-                    i++;
+                    _geno_dose(indi_indx, snp_indx) = DOSAGE_NA;
+                } else {
+                    _geno_dose(indi_indx, snp_indx) = static_cast<float>(g);
+                    allele_count += g;
+                    valid_count++;
                 }
+                indi_indx++;
             }
-            
-            // Calculate mean reference allele count (dosage: 0-2)
-            if (valid_count > 0) {
-                _mu[_include[snp_indx]] = (double)allele_count / (double)valid_count;
-            } else {
-                _mu[_include[snp_indx]] = 0.0;
-            }
-            
-            snp_indx++;
         }
-        
-        BIT.clear();
-        BIT.close();
+
+        _mu[snp_indx] = (valid_count > 0) ? static_cast<double>(allele_count) / valid_count : 0.0;
+        snp_indx++;
     }
-    
-    LOGGER << "Allele frequencies calculated from genotype data." << std::endl;
-    
-    // Second pass: fill _geno_dose matrix with dosage values
-    {
-        std::fstream BIT(bedfile.c_str(), std::ios::in | std::ios::binary);
-        if (!BIT) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
-        
-        char ch[1];
-        std::bitset<8> b;
-        
-        // Skip the first three bytes
-        for (i = 0; i < 3; i++) BIT.read(ch, 1);
-        
-        int snp_indx = 0;
-        for (j = 0, snp_indx = 0; j < _snp_num; j++) {
-            if (!rsnp[j]) {
-                // Skip SNPs not in _include
-                for (i = 0; i < _indi_num; i += 4) BIT.read(ch, 1);
-                continue;
+
+    // For the nonadditive model transform raw counts in-place using the now-known _mu.
+    // Additive: raw ref-allele count IS the dosage; nothing more to do.
+    if (_genetic_model == GeneticModel::NONADDITIVE) {
+        for (int sj = 0; sj < m; sj++) {
+            const float p2 = static_cast<float>(_mu[sj]); // 2*p in dosage (0-2) scale
+            for (int i = 0; i < n; i++) {
+                float d = _geno_dose(i, sj);
+                if (d >= DOSAGE_NA) continue;
+                if      (d < 0.5f) d = 0.0f;
+                else if (d < 1.5f) d = p2;           // het: 2p
+                else               d = 2.0f * p2 - 2.0f; // homA1: 4p-2
+                _geno_dose(i, sj) = d;
             }
-            
-            // Get allele frequency for reference allele
-            double p = _mu[_include[snp_indx]] / 2.0; // Convert from dosage (0-2) to frequency (0-1)
-            
-            int indi_indx = 0;
-            for (i = 0; i < _indi_num;) {
-                BIT.read(ch, 1);
-                if (!BIT) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
-                b = ch[0];
-                
-                k = 0;
-                while (k < 7 && i < _indi_num) {
-                    bool bit1 = !b[k++];
-                    bool bit2 = !b[k++];
-                    
-                    if (rindi[i]) {
-                        int geno = bed_to_ref_allele_count(bit1, bit2, snp_indx);
-                        
-                        if (geno == -1) {
-                            // Missing genotype
-                            _geno_dose[indi_indx][snp_indx] = DOSAGE_NA;
-                        } else {
-                            // Valid genotype: convert to dosage based on model
-                            float dosage = 0.0f;
-                            
-                            switch (_genetic_model) {
-                                case GeneticModel::ADDITIVE:
-                                    // Additive model: RR=0, RA=1, AA=2
-                                    dosage = (float)geno;
-                                    break;
-                                    
-                                case GeneticModel::NONADDITIVE:
-                                    // Nonadditive model: RR=0, RA=2p, AA=4p-2
-                                    if (geno == 0) {
-                                        dosage = 0.0f; // RR (homozygous non-reference)
-                                    } else if (geno == 1) {
-                                        dosage = (float)(2.0 * p); // RA (heterozygote)
-                                    } else { // geno == 2
-                                        dosage = (float)(4.0 * p - 2.0); // AA (homozygous reference)
-                                    }
-                                    break;
-                            }
-                            
-                            _geno_dose[indi_indx][snp_indx] = dosage;
-                        }
-                        indi_indx++;
-                    }
-                    i++;
-                }
-            }
-            snp_indx++;
         }
-        
-        BIT.clear();
-        BIT.close();
     }
-    
-    LOGGER << "Dosage data calculated for " << _keep.size() << " individuals and " 
-           << _include.size() << " SNPs from [" + bedfile + "] using " << geneticModelToString(_genetic_model) << " model." << std::endl;
-    
+
+    LOGGER << "Dosage data for " << n << " individuals and " << m
+           << " SNPs loaded from [" + bedfile + "] ("
+           << geneticModelToString(_genetic_model) << " model)." << std::endl;
+
     update_fam(rindi);
     update_bim(rsnp);
 }
@@ -651,6 +552,85 @@ void gcta::update_fam(std::vector<int> &rindi) {
         _keep[i] = i;
         _id_map.insert(std::pair<std::string, int>(_fid[i] + ":" + _pid[i], i));
     }
+}
+
+// Compact _geno_dose column (SNP) dimension so that _include[j]==j after this call.
+// All loaders store _geno_dose(dense_indi, dense_snp_within_include); after a
+// post-load MAF/Rsq filter _include becomes sparse.  This repacks columns to
+// the current m SNPs, then calls update_bim to reset _include to identity.
+void gcta::compact_dosage_data() {
+    if (!_dosage_flag) return;
+    const int n = static_cast<int>(_keep.size());
+    const int m = static_cast<int>(_include.size());
+    if (m == 0 || n == 0 || _geno_dose.size() == 0) return;
+
+    // Early exit: already compact (cols == m and _include is identity).
+    if (_geno_dose.cols() == m) {
+        bool identity = true;
+        for (int j = 0; j < m; j++) {
+            if (_include[j] != j) { identity = false; break; }
+        }
+        if (identity) return;
+    }
+
+    // Repack columns: gather the _include[j]-th column into position j.
+    // _keep[i]==i is an invariant of the dosage loading paths.
+    Eigen::MatrixXf new_dose(n, m);
+    for (int j = 0; j < m; j++) new_dose.col(j) = _geno_dose.col(_include[j]);
+    _geno_dose = std::move(new_dose);
+
+    // Compact _mu if already computed.
+    if (!_mu.empty()) {
+        std::vector<double> mu(m);
+        for (int j = 0; j < m; j++) mu[j] = _mu[_include[j]];
+        _mu = std::move(mu);
+    }
+
+    // Compact metadata and reset _include[j]=j via update_bim.
+    std::vector<int> rsnp(_snp_num, 0);
+    for (int idx : _include) rsnp[idx] = 1;
+    update_bim(rsnp);
+}
+
+// Compact _snp_1/_snp_2 and _mu so that their outer index equals the filtered
+// SNP index directly (i.e. _include[j] == j after this call).  This eliminates
+// the scatter-gather indirection in every subsequent hot loop.  Safe to call
+// multiple times — returns immediately when already compact.
+void gcta::compact_snp_data() {
+    if (_dosage_flag) { compact_dosage_data(); return; }
+    const int m = static_cast<int>(_include.size());
+    if (m == 0) return;
+
+    // Early exit: already compact when _snp_1 has exactly m rows and _include is identity.
+    if (static_cast<int>(_snp_1.size()) == m) {
+        bool identity = true;
+        for (int j = 0; j < m; j++) {
+            if (_include[j] != j) { identity = false; break; }
+        }
+        if (identity) return;
+    }
+
+    // Reorder _snp_1/_snp_2 rows to match the current _include order.
+    // _keep is always identity after update_fam, so no inner reindexing needed.
+    std::vector<std::vector<bool>> s1(m), s2(m);
+    for (int j = 0; j < m; j++) {
+        s1[j] = std::move(_snp_1[_include[j]]);
+        s2[j] = std::move(_snp_2[_include[j]]);
+    }
+    _snp_1 = std::move(s1);
+    _snp_2 = std::move(s2);
+
+    // Compact _mu if already computed.
+    if (!_mu.empty()) {
+        std::vector<double> mu(m);
+        for (int j = 0; j < m; j++) mu[j] = _mu[_include[j]];
+        _mu = std::move(mu);
+    }
+
+    // Compact all metadata arrays and reset _include[j]=j via update_bim.
+    std::vector<int> rsnp(_snp_num, 0);
+    for (int idx : _include) rsnp[idx] = 1;
+    update_bim(rsnp);
 }
 
 // Read the multiple bfiles
@@ -909,26 +889,30 @@ void read_single_bedfile(std::string bedfile, std::vector<std::pair<int,int>> rs
     int i = 0, j = 0, k = 0, t1 = 0, t2= 0, nsnp_chr = rsnp.size(), nindi_chr = rindi.size();
 
     // Read bed file
-    char ch[1];
     std::bitset<8> b;
     std::fstream BIT(bedfile.c_str(), std::ios::in | std::ios::binary);
     if(!BIT) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
     if(msg_flag) LOGGER.i(0, "Reading PLINK BED file from [" + bedfile + "] in SNP-major format ...");
 
+    int bytes_per_snp = (nindi_chr + 3) / 4;
+    std::vector<char> snp_buf(bytes_per_snp);
+
     // skip the first three bytes
-    for (i = 0; i < 3; i++) BIT.read(ch, 1); 
+    char header[3];
+    BIT.read(header, 3);
     int snp_indx = 0, indi_indx = 0;
     // Read genotype in SNP-major mode, 00: homozygote AA; 11: homozygote BB; 01: hetezygote; 10: missing
     for(j = 0, t1 = 0, snp_indx = 0; t1 < nsnp_chr; j++) { 
         if(j!=rsnp[t1].first) {
-            for (i = 0; i < nindi_chr; i += 4) BIT.read(ch, 1);
+            BIT.seekg(bytes_per_snp, std::ios::cur);
             continue;
         }
         snp_indx = rsnp[t1].second;
+        BIT.read(snp_buf.data(), bytes_per_snp);
+        if (!BIT) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
+        int byte_idx = 0;
         for (i = 0, indi_indx = 0; i < nindi_chr;) {
-            BIT.read(ch, 1);
-            if (!BIT) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
-            b = ch[0];
+            b = snp_buf[byte_idx++];
             k = 0;
             while (k < 7 && i < nindi_chr) { // change code: 11 for AA; 00 for BB;
                 if (!rindi[i]) k += 2;
@@ -1117,7 +1101,7 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
     LOGGER << "Reading dosage data from [" + zdosefile + "] in individual-major format (Note: may use huge RAM)." << std::endl;
     _fid.clear();
     _pid.clear();
-    _geno_dose.clear();
+    _geno_dose.resize(0, 0);
 
     std::vector<int> kp_it;
     while (std::getline(zinf, buf)) {
@@ -1151,8 +1135,7 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
     boost::iostreams::filtering_istream zinf2;
     zinf2.push(boost::iostreams::gzip_decompressor());
     zinf2.push(raw_file2);
-    _geno_dose.resize(_indi_num);
-    for (line = 0; line < _indi_num; line++) _geno_dose[line].resize(_include.size());
+    _geno_dose.setZero(_indi_num, static_cast<int>(_include.size()));
     for (line = 0, k = 0; line < kp_it.size(); line++) {
         std::getline(zinf2, buf);
         if (kp_it[line] == 0) continue;
@@ -1170,7 +1153,7 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
                 f_buf = DOSAGE_NA;
             }
             if (rsnp[i]) {
-                _geno_dose[k][j] = (f_buf);
+                _geno_dose(k, j) = static_cast<float>(f_buf);
                 j++;
             }
         }
@@ -1229,7 +1212,7 @@ void gcta::read_imp_dose_mach(std::string dosefile, std::string kp_indi_file, st
     LOGGER << "Reading dosage data from [" + dosefile + "] in individual-major format (Note: may use huge RAM)." << std::endl;
     _fid.clear();
     _pid.clear();
-    _geno_dose.clear();
+    _geno_dose.resize(0, 0);
 
     std::vector<int> kp_it;
     while (std::getline(idose, buf)) {
@@ -1258,8 +1241,7 @@ void gcta::read_imp_dose_mach(std::string dosefile, std::string kp_indi_file, st
     _indi_num = _fid.size();
 
     idose.open(dosefile.c_str());
-    _geno_dose.resize(_indi_num);
-    for (line = 0; line < _indi_num; line++) _geno_dose[line].resize(_include.size());
+    _geno_dose.setZero(_indi_num, static_cast<int>(_include.size()));
     for (line = 0, k = 0; line < kp_it.size(); line++) {
         std::getline(idose, buf);
         if (kp_it[line] == 0) continue;
@@ -1277,7 +1259,7 @@ void gcta::read_imp_dose_mach(std::string dosefile, std::string kp_indi_file, st
                 f_buf = DOSAGE_NA;
             }
             if (rsnp[i]) {
-                _geno_dose[k][j] = (f_buf);
+                _geno_dose(k, j) = static_cast<float>(f_buf);
                 j++;
             }
         }
@@ -1392,8 +1374,7 @@ void gcta::read_imp_dose_beagle(std::string zdosefile, std::string kp_indi_file,
     if (!blup_indi_file.empty()) read_indi_blup(blup_indi_file);
     if (!rm_indi_file.empty()) remove_indi(rm_indi_file);
 
-    _geno_dose.resize(_keep.size());
-    for (i = 0; i < _keep.size(); i++) _geno_dose[i].resize(_include.size());
+    _geno_dose.setZero(static_cast<int>(_keep.size()), static_cast<int>(_include.size()));
 
     std::vector<int> rindi;
     get_rindi(rindi);
@@ -1414,7 +1395,7 @@ void gcta::read_imp_dose_beagle(std::string zdosefile, std::string kp_indi_file,
         for (i = 0, j = 0; i < _indi_num; i++) {
             ss >> d_buf;
             if (rindi[i]) {
-                _geno_dose[j][k] = d_buf;
+                _geno_dose(j, k) = static_cast<float>(d_buf);
                 j++;
             }
         }
@@ -1504,6 +1485,7 @@ void gcta::dose2bed() {
     int i = 0, j = 0;
     double d_buf = 0.0;
 
+    compact_dosage_data(); // ensure _include[j]==j and _keep[i]==i
     LOGGER << "Converting dosage data into PLINK binary PED format ... " << std::endl;
     _snp_1.resize(_snp_num);
     _snp_2.resize(_snp_num);
@@ -1513,7 +1495,7 @@ void gcta::dose2bed() {
     }  
     for (i = 0; i < _include.size(); i++) {  
         for (j = 0; j < _keep.size(); j++) {
-           d_buf = _geno_dose[_keep[j]][_include[i]];
+           d_buf = _geno_dose(j, i);
             if (d_buf >= DOSAGE_NA) {
                 _snp_2[_include[i]][_keep[j]] = false;
                 _snp_1[_include[i]][_keep[j]] = true;
@@ -1907,8 +1889,8 @@ void gcta::mu_func(int j, std::vector<double> &fac) {
     const double mu_acc = 0.0;
     if (_dosage_flag) {
         for (i = 0; i < _keep.size(); i++) {
-            if (_geno_dose[_keep[i]][snp_idx] < DOSAGE_NA) {
-                _mu[snp_idx] += fac[i] * _geno_dose[_keep[i]][snp_idx];
+            if (_geno_dose(i, j) < DOSAGE_NA) {
+                _mu[snp_idx] += fac[i] * _geno_dose(i, j);
                 fcount += fac[i];
             }
         }
@@ -2045,6 +2027,7 @@ void gcta::read_indi_blup(std::string blup_indi_file) {
 
 bool gcta::make_XMat(Eigen::MatrixXf &X)
 {
+    compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
     LOGGER << "Recoding genotypes (individual major mode) ..." << std::endl;
@@ -2056,17 +2039,16 @@ bool gcta::make_XMat(Eigen::MatrixXf &X)
     #pragma omp parallel for private(j)
     for (i = 0; i < n; i++) {
         if (_dosage_flag) {
+            // After compact_dosage_data(): _keep[i]==i, _include[j]==j; direct access.
             for (j = 0; j < m; j++) {
-                if (_geno_dose[_keep[i]][_include[j]] < DOSAGE_NA) {
-                    if (_allele1[_include[j]] == _ref_A[_include[j]]) X(i,j) = _geno_dose[_keep[i]][_include[j]];
-                    else X(i,j) = 2.0 - _geno_dose[_keep[i]][_include[j]];
-                } 
-                else {
+                const float d = _geno_dose(i, j);
+                if (d < DOSAGE_NA) {
+                    X(i,j) = (_allele1[j] == _ref_A[j]) ? d : 2.0f - d;
+                } else {
                     X(i,j) = DOSAGE_NA;
                     have_mis = true;
                 }
             }
-            _geno_dose[i].clear();
         }
         else {
             for (j = 0; j < _include.size(); j++) {
@@ -2081,11 +2063,13 @@ bool gcta::make_XMat(Eigen::MatrixXf &X)
             }
         }
     }
+    if (_dosage_flag) _geno_dose.resize(0, 0); // free after copy into X
     return have_mis;
 }
 
 bool gcta::make_XMat_d(Eigen::MatrixXf &X)
 {
+    compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
     LOGGER << "Recoding genotypes for dominance effects (individual major mode) ..." << std::endl;
@@ -2097,20 +2081,20 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
     #pragma omp parallel for private(j)
     for (i = 0; i < n; i++) {
         if (_dosage_flag) {
+            // After compact_dosage_data(): _keep[i]==i, _include[j]==j; direct access.
             for (j = 0; j < m; j++) {
-                if (_geno_dose[_keep[i]][_include[j]] < DOSAGE_NA) {
-                    if (_allele1[_include[j]] == _ref_A[_include[j]]) X(i,j) = _geno_dose[_keep[i]][_include[j]];
-                    else X(i,j) = 2.0 - _geno_dose[_keep[i]][_include[j]];
-                    if (X(i,j) < 0.5) X(i,j) = 0.0;
-                    else if (X(i,j) < 1.5) X(i,j) = _mu[_include[j]];
-                    else X(i,j) = (2.0 * _mu[_include[j]] - 2.0);
-                } 
-                else {
+                const float d = _geno_dose(i, j);
+                if (d < DOSAGE_NA) {
+                    float g = (_allele1[j] == _ref_A[j]) ? d : 2.0f - d;
+                    if      (g < 0.5f) g = 0.0f;
+                    else if (g < 1.5f) g = static_cast<float>(_mu[j]);
+                    else               g = static_cast<float>(2.0 * _mu[j] - 2.0);
+                    X(i,j) = g;
+                } else {
                     X(i,j) = DOSAGE_NA;
                     have_mis = true;
                 }
             }
-            _geno_dose[i].clear();
         }
         else {
             for (j = 0; j < _include.size(); j++) {
@@ -2128,6 +2112,7 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
             }
         }
     }
+    if (_dosage_flag) _geno_dose.resize(0, 0); // free after copy into X
     return have_mis;
 }
 
@@ -2138,10 +2123,10 @@ void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag,
     unsigned long i = 0, j = 0, n = _keep.size(), m = _include.size();
     sd_SNP.resize(m);
     if (_dosage_flag) {
-        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - Eigen::VectorXf::Constant(n, _mu[_include[j]])).squaredNorm() / (n - 1.0);
+        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - Eigen::VectorXf::Constant(n, _mu[j])).squaredNorm() / (n - 1.0);
     } 
     else {
-        for (j = 0; j < m; j++) sd_SNP[j] = _mu[_include[j]]*(1.0 - 0.5 * _mu[_include[j]]);
+        for (j = 0; j < m; j++) sd_SNP[j] = _mu[j]*(1.0 - 0.5 * _mu[j]);
     }
     if (divid_by_std) {
         for (j = 0; j < m; j++) {
@@ -2154,7 +2139,7 @@ void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag,
     for (i = 0; i < n; i++) {
         for (j = 0; j < m; j++) {
             if (X(i,j) < DOSAGE_NA) {
-                X(i,j) -= _mu[_include[j]];
+                X(i,j) -= _mu[j];
                 if (divid_by_std) X(i,j) *= sd_SNP[j];
             } 
             else if (miss_with_mu) X(i,j) = 0.0;
@@ -2169,7 +2154,7 @@ void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag,
 
     #pragma omp parallel for private(j)
     for (i = 0; i < n; i++) {
-        if (_sex[_keep[i]] == 1) {
+        if (_sex[i] == 1) {
             for (j = 0; j < m; j++) {
                 if (X(i,j) < DOSAGE_NA) X(i,j) *= f_buf;
                 else if (miss_with_mu) X(i,j) = 0.0;
@@ -2188,14 +2173,14 @@ void gcta::std_XMat_d(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu
         #pragma omp parallel for private(i)
         for (j = 0; j < m; j++) {
             for (i = 0; i < n; i++) {
-                double d_buf = (X(i,j) - _mu[_include[j]]);
+                double d_buf = (X(i,j) - _mu[j]);
                 sd_SNP[j] += d_buf*d_buf;
             }
             sd_SNP[j] /= (n - 1.0);
         }
     } 
     else {
-        for (j = 0; j < m; j++) sd_SNP[j] = _mu[_include[j]]*(1.0 - 0.5 * _mu[_include[j]]);
+        for (j = 0; j < m; j++) sd_SNP[j] = _mu[j]*(1.0 - 0.5 * _mu[j]);
     }
     if (divid_by_std) {
         for (j = 0; j < m; j++) {
@@ -2207,7 +2192,7 @@ void gcta::std_XMat_d(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu
         for (j = 0; j < m; j++) sd_SNP[j] = sd_SNP[j] * sd_SNP[j];
     }
     std::vector<double> psq(m);
-    for (j = 0; j < m; j++) psq[j] = 0.5 * _mu[_include[j]] * _mu[_include[j]];
+    for (j = 0; j < m; j++) psq[j] = 0.5 * _mu[j] * _mu[j];
 
     #pragma omp parallel for private(j)
     for (i = 0; i < n; i++) {
@@ -2258,6 +2243,7 @@ void gcta::makex_eigenVector_std(int j, eigenVector &x, bool resize, double snp_
 void gcta::save_XMat(bool miss_with_mu, bool std)
 {
     if(std && _dosage_flag) LOGGER.e(0, "the --recode-std is invalid for dosage data.");
+    if (_dosage_flag) compact_dosage_data(); // ensure _include[j]==j, _keep[i]==i
     if ( (miss_with_mu || std) && _mu.empty()) calcu_mu();
 
     int i = 0, j = 0, m = _include.size();
@@ -2289,10 +2275,12 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
     for (i = 0; i < _keep.size(); i++) {
         zoutf << _fid[_keep[i]] << ' ' << _pid[_keep[i]] << ' ';
         if (_dosage_flag) {
+            // Post compact_dosage_data(): _keep[i]==i, _include[j]==j
             for (j = 0; j < _include.size(); j++) {
-                if (_geno_dose[_keep[i]][_include[j]] < DOSAGE_NA) {
-                    if (_allele1[_include[j]] == _ref_A[_include[j]]) x_buf = _geno_dose[_keep[i]][_include[j]];
-                    else x_buf = 2.0 - _geno_dose[_keep[i]][_include[j]];
+                const float d = _geno_dose(i, j);
+                if (d < DOSAGE_NA) {
+                    if (_allele1[_include[j]] == _ref_A[_include[j]]) x_buf = d;
+                    else x_buf = 2.0 - d;
                     if(std) x_buf = (x_buf - _mu[_include[j]]) * sd_SNP(j);
                     zoutf << x_buf << ' ';
                 } else {
@@ -2329,59 +2317,77 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
 bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
+    compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
-    int i = 0, j = 0, k = 0, n = _keep.size(), m = snp_indx.size();
-
+    const int n = _keep.size(), m = snp_indx.size();
     X.resize(n, m);
+
     if (_dosage_flag) {
-        #pragma omp parallel for private(j)
-        for (i = 0; i < n; i++) {
-            for (j = 0; j < m; j++) {
-                k = _include[snp_indx[j]];
-                if (_geno_dose[_keep[i]][k] < DOSAGE_NA) {
-                    if (_allele1[k] == _ref_A[k]) X(i,j) = _geno_dose[_keep[i]][k];
-                    else X(i,j) = 2.0 - _geno_dose[_keep[i]][k];
-                    X(i,j) -= _mu[k];
-                }
-                else {
-                    X(i,j) = 0.0;
+        // After compact_dosage_data(): _keep[i]==i, _include[j]==j; direct access.
+        #pragma omp parallel for schedule(static)
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < m; j++) {
+                const int k = snp_indx[j];
+                if (_geno_dose(i, k) < DOSAGE_NA) {
+                    X(i,j) = (_allele1[k] == _ref_A[k]) ? _geno_dose(i, k)
+                                                         : 2.0f - _geno_dose(i, k);
+                    X(i,j) -= static_cast<float>(_mu[k]);
+                } else {
+                    X(i,j) = 0.0f;
                 }
             }
-            //_geno_dose[i].clear();
         }
-    }
-    else{
-        // Precompute SNP indices and flip flags to avoid per-iteration string comparison
-        std::vector<int> snp_k(m);
-        std::vector<bool> snp_flip(m);
-        for (j = 0; j < m; j++) {
-            snp_k[j] = _include[snp_indx[j]];
+    } else {
+        // After compact_snp_data(): _include[j]==j and _keep[i]==i.
+        // Pre-cache per-SNP metadata once; cast mu to float to avoid repeated conversions.
+        std::vector<int>   snp_k(m);
+        std::vector<bool>  snp_flip(m);
+        std::vector<float> snp_mu(m);
+        for (int j = 0; j < m; j++) {
+            snp_k[j]    = snp_indx[j];   // _include[snp_indx[j]] == snp_indx[j]
             snp_flip[j] = (_allele1[snp_k[j]] != _ref_A[snp_k[j]]);
+            snp_mu[j]   = static_cast<float>(_mu[snp_k[j]]);
         }
-        #pragma omp parallel for private(j, k)
-        for (i = 0; i < n; i++) {
-            for (j = 0; j < m; j++) {
-                k = snp_k[j];
-                if (!_snp_1[k][_keep[i]] || _snp_2[k][_keep[i]]) {
-                    float geno = _snp_1[k][_keep[i]] + _snp_2[k][_keep[i]];
-                    if (snp_flip[j]) geno = 2.0f - geno;
-                    X(i,j) = geno - _mu[k];
+        // Column-parallel: each thread writes one contiguous Eigen column (column-major)
+        #pragma omp parallel for schedule(static)
+        for (int j = 0; j < m; j++) {
+            const int   k    = snp_k[j];
+            const bool  flip = snp_flip[j];
+            const float mu_k = snp_mu[j];
+            const auto& s1   = _snp_1[k];
+            const auto& s2   = _snp_2[k];
+            auto col = X.col(j);
+            for (int i = 0; i < n; i++) {
+                if (!s1[i] || s2[i]) {
+                    float geno = static_cast<float>(s1[i]) + static_cast<float>(s2[i]);
+                    if (flip) geno = 2.0f - geno;
+                    col(i) = geno - mu_k;
+                } else {
+                    col(i) = 0.0f;
                 }
-                else X(i,j) = 0.0;
             }
+        }
+        if (divid_by_std) {
+            #pragma omp parallel for schedule(static)
+            for (int j = 0; j < m; j++) {
+                const double sd = _mu[snp_k[j]] * (1.0 - 0.5 * _mu[snp_k[j]]);
+                if (sd > 1.0e-50)
+                    X.col(j) *= static_cast<float>(1.0 / std::sqrt(sd));
+            }
+            return true;
         }
     }
 
-    if(divid_by_std){
-        std::vector<double> sd_SNP(m);
-        for (j = 0; j < m; j++){
-            k = _include[snp_indx[j]];
-            sd_SNP[j] = _mu[k]*(1.0 - 0.5 * _mu[k]);
-            if (fabs(sd_SNP[j]) < 1.0e-50) sd_SNP[j] = 0.0;
-            else sd_SNP[j] = sqrt(1.0 / sd_SNP[j]);
-        } 
-        for (j = 0; j < m; j++) X.col(j) = X.col(j).array() * sd_SNP[j];
+    if (divid_by_std) {
+        // dosage path divid_by_std (serial, dosage only reaches here)
+        for (int j = 0; j < m; j++) {
+            const int k = snp_indx[j];
+            double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
+            if (fabs(sd) < 1.0e-50) sd = 0.0;
+            else sd = std::sqrt(1.0 / sd);
+            X.col(j) = X.col(j).array() * static_cast<float>(sd);
+        }
     }
 
     return true;
@@ -2390,36 +2396,71 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
 bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
+    compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
-    int i = 0, j = 0, k = 0, n = _keep.size(), m = snp_indx.size();
-
+    const int n = _keep.size(), m = snp_indx.size();
     X.resize(n, m);
-    #pragma omp parallel for private(j, k)
-    for (i = 0; i < n; i++) {
-        for (j = 0; j < m; j++) {
-            k = _include[snp_indx[j]];
-            if (!_snp_1[k][_keep[i]] || _snp_2[k][_keep[i]]) {
-                if (_allele1[k] == _ref_A[k]) X(i,j) = _snp_1[k][_keep[i]] + _snp_2[k][_keep[i]];
-                else X(i,j) = 2.0 - (_snp_1[k][_keep[i]] + _snp_2[k][_keep[i]]);
-                if (X(i,j) < 0.5) X(i,j) = 0.0;
-                else if (X(i,j) < 1.5) X(i,j) = _mu[k];
-                else X(i,j) = (2.0 * _mu[k] - 2.0);
-                X(i,j) -= 0.5 * _mu[k] * _mu[k];
-            } 
-            else X(i,j) = 0.0;
+
+    // Pre-cache per-SNP metadata; after compaction _include[j]==j for both paths.
+    std::vector<int>   snp_k(m);
+    std::vector<bool>  snp_flip(m);
+    std::vector<float> snp_mu(m);
+    std::vector<float> snp_psq(m);
+    for (int j = 0; j < m; j++) {
+        snp_k[j]    = snp_indx[j];
+        snp_flip[j] = (_allele1[snp_k[j]] != _ref_A[snp_k[j]]);
+        snp_mu[j]   = static_cast<float>(_mu[snp_k[j]]);
+        snp_psq[j]  = 0.5f * snp_mu[j] * snp_mu[j];
+    }
+
+    // Column-parallel fill (column-major layout: each col is contiguous)
+    #pragma omp parallel for schedule(static)
+    for (int j = 0; j < m; j++) {
+        const int   k    = snp_k[j];
+        const bool  flip = snp_flip[j];
+        const float mu_k = snp_mu[j];
+        const float psq  = snp_psq[j];
+        auto col = X.col(j);
+        if (_dosage_flag) {
+            // After compact_dosage_data(): _keep[i]==i; direct access.
+            for (int i = 0; i < n; i++) {
+                if (_geno_dose(i, k) < DOSAGE_NA) {
+                    float g = flip ? 2.0f - _geno_dose(i, k) : _geno_dose(i, k);
+                    if      (g < 0.5f) g = 0.0f;
+                    else if (g < 1.5f) g = mu_k;
+                    else               g = 2.0f * mu_k - 2.0f;
+                    col(i) = g - psq;
+                } else {
+                    col(i) = 0.0f;
+                }
+            }
+        } else {
+            // After compaction: _keep[i]==i, direct sequential access
+            const auto& s1 = _snp_1[k];
+            const auto& s2 = _snp_2[k];
+            for (int i = 0; i < n; i++) {
+                if (!s1[i] || s2[i]) {
+                    float g = static_cast<float>(s1[i]) + static_cast<float>(s2[i]);
+                    if (flip) g = 2.0f - g;
+                    if      (g < 0.5f) g = 0.0f;
+                    else if (g < 1.5f) g = mu_k;
+                    else               g = 2.0f * mu_k - 2.0f;
+                    col(i) = g - psq;
+                } else {
+                    col(i) = 0.0f;
+                }
+            }
         }
     }
 
-    if(divid_by_std){
-        std::vector<double> sd_SNP(m);
-        for (j = 0; j < m; j++){
-            k = _include[snp_indx[j]];
-            sd_SNP[j] = _mu[k]*(1.0 - 0.5 * _mu[k]);
-            if (fabs(sd_SNP[j]) < 1.0e-50) sd_SNP[j] = 0.0;
-            else sd_SNP[j] = 1.0 / sd_SNP[j];
-        } 
-        for (j = 0; j < m; j++) X.col(j) = X.col(j).array() * sd_SNP[j];
+    if (divid_by_std) {
+        #pragma omp parallel for schedule(static)
+        for (int j = 0; j < m; j++) {
+            const double sd = _mu[snp_k[j]] * (1.0 - 0.5 * _mu[snp_k[j]]);
+            if (sd > 1.0e-50)
+                X.col(j) *= static_cast<float>(1.0 / sd);
+        }
     }
 
     return true;

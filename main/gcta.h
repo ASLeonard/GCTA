@@ -51,6 +51,9 @@ enum class GeneticModel {
     NONADDITIVE
 };
 
+// Sentinel value for missing dosage entries (infinity compares > any valid dosage)
+inline const float DOSAGE_NA = std::numeric_limits<float>::infinity();
+
 // Helper functions for GeneticModel enum
 inline bool stringToGeneticModel(const std::string& str, GeneticModel& model) {
     if (str == "additive") {
@@ -81,7 +84,6 @@ public:
     void read_bimfile(std::string bimfile);
     void read_bedfile(std::string bedfile);
     void read_bed_dosage(std::string bedfile); // Read bed file and fill _geno_dose with dosage calculated from genotypes
-    int bed_to_ref_allele_count(bool bit1, bool bit2, int snp_indx); // Helper: convert BED bits to reference allele count
     std::vector<std::string> read_bfile_list(std::string bfile_list);
     void read_multi_famfiles(std::vector<std::string> multi_bfiles);
     void read_multi_bimfiles(std::vector<std::string> multi_bfiles);
@@ -258,6 +260,8 @@ private:
 
     void update_bim(std::vector<int> &rsnp);
     void update_fam(std::vector<int> &rindi);
+    void compact_snp_data();
+    void compact_dosage_data();
 
     void update_include(std::vector<int> chr_buf, std::vector<std::string> snpid_buf, std::vector<double> gd_buf, std::vector<int> bp_buf, std::vector<std::string> a1_buf, std::vector<std::string> a2_buf, int file_indx);
     void update_keep(std::vector<std::string> fid_buf, std::vector<std::string> pid_buf, std::vector<std::string> fa_id_buf, std::vector<std::string> mo_id_buf, std::vector<int> sex_buf, std::vector<double> pheno_buf, std::string famfile);
@@ -550,7 +554,7 @@ private:
     // imputed data
     bool _dosage_flag;
     GeneticModel _genetic_model;
-    std::vector< std::vector<float> > _geno_dose;
+    Eigen::MatrixXf _geno_dose;  // (n_indi, n_snp), column-major; dense indices after compaction
     std::vector<double> _impRsq;
 
     // genotypes

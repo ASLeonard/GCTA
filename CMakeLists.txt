@@ -346,10 +346,14 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL" OR _GCTA_BLAS
         get_filename_component(_blas_lib_dir "${GCTA_BLAS_LIBRARY}" DIRECTORY)
         list(APPEND CMAKE_BUILD_RPATH   "${_blas_lib_dir}")
         list(APPEND CMAKE_INSTALL_RPATH "${_blas_lib_dir}")
+        # --rpath-link lets the linker resolve DT_NEEDED entries of your .so deps
+        # without those libs needing to be explicit link targets themselves
+        add_link_options("LINKER:-rpath-link,${_blas_lib_dir}")
         if(GCTA_LAPACKE_LIBRARY)
             get_filename_component(_lapack_lib_dir "${GCTA_LAPACKE_LIBRARY}" DIRECTORY)
             list(APPEND CMAKE_BUILD_RPATH   "${_lapack_lib_dir}")
             list(APPEND CMAKE_INSTALL_RPATH "${_lapack_lib_dir}")
+            add_link_options("LINKER:-rpath-link,${_lapack_lib_dir}")
         endif()
     endif()
 
@@ -368,6 +372,17 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL" OR _GCTA_BLAS
     elseif(_GCTA_BLAS STREQUAL "AOCL")
         list(APPEND GCTA_BLAS_DEFINES GCTA_USE_AOCL EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
         set(GCTA_BLAS_PROVIDER "AOCL" CACHE INTERNAL "")
+
+        # AOCL transitive dependencies: libflame needs libaoclutils and libblis-mt
+        get_filename_component(_aocl_lib_dir "${GCTA_BLAS_LIBRARY}" DIRECTORY)
+        foreach(_aocl_dep IN ITEMS libaoclutils.so libblis-mt.so)
+            if(EXISTS "${_aocl_lib_dir}/${_aocl_dep}")
+                list(APPEND GCTA_BLAS_LIBS "${_aocl_lib_dir}/${_aocl_dep}")
+                message(STATUS "AOCL: found transitive dep ${_aocl_dep}")
+            else()
+                message(WARNING "AOCL: transitive dep not found: ${_aocl_lib_dir}/${_aocl_dep}")
+            endif()
+        endforeach()
     else()
         list(APPEND GCTA_BLAS_DEFINES GCTA_USE_MKL EIGEN_USE_MKL_ALL)
         set(GCTA_BLAS_PROVIDER "MKL" CACHE INTERNAL "")
