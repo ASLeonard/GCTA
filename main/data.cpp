@@ -15,6 +15,10 @@
 #include <set>
 #include <fstream>
 #include <limits>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
 #include "gcta.h"
@@ -226,6 +230,7 @@ void gcta::init_include()
 }
 
 // some code are adopted from PLINK with modifications
+//TODO: still a bottlneck, almost 2s to read 300 Mb file
 void gcta::read_bedfile(std::string bedfile)
 {
     int i = 0, j = 0, k = 0;
@@ -239,48 +244,62 @@ void gcta::read_bedfile(std::string bedfile)
     if (_keep.size() == 0) LOGGER.e(0, "no individual is retained for analysis.");
 
     // Read bed file
-    const size_t bytes_per_snp = (_indi_num + 3) / 4;
-    _snp_1.resize(_include.size());
-    _snp_2.resize(_include.size());
-    for (i = 0; i < _include.size(); i++) {
-        _snp_1[i].reserve(_keep.size());
-        _snp_2[i].reserve(_keep.size());
+    const size_t bytes_per_snp = ((size_t)_indi_num + 3) / 4;
+    const int m = (int)_include.size();
+    const int n_keep = (int)_keep.size();
+
+    _snp_1.resize(m);
+    _snp_2.resize(m);
+    for (i = 0; i < m; i++) {
+        _snp_1[i].assign(n_keep, false);
+        _snp_2[i].assign(n_keep, false);
     }
-    std::ifstream BIT(bedfile.c_str(), std::ios::in | std::ios::binary);
-    if (!BIT) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
+
     LOGGER << "Reading PLINK BED file from [" + bedfile + "] in SNP-major format ..." << std::endl;
 
-    // Read entire file into memory to avoid per-byte fstream overhead
-    BIT.seekg(0, std::ios::end);
-    const size_t file_size = BIT.tellg();
-    BIT.seekg(0, std::ios::beg);
-    std::vector<unsigned char> bed_buf(file_size);
-    BIT.read(reinterpret_cast<char*>(bed_buf.data()), file_size);
-    BIT.close();
-    size_t buf_pos = 3; // skip magic bytes
+    // mmap the bed file — zero-copy, OS pages in on demand
+    int bed_fd = open(bedfile.c_str(), O_RDONLY);
+    if (bed_fd < 0) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
+    struct stat bed_st;
+    fstat(bed_fd, &bed_st);
+    size_t file_size = (size_t)bed_st.st_size;
+    if (file_size < 3 + (size_t)_snp_num * bytes_per_snp)
+        LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
+    const unsigned char* bed_buf = (const unsigned char*)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, bed_fd, 0);
+    close(bed_fd);
+    if (bed_buf == MAP_FAILED) LOGGER.e(0, "mmap failed for [" + bedfile + "].");
+    // Hint: we'll touch every page, so preload in background
+    madvise((void*)bed_buf, file_size, MADV_WILLNEED);
 
-    int snp_indx = 0, indi_indx = 0;
-    for (j = 0, snp_indx = 0; j < _snp_num; j++) { // Read genotype in SNP-major mode, 00: homozA1A1; 11: homozA2A2; 10: heterozygote; 01: missing
-        if (!rsnp[j]) {
-            buf_pos += bytes_per_snp;
-            continue;
-        }
-        for (i = 0, indi_indx = 0; i < _indi_num;) {
-            if (buf_pos >= file_size) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
-            unsigned char byte = bed_buf[buf_pos++];
-            for (int bit = 0; bit < 8 && i < _indi_num; bit += 2, i++) {
-                if (!rindi[i]) continue;
-                int genotype = (byte >> bit) & 3;
-                // BED encoding: 00=homA1, 01=missing, 10=het, 11=homA2
-                // _snp_1=!bit0, _snp_2=!bit1
-                _snp_2[snp_indx][indi_indx] = !(genotype & 1);
-                _snp_1[snp_indx][indi_indx] = !((genotype >> 1) & 1);
-                indi_indx++;
-            }
-        }
-        if (snp_indx == _include.size()) break;
-        snp_indx++;
+    // Pre-compute file offset for each included SNP (dense index 0..m-1)
+    std::vector<size_t> snp_offsets(m);
+    for (j = 0, k = 0; j < _snp_num; j++) {
+        if (rsnp[j]) snp_offsets[k++] = 3 + (size_t)j * bytes_per_snp;
     }
+
+    // Pre-compute byte offset and bit shift within a SNP block for each kept individual.
+    // Eliminates the per-individual rindi[] branch from the hot loop.
+    std::vector<int> indi_byte(n_keep), indi_shift(n_keep);
+    for (j = 0, k = 0; j < _indi_num; j++) {
+        if (rindi[j]) {
+            indi_byte[k]  = j / 4;
+            indi_shift[k] = (j % 4) * 2;
+            k++;
+        }
+    }
+
+    // Parallel decode: each SNP slot is independent — no shared writes
+    #pragma omp parallel for schedule(static) private(j)
+    for (i = 0; i < m; i++) {
+        const unsigned char* snp_data = bed_buf + snp_offsets[i];
+        for (j = 0; j < n_keep; j++) {
+            int genotype = (snp_data[indi_byte[j]] >> indi_shift[j]) & 3;
+            _snp_2[i][j] = !(genotype & 1);
+            _snp_1[i][j] = !((genotype >> 1) & 1);
+        }
+    }
+
+    munmap((void*)bed_buf, file_size);
     LOGGER << "Genotype data for " << _keep.size() << " individuals and " << _include.size() << " SNPs to be included from [" + bedfile + "]." << std::endl;
 
     update_fam(rindi);
