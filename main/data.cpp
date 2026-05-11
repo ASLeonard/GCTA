@@ -21,8 +21,7 @@
 #include "Logger.h"
 #include "StrFunc.h"
 
-// Constant for missing dosage values
-const double DOSAGE_NA = std::numeric_limits<double>::infinity();
+// (DOSAGE_NA is declared in gcta.h)
 
 gcta::gcta(int autosome_num, double rm_ld_cutoff, std::string out)
 {
@@ -363,8 +362,7 @@ void gcta::read_bed_dosage(std::string bedfile)
     BIT.close();
 
     // Size _geno_dose and _mu compactly (dense SNP index 0..m-1).
-    _geno_dose.resize(n);
-    for (int i = 0; i < n; i++) _geno_dose[i].assign(m, 0.0f);
+    _geno_dose.setZero(n, m);
     _mu.assign(m, 0.0);
 
     // BED 2-bit encoding (per pair of raw bits, LSB-first within byte):
@@ -412,9 +410,9 @@ void gcta::read_bed_dosage(std::string bedfile)
                         LOGGER.w(0, "missing values detected in the genotype data.");
                         missing_warned = true;
                     }
-                    _geno_dose[indi_indx][snp_indx] = DOSAGE_NA;
+                    _geno_dose(indi_indx, snp_indx) = DOSAGE_NA;
                 } else {
-                    _geno_dose[indi_indx][snp_indx] = static_cast<float>(g);
+                    _geno_dose(indi_indx, snp_indx) = static_cast<float>(g);
                     allele_count += g;
                     valid_count++;
                 }
@@ -432,11 +430,12 @@ void gcta::read_bed_dosage(std::string bedfile)
         for (int sj = 0; sj < m; sj++) {
             const float p2 = static_cast<float>(_mu[sj]); // 2*p in dosage (0-2) scale
             for (int i = 0; i < n; i++) {
-                float& d = _geno_dose[i][sj];
+                float d = _geno_dose(i, sj);
                 if (d >= DOSAGE_NA) continue;
                 if      (d < 0.5f) d = 0.0f;
                 else if (d < 1.5f) d = p2;           // het: 2p
                 else               d = 2.0f * p2 - 2.0f; // homA1: 4p-2
+                _geno_dose(i, sj) = d;
             }
         }
     }
@@ -555,18 +554,18 @@ void gcta::update_fam(std::vector<int> &rindi) {
     }
 }
 
-// Compact _geno_dose inner (SNP) dimension so that _include[j]==j after this call.
-// All loaders store _geno_dose[dense_indi][dense_snp_within_include]; after a
-// post-load MAF/Rsq filter _include becomes sparse.  This repacks each row to
+// Compact _geno_dose column (SNP) dimension so that _include[j]==j after this call.
+// All loaders store _geno_dose(dense_indi, dense_snp_within_include); after a
+// post-load MAF/Rsq filter _include becomes sparse.  This repacks columns to
 // the current m SNPs, then calls update_bim to reset _include to identity.
 void gcta::compact_dosage_data() {
     if (!_dosage_flag) return;
     const int n = static_cast<int>(_keep.size());
     const int m = static_cast<int>(_include.size());
-    if (m == 0 || n == 0 || _geno_dose.empty()) return;
+    if (m == 0 || n == 0 || _geno_dose.size() == 0) return;
 
-    // Early exit: already compact (inner size == m and _include is identity).
-    if (static_cast<int>(_geno_dose[0].size()) == m) {
+    // Early exit: already compact (cols == m and _include is identity).
+    if (_geno_dose.cols() == m) {
         bool identity = true;
         for (int j = 0; j < m; j++) {
             if (_include[j] != j) { identity = false; break; }
@@ -574,15 +573,11 @@ void gcta::compact_dosage_data() {
         if (identity) return;
     }
 
-    // Repack each individual's SNP vector to the current _include column subset.
+    // Repack columns: gather the _include[j]-th column into position j.
     // _keep[i]==i is an invariant of the dosage loading paths.
-    for (int i = 0; i < n; i++) {
-        auto& row = _geno_dose[i];
-        std::vector<float> new_row(m);
-        for (int j = 0; j < m; j++) new_row[j] = row[_include[j]];
-        row = std::move(new_row);
-    }
-    _geno_dose.resize(n);
+    Eigen::MatrixXf new_dose(n, m);
+    for (int j = 0; j < m; j++) new_dose.col(j) = _geno_dose.col(_include[j]);
+    _geno_dose = std::move(new_dose);
 
     // Compact _mu if already computed.
     if (!_mu.empty()) {
@@ -894,26 +889,30 @@ void read_single_bedfile(std::string bedfile, std::vector<std::pair<int,int>> rs
     int i = 0, j = 0, k = 0, t1 = 0, t2= 0, nsnp_chr = rsnp.size(), nindi_chr = rindi.size();
 
     // Read bed file
-    char ch[1];
-    std::bitset<8> b;   
+    std::bitset<8> b;
     std::fstream BIT(bedfile.c_str(), std::ios::in | std::ios::binary);
     if(!BIT) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
     if(msg_flag) LOGGER.i(0, "Reading PLINK BED file from [" + bedfile + "] in SNP-major format ...");
 
+    int bytes_per_snp = (nindi_chr + 3) / 4;
+    std::vector<char> snp_buf(bytes_per_snp);
+
     // skip the first three bytes
-    for (i = 0; i < 3; i++) BIT.read(ch, 1); 
+    char header[3];
+    BIT.read(header, 3);
     int snp_indx = 0, indi_indx = 0;
     // Read genotype in SNP-major mode, 00: homozygote AA; 11: homozygote BB; 01: hetezygote; 10: missing
     for(j = 0, t1 = 0, snp_indx = 0; t1 < nsnp_chr; j++) { 
         if(j!=rsnp[t1].first) {
-            for (i = 0; i < nindi_chr; i += 4) BIT.read(ch, 1);
+            BIT.seekg(bytes_per_snp, std::ios::cur);
             continue;
         }
         snp_indx = rsnp[t1].second;
+        BIT.read(snp_buf.data(), bytes_per_snp);
+        if (!BIT) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
+        int byte_idx = 0;
         for (i = 0, indi_indx = 0; i < nindi_chr;) {
-            BIT.read(ch, 1);
-            if (!BIT) LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
-            b = ch[0];
+            b = snp_buf[byte_idx++];
             k = 0;
             while (k < 7 && i < nindi_chr) { // change code: 11 for AA; 00 for BB;
                 if (!rindi[i]) k += 2;
@@ -1102,7 +1101,7 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
     LOGGER << "Reading dosage data from [" + zdosefile + "] in individual-major format (Note: may use huge RAM)." << std::endl;
     _fid.clear();
     _pid.clear();
-    _geno_dose.clear();
+    _geno_dose.resize(0, 0);
 
     std::vector<int> kp_it;
     while (std::getline(zinf, buf)) {
@@ -1136,8 +1135,7 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
     boost::iostreams::filtering_istream zinf2;
     zinf2.push(boost::iostreams::gzip_decompressor());
     zinf2.push(raw_file2);
-    _geno_dose.resize(_indi_num);
-    for (line = 0; line < _indi_num; line++) _geno_dose[line].resize(_include.size());
+    _geno_dose.setZero(_indi_num, static_cast<int>(_include.size()));
     for (line = 0, k = 0; line < kp_it.size(); line++) {
         std::getline(zinf2, buf);
         if (kp_it[line] == 0) continue;
@@ -1155,7 +1153,7 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
                 f_buf = DOSAGE_NA;
             }
             if (rsnp[i]) {
-                _geno_dose[k][j] = (f_buf);
+                _geno_dose(k, j) = static_cast<float>(f_buf);
                 j++;
             }
         }
@@ -1214,7 +1212,7 @@ void gcta::read_imp_dose_mach(std::string dosefile, std::string kp_indi_file, st
     LOGGER << "Reading dosage data from [" + dosefile + "] in individual-major format (Note: may use huge RAM)." << std::endl;
     _fid.clear();
     _pid.clear();
-    _geno_dose.clear();
+    _geno_dose.resize(0, 0);
 
     std::vector<int> kp_it;
     while (std::getline(idose, buf)) {
@@ -1243,8 +1241,7 @@ void gcta::read_imp_dose_mach(std::string dosefile, std::string kp_indi_file, st
     _indi_num = _fid.size();
 
     idose.open(dosefile.c_str());
-    _geno_dose.resize(_indi_num);
-    for (line = 0; line < _indi_num; line++) _geno_dose[line].resize(_include.size());
+    _geno_dose.setZero(_indi_num, static_cast<int>(_include.size()));
     for (line = 0, k = 0; line < kp_it.size(); line++) {
         std::getline(idose, buf);
         if (kp_it[line] == 0) continue;
@@ -1262,7 +1259,7 @@ void gcta::read_imp_dose_mach(std::string dosefile, std::string kp_indi_file, st
                 f_buf = DOSAGE_NA;
             }
             if (rsnp[i]) {
-                _geno_dose[k][j] = (f_buf);
+                _geno_dose(k, j) = static_cast<float>(f_buf);
                 j++;
             }
         }
@@ -1377,8 +1374,7 @@ void gcta::read_imp_dose_beagle(std::string zdosefile, std::string kp_indi_file,
     if (!blup_indi_file.empty()) read_indi_blup(blup_indi_file);
     if (!rm_indi_file.empty()) remove_indi(rm_indi_file);
 
-    _geno_dose.resize(_keep.size());
-    for (i = 0; i < _keep.size(); i++) _geno_dose[i].resize(_include.size());
+    _geno_dose.setZero(static_cast<int>(_keep.size()), static_cast<int>(_include.size()));
 
     std::vector<int> rindi;
     get_rindi(rindi);
@@ -1399,7 +1395,7 @@ void gcta::read_imp_dose_beagle(std::string zdosefile, std::string kp_indi_file,
         for (i = 0, j = 0; i < _indi_num; i++) {
             ss >> d_buf;
             if (rindi[i]) {
-                _geno_dose[j][k] = d_buf;
+                _geno_dose(j, k) = static_cast<float>(d_buf);
                 j++;
             }
         }
@@ -1489,6 +1485,7 @@ void gcta::dose2bed() {
     int i = 0, j = 0;
     double d_buf = 0.0;
 
+    compact_dosage_data(); // ensure _include[j]==j and _keep[i]==i
     LOGGER << "Converting dosage data into PLINK binary PED format ... " << std::endl;
     _snp_1.resize(_snp_num);
     _snp_2.resize(_snp_num);
@@ -1498,7 +1495,7 @@ void gcta::dose2bed() {
     }  
     for (i = 0; i < _include.size(); i++) {  
         for (j = 0; j < _keep.size(); j++) {
-           d_buf = _geno_dose[_keep[j]][_include[i]];
+           d_buf = _geno_dose(j, i);
             if (d_buf >= DOSAGE_NA) {
                 _snp_2[_include[i]][_keep[j]] = false;
                 _snp_1[_include[i]][_keep[j]] = true;
@@ -1892,8 +1889,8 @@ void gcta::mu_func(int j, std::vector<double> &fac) {
     const double mu_acc = 0.0;
     if (_dosage_flag) {
         for (i = 0; i < _keep.size(); i++) {
-            if (_geno_dose[i][snp_idx] < DOSAGE_NA) {
-                _mu[snp_idx] += fac[i] * _geno_dose[i][snp_idx];
+            if (_geno_dose(i, j) < DOSAGE_NA) {
+                _mu[snp_idx] += fac[i] * _geno_dose(i, j);
                 fcount += fac[i];
             }
         }
@@ -2044,15 +2041,14 @@ bool gcta::make_XMat(Eigen::MatrixXf &X)
         if (_dosage_flag) {
             // After compact_dosage_data(): _keep[i]==i, _include[j]==j; direct access.
             for (j = 0; j < m; j++) {
-                if (_geno_dose[i][j] < DOSAGE_NA) {
-                    X(i,j) = (_allele1[j] == _ref_A[j]) ? static_cast<float>(_geno_dose[i][j])
-                                                         : 2.0f - static_cast<float>(_geno_dose[i][j]);
+                const float d = _geno_dose(i, j);
+                if (d < DOSAGE_NA) {
+                    X(i,j) = (_allele1[j] == _ref_A[j]) ? d : 2.0f - d;
                 } else {
                     X(i,j) = DOSAGE_NA;
                     have_mis = true;
                 }
             }
-            _geno_dose[i].clear();
         }
         else {
             for (j = 0; j < _include.size(); j++) {
@@ -2067,6 +2063,7 @@ bool gcta::make_XMat(Eigen::MatrixXf &X)
             }
         }
     }
+    if (_dosage_flag) _geno_dose.resize(0, 0); // free after copy into X
     return have_mis;
 }
 
@@ -2086,9 +2083,9 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
         if (_dosage_flag) {
             // After compact_dosage_data(): _keep[i]==i, _include[j]==j; direct access.
             for (j = 0; j < m; j++) {
-                if (_geno_dose[i][j] < DOSAGE_NA) {
-                    float g = (_allele1[j] == _ref_A[j]) ? static_cast<float>(_geno_dose[i][j])
-                                                         : 2.0f - static_cast<float>(_geno_dose[i][j]);
+                const float d = _geno_dose(i, j);
+                if (d < DOSAGE_NA) {
+                    float g = (_allele1[j] == _ref_A[j]) ? d : 2.0f - d;
                     if      (g < 0.5f) g = 0.0f;
                     else if (g < 1.5f) g = static_cast<float>(_mu[j]);
                     else               g = static_cast<float>(2.0 * _mu[j] - 2.0);
@@ -2098,7 +2095,6 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
                     have_mis = true;
                 }
             }
-            _geno_dose[i].clear();
         }
         else {
             for (j = 0; j < _include.size(); j++) {
@@ -2116,6 +2112,7 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
             }
         }
     }
+    if (_dosage_flag) _geno_dose.resize(0, 0); // free after copy into X
     return have_mis;
 }
 
@@ -2246,6 +2243,7 @@ void gcta::makex_eigenVector_std(int j, eigenVector &x, bool resize, double snp_
 void gcta::save_XMat(bool miss_with_mu, bool std)
 {
     if(std && _dosage_flag) LOGGER.e(0, "the --recode-std is invalid for dosage data.");
+    if (_dosage_flag) compact_dosage_data(); // ensure _include[j]==j, _keep[i]==i
     if ( (miss_with_mu || std) && _mu.empty()) calcu_mu();
 
     int i = 0, j = 0, m = _include.size();
@@ -2277,10 +2275,12 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
     for (i = 0; i < _keep.size(); i++) {
         zoutf << _fid[_keep[i]] << ' ' << _pid[_keep[i]] << ' ';
         if (_dosage_flag) {
+            // Post compact_dosage_data(): _keep[i]==i, _include[j]==j
             for (j = 0; j < _include.size(); j++) {
-                if (_geno_dose[_keep[i]][_include[j]] < DOSAGE_NA) {
-                    if (_allele1[_include[j]] == _ref_A[_include[j]]) x_buf = _geno_dose[_keep[i]][_include[j]];
-                    else x_buf = 2.0 - _geno_dose[_keep[i]][_include[j]];
+                const float d = _geno_dose(i, j);
+                if (d < DOSAGE_NA) {
+                    if (_allele1[_include[j]] == _ref_A[_include[j]]) x_buf = d;
+                    else x_buf = 2.0 - d;
                     if(std) x_buf = (x_buf - _mu[_include[j]]) * sd_SNP(j);
                     zoutf << x_buf << ' ';
                 } else {
@@ -2329,9 +2329,9 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < m; j++) {
                 const int k = snp_indx[j];
-                if (_geno_dose[i][k] < DOSAGE_NA) {
-                    X(i,j) = (_allele1[k] == _ref_A[k]) ? _geno_dose[i][k]
-                                                         : 2.0f - _geno_dose[i][k];
+                if (_geno_dose(i, k) < DOSAGE_NA) {
+                    X(i,j) = (_allele1[k] == _ref_A[k]) ? _geno_dose(i, k)
+                                                         : 2.0f - _geno_dose(i, k);
                     X(i,j) -= static_cast<float>(_mu[k]);
                 } else {
                     X(i,j) = 0.0f;
@@ -2425,8 +2425,8 @@ bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bo
         if (_dosage_flag) {
             // After compact_dosage_data(): _keep[i]==i; direct access.
             for (int i = 0; i < n; i++) {
-                if (_geno_dose[i][k] < DOSAGE_NA) {
-                    float g = flip ? 2.0f - _geno_dose[i][k] : _geno_dose[i][k];
+                if (_geno_dose(i, k) < DOSAGE_NA) {
+                    float g = flip ? 2.0f - _geno_dose(i, k) : _geno_dose(i, k);
                     if      (g < 0.5f) g = 0.0f;
                     else if (g < 1.5f) g = mu_k;
                     else               g = 2.0f * mu_k - 2.0f;

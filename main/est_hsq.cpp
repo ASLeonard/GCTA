@@ -1940,31 +1940,49 @@ void gcta::blup_snp_geno() {
 void gcta::blup_snp_dosage() {
     check_autosome();
 
+    compact_dosage_data(); // ensure _include[j]==j and _keep[i]==i
     if (_mu.empty()) calcu_mu();
 
-    int i = 0, j = 0, k = 0, col_num = _varcmp_Py.cols();
+    const int n = static_cast<int>(_keep.size());
+    const int m = static_cast<int>(_include.size());
+    const int col_num = _varcmp_Py.cols();
 
-    // Subtract each element by 2p
-    for (i = 0; i < _keep.size(); i++) {
-        for (j = 0; j < _include.size(); j++) _geno_dose[_keep[i]][_include[j]] -= _mu[_include[j]];
+    // Subtract 2p column-wise, skipping missing values
+    for (int j = 0; j < m; j++) {
+        const float mu_j = static_cast<float>(_mu[j]);
+        for (int i = 0; i < n; i++) {
+            float& d = _geno_dose(i, j);
+            if (d < DOSAGE_NA) d -= mu_j;
+        }
     }
 
-    // Calculate A matrix
     LOGGER << "Calculating the BLUP solutions to SNP effects using imputed dosage scores ... " << std::endl;
-    std::vector<double> var_SNP(_include.size()); // variance of each SNP, 2pq
-    eigenMatrix b_SNP = eigenMatrix::Zero(_include.size(), col_num); // variance of each SNP, 2pq
-    for (j = 0; j < _include.size(); j++) {
-        for (i = 0; i < _keep.size(); i++) var_SNP[j] += _geno_dose[_keep[i]][_include[j]] * _geno_dose[_keep[i]][_include[j]];
-        var_SNP[j] /= (double) (_keep.size() - 1);
-        if (fabs(var_SNP[j]) < 1.0e-50) var_SNP[j] = 0.0;
+
+    // var_SNP[j] = col(j).squaredNorm() / (n-1), treating missing as 0
+    // For simplicity use the same column loop; missing values were left at DOSAGE_NA
+    // so we must mask them. Replace DOSAGE_NA entries with 0 in a temp copy for algebra.
+    // (Missing values were already skipped in subtraction, so they remain at DOSAGE_NA.)
+    // Build a clean float matrix with missing → 0 for linear algebra.
+    Eigen::MatrixXf G(n, m);
+    for (int j = 0; j < m; j++) {
+        for (int i = 0; i < n; i++) {
+            const float d = _geno_dose(i, j);
+            G(i, j) = (d < DOSAGE_NA) ? d : 0.0f;
+        }
+    }
+
+    // var_SNP[j] = colwise squared norm / (n-1)
+    Eigen::VectorXd var_SNP = G.colwise().squaredNorm().cast<double>() / (n - 1.0);
+    for (int j = 0; j < m; j++) {
+        if (std::fabs(var_SNP[j]) < 1.0e-50) var_SNP[j] = 0.0;
         else var_SNP[j] = 1.0 / var_SNP[j];
     }
-    for (k = 0; k < _include.size(); k++) {
-        for (i = 0; i < _keep.size(); i++) {
-            for (j = 0; j < col_num; j++) b_SNP(k, j) += _geno_dose[_keep[i]][_include[k]] * _varcmp_Py(i, j);
-        }
-        for (j = 0; j < col_num; j++) b_SNP(k, j) = b_SNP(k, j) * var_SNP[k] / (double) _include.size();
-    }
+
+    // b_SNP = G^T * _varcmp_Py  (m × col_num), then scale each row
+    eigenMatrix b_SNP = (G.cast<double>().transpose() * _varcmp_Py.cast<double>());
+    for (int k = 0; k < m; k++)
+        b_SNP.row(k) *= var_SNP[k] / static_cast<double>(m);
+
     output_blup_snp(b_SNP);
 }
 

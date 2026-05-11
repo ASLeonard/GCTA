@@ -51,6 +51,9 @@ enum class GeneticModel {
     NONADDITIVE
 };
 
+// Sentinel value for missing dosage entries (infinity compares > any valid dosage)
+inline const float DOSAGE_NA = std::numeric_limits<float>::infinity();
+
 // Helper functions for GeneticModel enum
 inline bool stringToGeneticModel(const std::string& str, GeneticModel& model) {
     if (str == "additive") {
@@ -551,7 +554,7 @@ private:
     // imputed data
     bool _dosage_flag;
     GeneticModel _genetic_model;
-    std::vector< std::vector<float> > _geno_dose;
+    Eigen::MatrixXf _geno_dose;  // (n_indi, n_snp), column-major; dense indices after compaction
     std::vector<double> _impRsq;
 
     // genotypes
