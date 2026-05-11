@@ -14,6 +14,10 @@
 #include <fstream>
 #include <iterator>
 #include <ranges>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <unordered_set>
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
@@ -264,23 +268,39 @@ int gcta::read_grm_id(std::string grm_file, std::vector<std::string> &grm_id, bo
     // read GRM IDs
     std::string grm_id_file = grm_file + ".grm.id";
     if (out_id_log) LOGGER << "Reading IDs of the GRM from [" + grm_id_file + "]." << std::endl;
-    std::ifstream i_grm_id(grm_id_file.c_str());
-    if (!i_grm_id) LOGGER.e(0, "cannot open the file [" + grm_id_file + "] to read.");
-    std::string str_buf, id_buf;
+    int fd = open(grm_id_file.c_str(), O_RDONLY);
+    if (fd < 0) LOGGER.e(0, "cannot open the file [" + grm_id_file + "] to read.");
+    struct stat st;
+    fstat(fd, &st);
+    size_t file_size = (size_t)st.st_size;
     std::vector<std::string> fid, pid;
     grm_id.clear();
-    while (i_grm_id) {
-        i_grm_id >> str_buf;
-        if (i_grm_id.eof()) break;
-        fid.push_back(str_buf);
-        id_buf = str_buf + ":";
-        i_grm_id >> str_buf;
-        pid.push_back(str_buf);
-        id_buf += str_buf;
-        grm_id.push_back(id_buf);
-        std::getline(i_grm_id, str_buf);
+    if (file_size > 0) {
+        const char* data = (const char*)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+        close(fd);
+        if (data == MAP_FAILED) LOGGER.e(0, "mmap failed for [" + grm_id_file + "].");
+        madvise((void*)data, file_size, MADV_SEQUENTIAL);
+        const char* p = data;
+        const char* end = data + file_size;
+        while (p < end) {
+            while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) ++p;
+            if (p >= end) break;
+            const char* tok = p;
+            while (p < end && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') ++p;
+            std::string f(tok, p);
+            while (p < end && (*p == ' ' || *p == '\t')) ++p;
+            tok = p;
+            while (p < end && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') ++p;
+            std::string id(tok, p);
+            while (p < end && *p != '\n') ++p;
+            fid.push_back(f);
+            pid.push_back(id);
+            grm_id.push_back(f + ":" + id);
+        }
+        munmap((void*)data, file_size);
+    } else {
+        close(fd);
     }
-    i_grm_id.close();
     int n = grm_id.size();
     if (out_id_log) LOGGER << n << " IDs are read from [" + grm_id_file + "]." << std::endl;
 
@@ -351,35 +371,55 @@ void gcta::read_grm_bin(std::string grm_file, std::vector<std::string> &grm_id, 
     if (read_id_only) return;
 
     std::string grm_binfile = grm_file + ".grm.bin";
-    std::ifstream A_bin(grm_binfile.c_str(), std::ios::in | std::ios::binary);
-    if (!A_bin.is_open()) LOGGER.e(0, "cannot open the file [" + grm_binfile + "] to read.");
     _grm.resize(n, n);
     LOGGER << "Reading the GRM from [" + grm_binfile + "]." << std::endl;
-    int size = sizeof (float);
-    float f_buf = 0.0;
-    for (i = 0; i < n; i++) {
-        for (j = 0; j <= i; j++) {
-            if (!(A_bin.read((char*) &f_buf, size))) LOGGER.e(0, "Is the size of the [" + grm_binfile + "] file incorrect?");
-            _grm(j, i) = _grm(i, j) = f_buf;
+    {
+        long long n_tri = (long long)n * (n + 1) / 2;
+        int fd = open(grm_binfile.c_str(), O_RDONLY);
+        if (fd < 0) LOGGER.e(0, "cannot open the file [" + grm_binfile + "] to read.");
+        struct stat st;
+        fstat(fd, &st);
+        if ((long long)st.st_size < n_tri * (long long)sizeof(float))
+            LOGGER.e(0, "Is the size of the [" + grm_binfile + "] file incorrect?");
+        const float* buf = (const float*)mmap(nullptr, n_tri * sizeof(float), PROT_READ, MAP_PRIVATE, fd, 0);
+        close(fd);
+        if (buf == MAP_FAILED) LOGGER.e(0, "mmap failed for [" + grm_binfile + "].");
+        madvise((void*)buf, n_tri * sizeof(float), MADV_SEQUENTIAL);
+        #pragma omp parallel for schedule(dynamic, 64) private(j)
+        for (i = 0; i < n; i++) {
+            const float* row = buf + (long long)i * (i + 1) / 2;
+            for (j = 0; j <= i; j++) {
+                _grm(j, i) = _grm(i, j) = row[j];
+            }
         }
+        munmap((void*)buf, n_tri * sizeof(float));
     }
-    A_bin.close();
 
     if(!dont_read_N){
         std::string grm_Nfile = grm_file + ".grm.N.bin";
-        std::ifstream N_bin(grm_Nfile.c_str(), std::ios::in | std::ios::binary);
-        if (!N_bin.is_open()) LOGGER.e(0, "cannot open the file [" + grm_Nfile + "] to read.");
         _grm_N.resize(n, n);
         LOGGER << "Reading the number of SNPs for the GRM from [" + grm_Nfile + "]." << std::endl;
-        size = sizeof (float);
-        f_buf = 0.0;
-        for (i = 0; i < n; i++) {
-            for (j = 0; j <= i; j++) {
-                if (!(N_bin.read((char*) &f_buf, size))) LOGGER.e(0, "Is the size of the [" + grm_Nfile + "] file incorrect?");
-                _grm_N(j, i) = _grm_N(i, j) = f_buf;
+        {
+            long long n_tri = (long long)n * (n + 1) / 2;
+            int fd = open(grm_Nfile.c_str(), O_RDONLY);
+            if (fd < 0) LOGGER.e(0, "cannot open the file [" + grm_Nfile + "] to read.");
+            struct stat st;
+            fstat(fd, &st);
+            if ((long long)st.st_size < n_tri * (long long)sizeof(float))
+                LOGGER.e(0, "Is the size of the [" + grm_Nfile + "] file incorrect?");
+            const float* buf = (const float*)mmap(nullptr, n_tri * sizeof(float), PROT_READ, MAP_PRIVATE, fd, 0);
+            close(fd);
+            if (buf == MAP_FAILED) LOGGER.e(0, "mmap failed for [" + grm_Nfile + "].");
+            madvise((void*)buf, n_tri * sizeof(float), MADV_SEQUENTIAL);
+            #pragma omp parallel for schedule(dynamic, 64) private(j)
+            for (i = 0; i < n; i++) {
+                const float* row = buf + (long long)i * (i + 1) / 2;
+                for (j = 0; j <= i; j++) {
+                    _grm_N(j, i) = _grm_N(i, j) = row[j];
+                }
             }
+            munmap((void*)buf, n_tri * sizeof(float));
         }
-        N_bin.close();
     }
 
     LOGGER << "GRM for " << n << " individuals are included from [" + grm_binfile + "]." << std::endl;
