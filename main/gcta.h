@@ -125,6 +125,8 @@ public:
     // bigK + smallK method
     void grm_bK(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double threshold, bool grm_out_bin_flag);
 
+    void grm_denseness(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, bool merge_grm_flag, std::string metric);
+
     void enable_grm_bin_flag();
     void fit_reml(std::string grm_file, std::string phen_file, std::string qcovar_file, std::string covar_file, std::string qGE_file, std::string GE_file, std::string keep_indi_file, std::string remove_indi_file, std::string sex_file, int mphen, double grm_cutoff, double adj_grm_fac, int dosage_compen, bool m_grm_flag, bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, int reml_mtd, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, std::vector<int> drop, bool no_lrt, double prevalence, bool no_constrain, bool mlmassoc = false, bool within_family = false, bool reml_bending = false, bool reml_diag_one = false, std::string weight_file = "");
     //void HE_reg(std::string grm_file, std::string phen_file, std::string keep_indi_file, std::string remove_indi_file, int mphen); // old HE regression method
@@ -331,9 +333,9 @@ private:
     void calcu_tr_PA(eigenMatrix &P, eigenVector &tr_PA);
     eigenVector applyP_vec(const eigenVector &v) const;
     void calcu_tr_PA_hutchpp(eigenVector &tr_PA, int m_probes);
-    void calcu_Vp(double &Vp, double &Vp2, double &VarVp, double &VarVp2, eigenVector &varcmp, eigenMatrix &Hi);
-    void calcu_hsq(int i, double Vp, double Vp2, double VarVp, double VarVp2, double &hsq, double &var_hsq, eigenVector &varcmp, eigenMatrix &Hi);
-    void calcu_sum_hsq(double Vp, double VarVp, double &sum_hsq, double &var_sum_hsq, eigenVector &varcmp, eigenMatrix &Hi);
+    void calcu_Vp(double &Vp, double &Vp2, double &VarVp, double &VarVp2, const eigenVector &varcmp, const eigenMatrix &Hi);
+    void calcu_hsq(int i, double Vp, double Vp2, double VarVp, double VarVp2, double &hsq, double &var_hsq, const eigenVector &varcmp, const eigenMatrix &Hi);
+    void calcu_sum_hsq(double Vp, double VarVp, double &sum_hsq, double &var_sum_hsq, const eigenVector &varcmp, const eigenMatrix &Hi);
     void output_blup_snp(eigenMatrix &b_SNP);
 
     void read_weight(std::string phen_file, std::vector<std::string> &phen_ID, std::vector<double> &weights);
@@ -376,7 +378,7 @@ private:
     void read_metafile(std::string metafile, bool GC, double GC_val);
     void init_massoc(std::string metafile, bool GC, double GC_val);
     void read_fixed_snp(std::string snplistfile, std::string msg, std::vector<int> &pgiven, std::vector<int> &remain);
-    void eigenVector2Vector(eigenVector &x, std::vector<double> &y);
+    std::vector<double> eigenVector2Vector(const eigenVector &x);
     //double crossprod(int indx1, int indx2);
     void get_x_vec(float *x, int indx);
     void get_x_mat(float *x, std::vector<int> &indx);
@@ -506,7 +508,7 @@ private:
             if (minus_2p) x[i] -= _mu[_include[j]];
         }
     }
-
+    
 private:
     // read in plink files
     // bim file

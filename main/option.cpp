@@ -85,6 +85,7 @@ void option(int option_num, char* option_str[])
     bool pca_flag = false, pcl_flag = false;
     std::string pca_approx_flag = "";
     bool project_flag = false;
+    std::string denseness_metric = "";
     double grm_adj_fac = -2.0, grm_cutoff = -2.0, rm_high_ld_cutoff = -1.0, bK_threshold = -10.0;
     int dosage_compen = -2, out_pc_num = 20, make_grm_mtd = 0;
     std::string grm_file = "", paa_file = "", pc_file = "";
@@ -533,6 +534,9 @@ void option(int option_num, char* option_str[])
             bK_threshold = std::atof(argv[++i]);
             if (bK_threshold < 0 || bK_threshold > 1) LOGGER.e(0, "\n --make-bK threshold should be range from 0 to 1.\n");
             else LOGGER << "--make-bK " << bK_threshold << std::endl;
+        } else if (flag == "--denseness") {
+            denseness_metric = argv[++i];
+            LOGGER << "--denseness " << denseness_metric << std::endl;
         } else if (flag == "--pca") {
             pca_flag = true;
             thread_flag = true;
@@ -1586,6 +1590,7 @@ void option(int option_num, char* option_str[])
         else if (make_grm_flag) pter_gcta->save_grm(grm_file, kp_indi_file, rm_indi_file, update_sex_file, grm_cutoff, grm_adj_fac, dosage_compen, m_grm_flag, grm_out_bin_flag);
         else if (align_grm_flag) pter_gcta->align_grm(grm_file);
         else if (bK_threshold > -1) pter_gcta->grm_bK(grm_file, kp_indi_file, rm_indi_file, bK_threshold, grm_out_bin_flag);
+        else if (!denseness_metric.empty()) pter_gcta->grm_denseness(grm_file, kp_indi_file, rm_indi_file, m_grm_flag, denseness_metric);
     }
     else if (ld_mean_rsq_seg_flag) pter_gcta->ld_seg(LD_file, LD_seg, LD_wind, LD_rsq_cutoff, dominance_flag);
     else LOGGER.e(0, "no analysis has been launched by the option(s).\n");

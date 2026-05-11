@@ -468,8 +468,7 @@ bool gcta::slct_entry(std::vector<int> &slct, std::vector<int> &remain, eigenVec
     } 
     int i = 0, m = 0;
     massoc_cond(slct, remain, bC, bC_se, pC);
-    std::vector<double> pC_buf;
-    eigenVector2Vector(pC, pC_buf);
+    std::vector<double> pC_buf = eigenVector2Vector(pC);
     while (true) {
         m = min_element(pC_buf.begin(), pC_buf.end()) - pC_buf.begin();
         if (pC_buf[m] >= _jma_p_cutoff) return (false);
@@ -489,10 +488,9 @@ void gcta::slct_stay(std::vector<int> &slct, eigenVector &bJ, eigenVector &bJ_se
         if (!init_B(slct)) LOGGER.e(0, "there is a collinearity problem of the given list of SNPs.\nYou can try the option --cojo-slct to remove one of each std::pair of highly correlated SNPs.");
     }
 
-    std::vector<double> pJ_buf;
     while (!slct.empty()) {
         massoc_joint(slct, bJ, bJ_se, pJ);
-        eigenVector2Vector(pJ, pJ_buf);
+        std::vector<double> pJ_buf = eigenVector2Vector(pJ);
         int m = max_element(pJ_buf.begin(), pJ_buf.end()) - pJ_buf.begin();
         if (pJ[m] > _jma_p_cutoff) {
             _jma_snpnum_backward++;
@@ -502,9 +500,8 @@ void gcta::slct_stay(std::vector<int> &slct, eigenVector &bJ, eigenVector &bJ_se
     }
 }
 
-void gcta::eigenVector2Vector(eigenVector &x, std::vector<double> &y) {
-    y.resize(x.size());
-    for (int i = 0; i < x.size(); i++) y[i] = x[i];
+std::vector<double> gcta::eigenVector2Vector(const eigenVector &x) {
+    return std::vector<double>(x.begin(), x.end());
 }
 
 double gcta::massoc_calcu_Ve(const std::vector<int> &slct, eigenVector &bJ, eigenVector &b) {
