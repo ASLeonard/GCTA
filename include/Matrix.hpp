@@ -85,9 +85,22 @@ bool _LLT(MatrixType &A, double &logdet) {
         A.diagonal() = diag;
         return false;
     }
-
+    
     logdet = llt.matrixL().nestedExpression().diagonal().array().log().sum() * 2.0;
-    A = llt.solve(MatrixType::Identity(A.rows(), A.cols()));
+
+    // Invert via LAPACK dpotri instead of llt.solve(Identity).
+    // llt.solve(Identity) calls two n×n dtrsm passes: O(n³) total.
+    // dpotri uses dtrtri + dsyrk: ~2n³/3 flops, ~1.5× faster.
+    // Copy the Cholesky factor (lower triangle) into A, then call dpotri in-place.
+    gcta_blas_int n = static_cast<gcta_blas_int>(A.rows());
+    A = llt.matrixLLT();  // lower triangle = L; upper triangle is ignored by dpotri('L')
+    if (gcta_dpotri(n, A.data(), n) != 0) {
+        A.diagonal() = diag;
+        return false;
+    }
+    // dpotri fills only the lower triangle; symmetrize to upper.
+    A.template triangularView<Eigen::Upper>() = A.transpose();
+    
     return true;
 }
 

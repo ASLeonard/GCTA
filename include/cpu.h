@@ -34,4 +34,19 @@
   typedef __LAPACK_int gcta_blas_int;
 #endif
 
+// Portable dpotri: in-place inversion of a Cholesky-factored symmetric positive-definite
+// matrix (lower triangle).  Returns 0 on success, non-zero on failure.
+inline int gcta_dpotri(gcta_blas_int n, double* a, gcta_blas_int lda) {
+#if defined(GCTA_USE_ACCELERATE)
+    // Accelerate exposes Fortran-ABI dpotri_ with pointer arguments.
+    char uplo = 'L';
+    gcta_blas_int info = 0;
+    dpotri_(&uplo, &n, a, &lda, &info);
+    return static_cast<int>(info);
+#else
+    // MKL, OpenBLAS, and AOCL all provide the LAPACKE C interface.
+    return static_cast<int>(LAPACKE_dpotri(LAPACK_COL_MAJOR, 'L', n, a, lda));
+#endif
+}
+
 #endif  //END GCTA_CPU_H
