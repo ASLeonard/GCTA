@@ -60,21 +60,22 @@
 #else
   //#define CTZU __builtin_ctz
   //#define CLZU __builtin_clz
-  #if defined(__linux__) && GCTA_CPU_x86
-  __attribute__((target("default")))
-  #endif
+  // __builtin_ctzll/__builtin_clzll are compiler builtins (GCC/Clang), not x86
+  // intrinsics. Both are portable across x86 and ARM64; no multiversioning needed.
   uint32_t CTZ64U(uint64_t value){
       return __builtin_ctzll(value);
   }
-  #if defined(__linux__) && GCTA_CPU_x86
-  __attribute__((target("popcnt")))
-  uint32_t CTZ64U(uint64_t value){
-      return __builtin_ctzll(value);
+
+  uint32_t CLZ64U(uint64_t value){
+      return __builtin_clzll(value);
   }
-  #endif
- 
+
 #endif
 
+// Spreads the low 32 bits of x into alternating bit positions (bit deposit).
+// On x86 Linux: function multiversioning selects _pdep_u64 (BMI2) at runtime.
+// On ARM64: scalar fallback only. SVE2 has BDEP (exact equivalent of _pdep_u64)
+// but it is absent on Apple Silicon and not universally available on Linux ARM64.
 #if defined(__linux__) && GCTA_CPU_x86
 __attribute__((target("default")))
 #endif

@@ -336,7 +336,6 @@ void gcta::read_bedfile(std::string bedfile)
  *   // Now _geno_dose matrix is filled with dosage values
  */
 
-// Helper function: Convert PLINK BED genotype bits to reference allele count
 void gcta::read_bed_dosage(std::string bedfile)
 {
     std::vector<int> rindi, rsnp;
@@ -468,6 +467,7 @@ void gcta::get_rindi(std::vector<int> &rindi) {
     }
 }
 
+//TODO: can we update the buffers in-place?
 void gcta::update_bim(std::vector<int> &rsnp) {
     int i = 0;
 
@@ -659,6 +659,7 @@ std::vector<std::string>  gcta::read_bfile_list(std::string bfile_list)
     return(multi_bfiles);
 }
 
+//TODO: can we map the data better?
 void read_single_famfile(std::string famfile, std::vector<std::string> &fid, std::vector<std::string> &pid, std::vector<std::string> &fa_id, std::vector<std::string> &mo_id, std::vector<int> &sex, std::vector<double> &pheno, bool msg_flag) {
     std::ifstream Fam(famfile.c_str());
     if(!Fam) LOGGER.e(0, "cannot open the file [" + famfile + "] to read.");
@@ -1547,6 +1548,7 @@ void gcta::read_snplist(std::string snplistfile, std::vector<std::string> &snpli
     i_snplist.close();
 }
 
+//TODO: larger refactor, but can we not just parse what we want to keep at init, rather than reading all and then building _include[]?
 void gcta::extract_snp(std::string snplistfile)
 {
     std::vector<std::string> snplist;

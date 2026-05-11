@@ -309,6 +309,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
     // Symmetrise Vi once into a plain matrix so every downstream GEMM/GEMV
     // dispatches through Eigen's full BLAS path rather than the slower
     // selfadjointView fallback that activates for block-expression targets.
+   //TODO: is this true? 
     Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
     _Vi.resize(0,0);
 
@@ -327,12 +328,14 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
     std::vector<int> indx;
 
     int last_pct = -1;
+    //TODO: can we do full matrix and let BLAS break up the problem?
     for(i = 0; i < m; ){
         int cur_pct = static_cast<int>(i * 100 / m);
         if(cur_pct != last_pct){
             LOGGER.p(0, std::to_string(i) + " / " + std::to_string(m) + " SNPs (" + std::to_string(cur_pct) + "%)");
             last_pct = cur_pct;
         }
+        //TODO: is block_size appropriate
         const Eigen::Index bs = static_cast<Eigen::Index>(
             std::min(static_cast<unsigned long>(max_block_size), m - i));
         indx.resize(bs);
@@ -354,7 +357,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
             if(std::isfinite(inv_xvx) && inv_xvx > 1.0e-30f){
                 beta[i + l] = inv_xvx * Xt_Vi_y_block[l];
                 se[i + l] = std::sqrt(inv_xvx);
-                const float chisq = beta[i + l] / se[i + l];
+                const float chisq = beta[i + l] / se[i + l]; //TODO: is chisq really just sqrt(inv_xvx) * Xt_Vi_y_block[l];?
                 pval[i + l] = StatFunc::pchisq(chisq * chisq, 1, _log_pval);
             }
         }

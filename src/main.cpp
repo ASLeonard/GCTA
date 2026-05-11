@@ -57,7 +57,6 @@ void out_ver(bool flag_outFile){
         log = bind(&Logger::m, LOGGER_P, _1, _2, _3);
     }
 
-    //TODO: can we add more build details here?
     log(0, "*******************************************************************", "");
     log(0, "* Genome-wide Complex Trait Analysis (GCTA)", "");
     log(0, std::string("* version ") + std::string(GCTA_VERSION) + std::string(" ") + getOSName(), "");
@@ -234,26 +233,20 @@ int main(int argc, char *argv[]){
         }
     }
 
-    #ifdef _WIN32
-       _putenv_s("OMP_NUM_THREADS", to_string(thread_num).c_str());
-    #elif defined __linux__ || defined __APPLE__
-        setenv("OMP_NUM_THREADS", to_string(thread_num).c_str(), 1);
-    #else
-        #error Only Windows, Mac and Linux are supported.
-    #endif
-    omp_set_num_threads(thread_num);
-
     // Make OMP worker threads sleep immediately after a parallel region ends,
     // rather than spin-waiting. Spinning threads consume memory bandwidth and
     // starve BLAS (MKL/OpenBLAS) calls that follow parallel regions.
     // KMP_BLOCKTIME covers Intel OMP (MKL); GOMP_SPINCOUNT covers GCC libgomp.
     #ifdef _WIN32
+        _putenv_s("OMP_NUM_THREADS", to_string(thread_num).c_str());
         _putenv_s("KMP_BLOCKTIME", "0");
         _putenv_s("GOMP_SPINCOUNT", "0");
     #elif defined __linux__ || defined __APPLE__
         setenv("KMP_BLOCKTIME", "0", 0);   // 0 = don't override user setting
         setenv("GOMP_SPINCOUNT", "0", 0);
+        setenv("OMP_NUM_THREADS", to_string(thread_num).c_str(), 1);
     #endif
+    omp_set_num_threads(thread_num);
 
     // end thread;
     map<string, vector<string>> options_total = options;
