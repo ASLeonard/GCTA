@@ -230,7 +230,6 @@ void gcta::init_include()
 }
 
 // some code are adopted from PLINK with modifications
-//TODO: still a bottlneck, almost 2s to read 300 Mb file
 void gcta::read_bedfile(std::string bedfile)
 {
     int i = 0, j = 0, k = 0;
@@ -485,91 +484,69 @@ void gcta::get_rindi(std::vector<int> &rindi) {
     }
 }
 
-//TODO: can we update the buffers in-place?
 void gcta::update_bim(std::vector<int> &rsnp) {
-    int i = 0;
-
-    //update bim information
-    std::vector<int> chr_buf, bp_buf;
-    std::vector<std::string> a1_buf, a2_buf, ref_A_buf, other_A_buf;
-    std::vector<std::string> snp_name_buf;
-    std::vector<double> genet_dst_buf, impRsq_buf;
-    for (i = 0; i < _snp_num; i++) {
+    int write = 0;
+    for (int i = 0; i < _snp_num; i++) {
         if (!rsnp[i]) continue;
-        chr_buf.push_back(_chr[i]);
-        snp_name_buf.push_back(_snp_name[i]);
-        genet_dst_buf.push_back(_genet_dst[i]);
-        bp_buf.push_back(_bp[i]);
-        a1_buf.push_back(_allele1[i]);
-        a2_buf.push_back(_allele2[i]);
-        ref_A_buf.push_back(_ref_A[i]);
-        other_A_buf.push_back(_other_A[i]);
-        if(_impRsq.size()>0) impRsq_buf.push_back(_impRsq[i]);
+        if (write != i) {
+            _chr[write]       = _chr[i];
+            _snp_name[write]  = std::move(_snp_name[i]);
+            _genet_dst[write] = _genet_dst[i];
+            _bp[write]        = _bp[i];
+            _allele1[write]   = std::move(_allele1[i]);
+            _allele2[write]   = std::move(_allele2[i]);
+            _ref_A[write]     = std::move(_ref_A[i]);
+            _other_A[write]   = std::move(_other_A[i]);
+            if (!_impRsq.empty()) _impRsq[write] = _impRsq[i];
+        }
+        write++;
     }
-    _chr.clear();
-    _snp_name.clear();
-    _genet_dst.clear();
-    _bp.clear();
-    _allele1.clear();
-    _allele2.clear();
-    _ref_A.clear();
-    _other_A.clear();
-    _impRsq.clear();
-    _chr = chr_buf;
-    _snp_name = snp_name_buf;
-    _genet_dst = genet_dst_buf;
-    _bp = bp_buf;
-    _allele1 = a1_buf;
-    _allele2 = a2_buf;
-    _ref_A = ref_A_buf;
-    _other_A = other_A_buf;
-    _impRsq=impRsq_buf;
-    _snp_num = _chr.size();
-    _include.clear();
+    _chr.resize(write);
+    _snp_name.resize(write);
+    _genet_dst.resize(write);
+    _bp.resize(write);
+    _allele1.resize(write);
+    _allele2.resize(write);
+    _ref_A.resize(write);
+    _other_A.resize(write);
+    if (!_impRsq.empty()) _impRsq.resize(write);
+
+    _snp_num = write;
     _include.resize(_snp_num);
     _snp_name_map.clear();
-
-    for (i = 0; i < _snp_num; i++) {
+    for (int i = 0; i < _snp_num; i++) {
         _include[i] = i;
-        _snp_name_map.insert(std::pair<std::string, int>(_snp_name[i], i));
+        _snp_name_map.insert({_snp_name[i], i});
     }
 }
 
 void gcta::update_fam(std::vector<int> &rindi) {
-    //update fam information
-    int i = 0;
-    std::vector<std::string> fid_buf, pid_buf, fa_id_buf, mo_id_buf;
-    std::vector<int> sex_buf;
-    std::vector<double> pheno_buf;
-    for (i = 0; i < _indi_num; i++) {
+    int write = 0;
+    for (int i = 0; i < _indi_num; i++) {
         if (!rindi[i]) continue;
-        fid_buf.push_back(_fid[i]);
-        pid_buf.push_back(_pid[i]);
-        fa_id_buf.push_back(_fa_id[i]);
-        mo_id_buf.push_back(_mo_id[i]);
-        sex_buf.push_back(_sex[i]);
-        pheno_buf.push_back(_pheno[i]);
+        if (write != i) {
+            _fid[write]   = std::move(_fid[i]);
+            _pid[write]   = std::move(_pid[i]);
+            _fa_id[write] = std::move(_fa_id[i]);
+            _mo_id[write] = std::move(_mo_id[i]);
+            _sex[write]   = _sex[i];
+            _pheno[write] = _pheno[i];
+        }
+        write++;
     }
-    _fid.clear();
-    _pid.clear();
-    _fa_id.clear();
-    _mo_id.clear();
-    _sex.clear();
-    _pheno.clear();
-    _fid = fid_buf;
-    _pid = pid_buf;
-    _fa_id = fa_id_buf;
-    _mo_id = mo_id_buf;
-    _sex = sex_buf;
-    _pheno = pheno_buf;
+    _fid.resize(write);
+    _pid.resize(write);
+    _fa_id.resize(write);
+    _mo_id.resize(write);
+    _sex.resize(write);
+    _pheno.resize(write);
 
-    _indi_num = _fid.size();
-    _keep.clear();
+    _indi_num = write;
     _keep.resize(_indi_num);
     _id_map.clear();
-    for (i = 0; i < _indi_num; i++) {
+    for (int i = 0; i < _indi_num; i++) {
         _keep[i] = i;
-        _id_map.insert(std::pair<std::string, int>(_fid[i] + ":" + _pid[i], i));
+        _id_map.insert({_fid[i] + ":" + _pid[i], i});
     }
 }
 
@@ -673,7 +650,6 @@ std::vector<std::string>  gcta::read_bfile_list(std::string bfile_list)
     return(multi_bfiles);
 }
 
-//TODO: can we map the data better?
 void read_single_famfile(std::string famfile, std::vector<std::string> &fid, std::vector<std::string> &pid, std::vector<std::string> &fa_id, std::vector<std::string> &mo_id, std::vector<int> &sex, std::vector<double> &pheno, bool msg_flag) {
     std::ifstream Fam(famfile.c_str());
     if(!Fam) LOGGER.e(0, "cannot open the file [" + famfile + "] to read.");
@@ -1564,7 +1540,6 @@ void gcta::read_snplist(std::string snplistfile, std::vector<std::string> &snpli
     i_snplist.close();
 }
 
-//TODO: larger refactor, but can we not just parse what we want to keep at init, rather than reading all and then building _include[]?
 void gcta::extract_snp(std::string snplistfile)
 {
     std::vector<std::string> snplist;
@@ -2340,7 +2315,12 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
     if (_mu.empty()) calcu_mu();
 
     const int n = _keep.size(), m = snp_indx.size();
-    X.resize(n, m);
+
+    // Guard: only resize when strictly necessary.  If the caller pre-allocated
+    // X(n, max_block_size), this is a no-op for every full block and avoids a
+    // reallocation on the last partial block (where m < max_block_size).
+    if (X.rows() != n || X.cols() < m)
+        X.resize(n, m);
 
     if (_dosage_flag) {
         // After compact_dosage_data(): _keep[i]==i, _include[j]==j; direct access.
@@ -2359,19 +2339,24 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
         }
     } else {
         // After compact_snp_data(): _include[j]==j and _keep[i]==i.
-        // Pre-cache per-SNP metadata once; cast mu to float to avoid repeated conversions.
-        std::vector<int>   snp_k(m);
+        // Pre-cache per-SNP metadata once.
+        // snp_k[j] == snp_indx[j] post-compact, so we index snp_indx directly
+        // and avoid the redundant copy.
         std::vector<bool>  snp_flip(m);
         std::vector<float> snp_mu(m);
         for (int j = 0; j < m; j++) {
-            snp_k[j]    = snp_indx[j];   // _include[snp_indx[j]] == snp_indx[j]
-            snp_flip[j] = (_allele1[snp_k[j]] != _ref_A[snp_k[j]]);
-            snp_mu[j]   = static_cast<float>(_mu[snp_k[j]]);
+            const int k  = snp_indx[j];
+            snp_flip[j]  = (_allele1[k] != _ref_A[k]);
+            snp_mu[j]    = static_cast<float>(_mu[k]);
         }
-        // Column-parallel: each thread writes one contiguous Eigen column (column-major)
+
+        // Column-parallel: each thread writes one contiguous Eigen column (column-major).
+        // Note: std::vector<bool> is bit-packed; reading snp_flip[j] from
+        // multiple threads is safe (different words) but each access goes
+        // through a proxy.  Cost is negligible vs the inner loop work.
         #pragma omp parallel for schedule(static)
         for (int j = 0; j < m; j++) {
-            const int   k    = snp_k[j];
+            const int   k    = snp_indx[j];
             const bool  flip = snp_flip[j];
             const float mu_k = snp_mu[j];
             const auto& s1   = _snp_1[k];
@@ -2387,10 +2372,11 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
                 }
             }
         }
+
         if (divid_by_std) {
             #pragma omp parallel for schedule(static)
             for (int j = 0; j < m; j++) {
-                const double sd = _mu[snp_k[j]] * (1.0 - 0.5 * _mu[snp_k[j]]);
+                const double sd = _mu[snp_indx[j]] * (1.0 - 0.5 * _mu[snp_indx[j]]);
                 if (sd > 1.0e-50)
                     X.col(j) *= static_cast<float>(1.0 / std::sqrt(sd));
             }
@@ -2398,14 +2384,14 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
         }
     }
 
+    // Dosage path divid_by_std only (non-dosage exits above via early return).
     if (divid_by_std) {
-        // dosage path divid_by_std (serial, dosage only reaches here)
+        #pragma omp parallel for schedule(static)
         for (int j = 0; j < m; j++) {
-            const int k = snp_indx[j];
-            double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
-            if (fabs(sd) < 1.0e-50) sd = 0.0;
-            else sd = std::sqrt(1.0 / sd);
-            X.col(j) = X.col(j).array() * static_cast<float>(sd);
+            const int    k  = snp_indx[j];
+            const double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
+            if (sd > 1.0e-50)
+                X.col(j) *= static_cast<float>(1.0 / std::sqrt(sd));
         }
     }
 
