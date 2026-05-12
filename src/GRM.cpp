@@ -790,17 +790,26 @@ GRM::GRM(Pheno* pheno, Marker* marker) {
         fill_grm = (uint64_t)num_individual * (part_keep_indices.second + 1);
     }
 
-    int ret_grm = posix_memalign((void **)&grm, 32, fill_grm * sizeof(double));
-    if(ret_grm){
-        LOGGER.e(0, "can't allocate enough memory to store the (parted) GRM: " + to_string(fill_grm*sizeof(double) / 1024.0/1024/1024) + "GB required.");
-    }
-    memset(grm, 0, fill_grm * sizeof(double));
+    // In bBLAS mode grm and N are managed per-tile in processMakeGRM; allocate
+    // them here only when not using tiling (grm_tile_size == 0 or >= full_n).
+    const int ctor_tile_size_raw = (options_d.count("grm_tile_size") > 0)
+                                   ? static_cast<int>(options_d.at("grm_tile_size")) : 0;
+    const int ctor_tile_size = (ctor_tile_size_raw > 0 && ctor_tile_size_raw < static_cast<int>(num_individual))
+                               ? ctor_tile_size_raw : 0;
+    if(!bBLAS || ctor_tile_size == 0){
+        int ret_grm = posix_memalign((void **)&grm, 32, fill_grm * sizeof(double));
+        if(ret_grm){
+            LOGGER.e(0, "can't allocate enough memory to store the (parted) GRM: " + to_string(fill_grm*sizeof(double) / 1024.0/1024/1024) + "GB required.");
+        }
+        memset(grm, 0, fill_grm * sizeof(double));
 
-    int ret_N = posix_memalign((void **)&N, 32, fill_N * sizeof(uint32_t));
-    if(ret_N){
-        LOGGER.e(0, "can't allocate enough memory to store (parted) N: " + to_string(fill_grm*sizeof(uint32_t) / 1024.0/1024/1024) + "GB required.");
+        int ret_N = posix_memalign((void **)&N, 32, fill_N * sizeof(uint32_t));
+        if(ret_N){
+            LOGGER.e(0, "can't allocate enough memory to store (parted) N: " + to_string(fill_grm*sizeof(uint32_t) / 1024.0/1024/1024) + "GB required.");
+        }
+        memset(N, 0, fill_N * sizeof(uint32_t));
     }
-    memset(N, 0, fill_N * sizeof(uint32_t));
+    // grm/N == nullptr for bBLAS; posix_mem_free(nullptr) is a safe no-op.
 
     sub_miss.assign(index_keep.size() + 64, 0);
 
@@ -967,7 +976,33 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
     }
 
     static const double alpha = 1.0;
-    if(part_keep_indices.first == 0){
+    if(grm_tile_size > 0){
+        // Block-tiled path: split into off-diagonal dgemm + diagonal dsyrk.
+        //
+        // grm buffer is column-major (grm_tile_rows × grm_tile_cols):
+        //   cols [0, tile_rs)    — off-diagonal, filled by dgemm
+        //   cols [tile_rs, tile_re) — diagonal block (lower triangle), filled by dsyrk
+        //
+        // A_tile = stdGeno[tile_rs : tile_re, :] — (tile_rows × k)
+        Eigen::Map<Eigen::MatrixXd, 0, Eigen::OuterStride<>> A_tile(
+            stdGeno + grm_tile_rs, grm_tile_rows, curNumValidMarkers,
+            Eigen::OuterStride<>(stdGenoLD));
+
+        // Off-diagonal block: only present when tile starts after column 0.
+        if(grm_tile_rs > 0){
+            Eigen::Map<Eigen::MatrixXd, 0, Eigen::OuterStride<>> A_top(
+                stdGeno, grm_tile_rs, curNumValidMarkers,
+                Eigen::OuterStride<>(stdGenoLD));
+            Eigen::Map<Eigen::MatrixXd>(grm, grm_tile_rows, grm_tile_rs).noalias() +=
+                alpha * (A_tile * A_top.transpose());
+        }
+
+        // Diagonal block (dsyrk — ~2× fewer flops than equivalent dgemm).
+        // Only the lower triangle is written; flush_grm_tile only reads pair2 <= pair1.
+        double *grm_diag = grm + static_cast<size_t>(grm_tile_rs) * grm_tile_rows;
+        Eigen::Map<Eigen::MatrixXd>(grm_diag, grm_tile_rows, grm_tile_rows)
+            .selfadjointView<Eigen::Lower>().rankUpdate(A_tile, alpha);
+    } else if(part_keep_indices.first == 0){
         Eigen::Map<Eigen::MatrixXd, 0, Eigen::OuterStride<>> A(stdGeno, grm_n, curNumValidMarkers, Eigen::OuterStride<>(stdGenoLD));
         Eigen::Map<Eigen::MatrixXd>(grm, grm_n, grm_n).selfadjointView<Eigen::Lower>().rankUpdate(A, alpha);
     }else{
@@ -1511,7 +1546,101 @@ void GRM::deduce_GRM(){
 }
 
 
+// Write one tile's normalised rows to already-open output files.
+// Uses grm (tile_rows × tile_cols column-major doubles) and
+// N   (tile_rows × tile_cols uint32s, rectangular layout) from object state.
+void GRM::flush_grm_tile(FILE *grm_out, FILE *N_out,
+                         float thresh, bool isSparse, float mtd_weight){
+    const int tile_rs   = grm_tile_rs;
+    const int tile_re   = grm_tile_re;
+    const int tile_rows = grm_tile_rows;
+    const int tile_cols = grm_tile_cols;   // == tile_re
+
+    std::vector<float> w_grm(tile_re);
+    std::vector<float> w_N(tile_re);
+
+    constexpr int BLAS_OUT_BLOCK = 1024;
+    for(int block_start = tile_rs; block_start < tile_re; block_start += BLAS_OUT_BLOCK){
+        const int block_end  = std::min(block_start + BLAS_OUT_BLOCK, tile_re);
+        const int block_rows = block_end - block_start;
+        const int block_cols = block_end;           // lower-triangle max column
+        const int local_block_start = block_start - tile_rs;
+
+        // Blocked transpose: column-major double → row-major float slab.
+        std::vector<float> grm_block(static_cast<size_t>(block_rows) * block_cols);
+        {
+            using RowMajF = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+            Eigen::Map<const Eigen::MatrixXd> G_cm(grm, tile_rows, tile_cols);
+            Eigen::Map<RowMajF>(grm_block.data(), block_rows, block_cols) =
+                G_cm.block(local_block_start, 0, block_rows, block_cols).cast<float>();
+        }
+
+        for(int pair1 = block_start; pair1 < block_end; pair1++){
+            const int local_r = pair1 - block_start;
+            const int tile_r  = pair1 - tile_rs;
+            const uint32_t sub_miss1 = numValidMarkers - sub_miss[pair1];
+            const float    *row   = grm_block.data() + static_cast<size_t>(local_r) * block_cols;
+            const uint32_t *N_row = N + static_cast<size_t>(tile_r) * tile_cols;
+
+            for(int pair2 = 0; pair2 <= pair1; pair2++){
+                const uint32_t sub_N = N_row[pair2] + sub_miss1 - sub_miss[pair2];
+                w_N[pair2]   = static_cast<float>(sub_N);
+                w_grm[pair2] = sub_N ? row[pair2] / sub_N * mtd_weight : 0.0f;
+            }
+            if(!isSparse){
+                fwrite(w_grm.data(), sizeof(float), pair1 + 1, grm_out);
+                fwrite(w_N.data(),   sizeof(float), pair1 + 1, N_out);
+            } else {
+                std::stringstream ss;
+                ss << std::setprecision(std::numeric_limits<float>::digits10 + 2);
+                for(int i = 0; i <= pair1; i++){
+                    if(w_grm[i] >= thresh){
+                        ss << pair1 << "\t" << i << "\t" << w_grm[i] << "\n";
+                    }
+                }
+                const string tmp = ss.str();
+                if(!tmp.empty()) fputs(tmp.c_str(), grm_out);
+            }
+        }
+    }
+}
+
+
 void GRM::N_thread(int grm_index_from, int grm_index_to, const uintptr_t* cur_cmask){
+    if(grm_tile_size > 0){
+        // Rectangular N layout: N[(pair1 - grm_tile_rs) * grm_tile_cols + pair2]
+        uint32_t *po_N_row = N + static_cast<size_t>(grm_index_from - grm_tile_rs) * grm_tile_cols;
+        const uintptr_t *p_cmask1 = cur_cmask + grm_index_from;
+        for(int index_pair1 = grm_index_from; index_pair1 != grm_index_to + 1;
+                index_pair1++, po_N_row += grm_tile_cols){
+            uintptr_t cmask1 = *p_cmask1++;
+            if(cmask1){
+                int count = index_pair1 + 1;
+                const uintptr_t *p_cmask2 = cur_cmask;
+                uint32_t *po_N = po_N_row;
+                int index_pair2 = 0;
+                for(; index_pair2 + 3 < count; index_pair2 += 4){
+                    uintptr_t c0 = p_cmask2[0];
+                    uintptr_t c1 = p_cmask2[1];
+                    uintptr_t c2 = p_cmask2[2];
+                    uintptr_t c3 = p_cmask2[3];
+                    po_N[0] += std::popcount(cmask1 & c0);
+                    po_N[1] += std::popcount(cmask1 & c1);
+                    po_N[2] += std::popcount(cmask1 & c2);
+                    po_N[3] += std::popcount(cmask1 & c3);
+                    p_cmask2 += 4;
+                    po_N += 4;
+                }
+                for(; index_pair2 < count; index_pair2++){
+                    uintptr_t cmask = cmask1 & (*p_cmask2++);
+                    if(cmask) *po_N += std::popcount(cmask);
+                    po_N++;
+                }
+            }
+        }
+        return;
+    }
+
     uint64_t startPos = ((uint64_t)grm_index_from + 1 + part_keep_indices.first) * (grm_index_from - part_keep_indices.first) / 2;
 
     uint32_t *po_N_start = N + startPos;
@@ -1945,6 +2074,17 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
 
     options_b["isDominance"] = isDominance;
 
+    string op_tile = "--GRM-tile-size";
+    if(options_in.find(op_tile) != options_in.end()){
+        if(options_in[op_tile].size() != 1)
+            LOGGER.e(0, op_tile + " requires exactly one integer argument.");
+        int ts = std::stoi(options_in[op_tile][0]);
+        if(ts < 0)
+            LOGGER.e(0, op_tile + " must be a non-negative integer (0 = disabled).");
+        options_d["grm_tile_size"] = static_cast<double>(ts);
+        options_in.erase(op_tile);
+    }
+
     options["use_blas"] = "yes";
     /*
     auto it = std::ranges::find(processFunctions, "make_grm");
@@ -1998,14 +2138,125 @@ void GRM::processMakeGRM(){
         LOGGER.e(0, "the original version has been deleted. Please use GCTA >= 1.92.4");
     }
     geno->setGRMMode(true, isDominance);
-    bool isSTD = true;
-    if(isMtd) isSTD = false;
-    vector<uint32_t> processIndex = marker->get_extract_index_autosome();
+    const bool isSTD = !isMtd;
+    const vector<uint32_t> processIndex = marker->get_extract_index_autosome();
     sd.reserve(processIndex.size());
-    LOGGER << "Computing GRM..." << std::endl;
-    geno->loopDouble(processIndex, nMarkerBlock, true, true, isSTD, true, callBacks);
-    LOGGER << "  Used " << numValidMarkers << " valid SNPs."<< std::endl;
-    deduce_GRM();
+
+    grm_tile_size = (options_d.count("grm_tile_size") > 0)
+                    ? static_cast<int>(options_d["grm_tile_size"]) : 0;
+
+    // If the tile size covers the full sample range there is no benefit to tiling
+    // and it would waste memory (rectangular N vs triangular), so disable it.
+    const int full_n = static_cast<int>(part_keep_indices.second) - static_cast<int>(part_keep_indices.first) + 1;
+    if(grm_tile_size > 0 && grm_tile_size >= full_n){
+        LOGGER.w(0, "--GRM-tile-size " + to_string(grm_tile_size) +
+                    " >= sample size " + to_string(full_n) + "; tiling disabled.");
+        grm_tile_size = 0;
+    }
+
+    if(bBLAS && grm_tile_size > 0){
+        // ── Block-tiled GRM: process grm_tile_size rows per pass to cap memory ──
+        // Peak allocation per tile: grm_tile_rows × grm_tile_cols × (8+4) bytes.
+
+        float thresh = -99.0f;
+        bool isSparse = false;
+        if(options_d.find("sparse_cutoff") != options_d.end()){
+            thresh   = static_cast<float>(options_d["sparse_cutoff"]);
+            isSparse = true;
+            LOGGER.i(0, "Saving sparse GRM with a cutoff " + to_string(thresh) + "...");
+        } else {
+            LOGGER.i(0, "Saving GRM...");
+        }
+
+        FILE *grm_out = nullptr, *N_out = nullptr;
+        if(isSparse){
+            grm_out = fopen((o_name + ".grm.sp").c_str(), "wb");
+            if(!grm_out) LOGGER.e(0, "can't open " + o_name + ".grm.sp to write");
+        } else {
+            grm_out = fopen((o_name + ".grm.bin").c_str(), "wb");
+            N_out   = fopen((o_name + ".grm.N.bin").c_str(), "wb");
+            if(!grm_out || !N_out)
+                LOGGER.e(0, "can't open " + o_name + ".grm.bin or .grm.N.bin to write");
+            setvbuf(grm_out, nullptr, _IOFBF, 1 << 20);
+            setvbuf(N_out,   nullptr, _IOFBF, 1 << 20);
+        }
+
+        const int num_thread = omp_get_max_threads();
+        const int full_rs = static_cast<int>(part_keep_indices.first);
+        const int full_re = static_cast<int>(part_keep_indices.second) + 1;
+        const int num_tiles = (full_re - full_rs + grm_tile_size - 1) / grm_tile_size;
+        LOGGER.i(0, "Block-tiled GRM: " + to_string(num_tiles) + " tile(s) of up to "
+                    + to_string(grm_tile_size) + " rows each.");
+
+        for(int tile_rs = full_rs; tile_rs < full_re; tile_rs += grm_tile_size){
+            const int tile_re = std::min(tile_rs + grm_tile_size, full_re);
+            grm_tile_rs   = tile_rs;
+            grm_tile_re   = tile_re;
+            grm_tile_rows = tile_re - tile_rs;
+            grm_tile_cols = tile_re;   // lower-triangle: widest row needs cols [0, tile_re-1]
+
+            const size_t tile_elems = static_cast<size_t>(grm_tile_rows) * grm_tile_cols;
+            const double tile_gb    = tile_elems * 12.0 / (1024.0 * 1024.0 * 1024.0);
+            LOGGER.i(0, "  Tile rows " + to_string(tile_rs) + "-" + to_string(tile_re - 1)
+                        + " (" + to_string(tile_gb).substr(0, 4) + " GB grm+N)");
+
+            if(posix_memalign((void**)&grm, 64, tile_elems * sizeof(double)) != 0)
+                LOGGER.e(0, "Can't allocate GRM tile buffer.");
+            memset(grm, 0, tile_elems * sizeof(double));
+
+            if(posix_memalign((void**)&N, 32, tile_elems * sizeof(uint32_t)) != 0)
+                LOGGER.e(0, "Can't allocate N tile buffer.");
+            memset(N, 0, tile_elems * sizeof(uint32_t));
+
+            // Reset per-pass accumulators (identical values each pass; resetting avoids accumulation).
+            sub_miss.assign(index_keep.size() + 64, 0);
+            numValidMarkers = 0;
+            finished_marker = 0;
+            sd.clear();
+
+            // Rebuild thread pair ranges for this tile.
+            index_grm_pairs.clear();
+            vector<uint32_t> tile_parts = divide_parts(tile_rs, tile_re - 1, num_thread);
+            index_grm_pairs.push_back(std::make_pair(tile_rs, tile_parts[0]));
+            for(int i = 1; i < (int)tile_parts.size(); i++)
+                index_grm_pairs.push_back(std::make_pair(tile_parts[i-1] + 1, tile_parts[i]));
+
+            geno->loopDouble(processIndex, nMarkerBlock, true, true, isSTD, true, callBacks);
+
+            // Compute mtd_weight from this tile's sd (same values each tile).
+            float mtd_weight = 1.0f;
+            if(options_b["isMtd"]){
+                float weight = 0.0f;
+                if(!isDominance)
+                    for(uint32_t i = 0; i < numValidMarkers; i++) weight += sd[i];
+                else
+                    for(uint32_t i = 0; i < numValidMarkers; i++) weight += sd[i] * sd[i];
+                if(weight > 0.0f) mtd_weight = static_cast<float>(numValidMarkers) / weight;
+            }
+
+            flush_grm_tile(grm_out, N_out, thresh, isSparse, mtd_weight);
+
+            posix_mem_free(grm); grm = nullptr;
+            posix_mem_free(N);   N   = nullptr;
+        }
+
+        if(grm_out) fclose(grm_out);
+        if(N_out)   fclose(N_out);
+        LOGGER << "  Used " << numValidMarkers << " valid SNPs." << std::endl;
+        if(!isSparse){
+            LOGGER.i(0, "GRM has been saved in the file [" + o_name + ".grm.bin]");
+            LOGGER.i(0, "Number of SNPs in each pair of individuals has been saved in the file [" + o_name + ".grm.N.bin]");
+        } else {
+            LOGGER.i(0, "GRM has been saved in the file [" + o_name + ".grm.sp]");
+        }
+    } else {
+        // Non-tiled path (grm_tile_size == 0): single pass, original behaviour.
+        LOGGER << "Computing GRM..." << std::endl;
+        geno->loopDouble(processIndex, nMarkerBlock, true, true, isSTD, true, callBacks);
+        LOGGER << "  Used " << numValidMarkers << " valid SNPs." << std::endl;
+        deduce_GRM();
+    }
+
     delete[] gbufitems;
     posix_mem_free(stdGeno);
     geno->setGRMMode(false, false);

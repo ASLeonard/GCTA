@@ -150,6 +150,23 @@ private:
     std::vector<int> validIndexBuf;
     std::vector<uintptr_t> sampleMissBuf;
 
+    // Block-tiled GRM: when grm_tile_size > 0 (set via --GRM-tile-size),
+    // processMakeGRM iterates over grm_tile_size-row tiles.  For each tile
+    // [grm_tile_rs, grm_tile_re) a rectangular grm/N slab of
+    // grm_tile_rows × grm_tile_cols elements is allocated, computed and
+    // written before moving to the next tile.
+    // grm and N are nullptr between tiles.
+    // grm_tile_size == 0 means no tiling (single-pass, original behaviour).
+    int  grm_tile_size  = 0;  // 0 = disabled; set by --GRM-tile-size <N>
+    int  grm_tile_rs    = 0;  // tile row start (global index)
+    int  grm_tile_re    = 0;  // tile row end   (global, exclusive)
+    int  grm_tile_rows  = 0;  // grm_tile_re - grm_tile_rs
+    int  grm_tile_cols  = 0;  // grm_tile_re (rectangular buffer width)
+
+    // Write the current tile's normalised rows to already-open output files.
+    void flush_grm_tile(FILE *grm_out, FILE *N_out,
+                        float thresh, bool isSparse, float mtd_weight);
+
     //Just for testing
 #ifndef NDEBUG
     FILE * o_geno0;
