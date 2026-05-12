@@ -332,16 +332,19 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
     LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<std::endl;
 
     int k = 0, l = 0;
-    Eigen::MatrixXf X_block;
-    Eigen::MatrixXf UX_block;                    // n×bs; allocated on first block, reused thereafter
-    // Pre-allocated temporaries — no heap activity inside the hot loop
+    // Pre-allocate at max_block_size — no heap activity inside the hot loop.
+    // leftCols(bs) selects the active columns for partial (last) blocks.
+    Eigen::MatrixXf X_block(n, max_block_size);
+    Eigen::MatrixXf UX_block(n, max_block_size);
     Eigen::VectorXf Xt_Vi_y_block(max_block_size);
     Eigen::VectorXf xvx_diag(max_block_size);    // diag(X^T Vi X)
+
     std::vector<int> indx;
+    indx.reserve(max_block_size);   // single alloc before the loop
 
     int last_pct = -1;
     for(i = 0; i < m; ){
-        int cur_pct = static_cast<int>(i * 100 / m);
+        int cur_pct = static_cast<int>((i * 100UL) / m);
         if(cur_pct != last_pct){
             LOGGER.p(0, std::to_string(i) + " / " + std::to_string(m) + " SNPs (" + std::to_string(cur_pct) + "%)");
             last_pct = cur_pct;
@@ -349,28 +352,34 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
         const Eigen::Index bs = static_cast<Eigen::Index>(
             std::min(static_cast<unsigned long>(max_block_size), m - i));
         indx.resize(bs);
-        for(k = 0; k < bs; k++) indx[k] = i + k;
-        make_XMat_subset(X_block, indx, false);  // X_block is n×bs
+        std::iota(indx.begin(), indx.end(), static_cast<int>(i));
+        make_XMat_subset(X_block, indx, false);  // X_block is n×bs (written into pre-alloc'd buffer)
 
-        // U * X_block via STRMM: RHS is a TriangularView product, which Eigen
-        // dispatches to cblas_strmm.  LHS is a plain MatrixXf so Eigen writes
-        // directly into UX_block without an intermediate temporary.
-        // UX_block is dynamically sized n×bs; Eigen reallocates only when bs
-        // changes (i.e. at most once, for the last partial block).
-        UX_block.noalias() = Vi_llt.matrixU() * X_block;
+        // GEMV first — X_block is still hot in cache from make_XMat_subset.
+        // X^T Vi_y (bs×1) — single GEMV into pre-allocated target.
+        Xt_Vi_y_block.head(bs).noalias() = X_block.leftCols(bs).transpose() * Vi_y;
+
+        // STRMM second — reading the full n×n U will evict X_block from cache
+        // regardless, so issuing this after the GEMV saves one full n×bs reload.
+        // U * X_block via STRMM: Eigen dispatches the TriangularView product
+        // to cblas_strmm; writing into a plain MatrixXf avoids an intermediate copy.
+        UX_block.leftCols(bs).noalias() = Vi_llt.matrixU() * X_block.leftCols(bs);
 
         // diag(X^T Vi X) = ||col_j(UX_block)||^2
-        xvx_diag.head(bs) = UX_block.colwise().squaredNorm();
-
-        // X^T Vi_y (bs×1) — single GEMV, pre-allocated target
-        Xt_Vi_y_block.head(bs).noalias() = X_block.transpose() * Vi_y;
+        xvx_diag.head(bs) = UX_block.leftCols(bs).colwise().squaredNorm();
 
         for(l = 0; l < bs; l++){
-            const float inv_xvx = 1.0f / xvx_diag[l];
-            if(std::isfinite(inv_xvx) && inv_xvx > 1.0e-30f){
-                beta[i + l] = inv_xvx * Xt_Vi_y_block[l];
-                se[i + l] = std::sqrt(inv_xvx);
-                const float chisq = beta[i + l] / se[i + l];
+            // xvx_diag[l] is a sum of squares, so >= 0 and never NaN from
+            // finite inputs.  A single pre-division guard suffices; isfinite on
+            // the reciprocal is redundant.
+            if(xvx_diag[l] > 1.0e-30f){
+                const float inv_xvx  = 1.0f / xvx_diag[l];
+                const float sqrt_inv = std::sqrt(inv_xvx);
+                beta[i + l] = Xt_Vi_y_block[l] * inv_xvx;
+                se[i + l]   = sqrt_inv;
+                // chisq = beta/se = (Xt_Vi_y * inv_xvx) / sqrt_inv
+                //                 = Xt_Vi_y * sqrt_inv  (one multiply, no reload)
+                const float chisq = Xt_Vi_y_block[l] * sqrt_inv;
                 pval[i + l] = StatFunc::pchisq(chisq * chisq, 1, _log_pval);
             }
         }
