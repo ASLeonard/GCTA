@@ -1396,43 +1396,59 @@ void GRM::deduce_GRM(){
     if(bBLAS){
         // The BLAS GRM buffer is column-major [grm_m × grm_n_write] (doubles).
         // Writing row by row requires stride-m reads (one cache miss per column step).
-        // Fix: transpose to a row-major float buffer first, using Eigen's blocked copy,
-        // so the inner write loop reads contiguously.
+        // To keep memory low we process the output in blocks of BLAS_OUT_BLOCK rows:
+        // each block allocates a row-major float slab of at most
+        // BLAS_OUT_BLOCK × grm_n_write floats (~300 MB for n=74193, BLOCK=1024),
+        // rather than a single grm_m × grm_n_write slab (~22 GB for the full matrix).
         const int grm_n_write = static_cast<int>(part_keep_indices.second + 1);
-        std::vector<float> grm_rm(static_cast<size_t>(grm_m) * grm_n_write);
-        {
-            using RowMajF = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
-            Eigen::Map<const Eigen::MatrixXd> G_cm(grm, grm_m, grm_n_write);
-            Eigen::Map<RowMajF>(grm_rm.data(), grm_m, grm_n_write) = G_cm.cast<float>();
-        }
+        constexpr int BLAS_OUT_BLOCK = 1024;
 
-        for(int pair1 = part_keep_indices.first; pair1 != part_keep_indices.second + 1; pair1++){
-            const int local_pair1 = pair1 - static_cast<int>(part_keep_indices.first);
-            const uint32_t sub_miss1 = numValidMarkers - sub_miss[pair1];
-            // Sequential read: row local_pair1 of the row-major buffer
-            const float *row = grm_rm.data() + static_cast<size_t>(local_pair1) * grm_n_write;
+        for(int block_start = static_cast<int>(part_keep_indices.first);
+                block_start < grm_n_write;
+                block_start += BLAS_OUT_BLOCK){
+            const int block_end  = std::min(block_start + BLAS_OUT_BLOCK, grm_n_write);
+            const int block_rows = block_end - block_start;
+            // Lower-triangle output for row pair1 only needs columns 0..pair1,
+            // so the widest row in this block needs block_end columns.
+            const int block_cols = block_end;
+            const int local_block_start = block_start - static_cast<int>(part_keep_indices.first);
 
-            for(int pair2 = 0; pair2 != pair1 + 1; pair2++){
-                const uint32_t sub_N = *(po_N + pair2) + sub_miss1 - sub_miss[pair2];
-                w_N[pair2]   = static_cast<float>(sub_N);
-                w_grm[pair2] = sub_N ? row[pair2] / sub_N * mtd_weight : 0.0f;
+            // Transpose the sub-block from column-major double to row-major float.
+            std::vector<float> grm_block(static_cast<size_t>(block_rows) * block_cols);
+            {
+                using RowMajF = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+                Eigen::Map<const Eigen::MatrixXd> G_cm(grm, grm_m, grm_n_write);
+                Eigen::Map<RowMajF>(grm_block.data(), block_rows, block_cols) =
+                    G_cm.block(local_block_start, 0, block_rows, block_cols).cast<float>();
             }
-            if(!isSparse){
-                fwrite(w_grm.data(), sizeof(float), pair1 + 1, grm_out);
-                fwrite(w_N.data(),  sizeof(float), pair1 + 1, N_out);
-            }else{
-                std::stringstream ss;
-                ss << std::setprecision(std::numeric_limits<float>::digits10 + 2);
-                for(int i = 0; i <= pair1; i++){
-                    if(w_grm[i] >= thresh){
-                        ss << pair1 << "\t" << i << "\t" << w_grm[i] << "\n";
-                    }
+
+            for(int pair1 = block_start; pair1 < block_end; pair1++){
+                const int local_block_r = pair1 - block_start;
+                const uint32_t sub_miss1 = numValidMarkers - sub_miss[pair1];
+                const float *row = grm_block.data() + static_cast<size_t>(local_block_r) * block_cols;
+
+                for(int pair2 = 0; pair2 != pair1 + 1; pair2++){
+                    const uint32_t sub_N = *(po_N + pair2) + sub_miss1 - sub_miss[pair2];
+                    w_N[pair2]   = static_cast<float>(sub_N);
+                    w_grm[pair2] = sub_N ? row[pair2] / sub_N * mtd_weight : 0.0f;
                 }
-                const string tmp = ss.str();
-                if(!tmp.empty()) fputs(tmp.c_str(), grm_out);
+                if(!isSparse){
+                    fwrite(w_grm.data(), sizeof(float), pair1 + 1, grm_out);
+                    fwrite(w_N.data(),  sizeof(float), pair1 + 1, N_out);
+                }else{
+                    std::stringstream ss;
+                    ss << std::setprecision(std::numeric_limits<float>::digits10 + 2);
+                    for(int i = 0; i <= pair1; i++){
+                        if(w_grm[i] >= thresh){
+                            ss << pair1 << "\t" << i << "\t" << w_grm[i] << "\n";
+                        }
+                    }
+                    const string tmp = ss.str();
+                    if(!tmp.empty()) fputs(tmp.c_str(), grm_out);
+                }
+                po_N += pair1 + 1;
             }
-            po_N += pair1 + 1;
-        }
+        } // end block loop
     }
     /* // don't need special case
     else{
