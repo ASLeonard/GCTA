@@ -2188,6 +2188,20 @@ void GRM::processMakeGRM(){
         LOGGER.i(0, "Block-tiled GRM: " + to_string(num_tiles) + " tile(s) of up to "
                     + to_string(grm_tile_size) + " rows each.");
 
+        // Allocate for the worst-case tile once and reuse — avoids repeated mmap/munmap
+        // and the associated page-fault storms that dominate sys time.
+        // Worst case: the last full tile has tile_rows=T, tile_cols=full_re (widest column span).
+        size_t max_tile_elems = 0;
+        for(int ts = full_rs; ts < full_re; ts += grm_tile_size){
+            const int te = std::min(ts + grm_tile_size, full_re);
+            max_tile_elems = std::max(max_tile_elems,
+                                      static_cast<size_t>(te - ts) * te);
+        }
+        if(posix_memalign((void**)&grm, 64, max_tile_elems * sizeof(double)) != 0)
+            LOGGER.e(0, "Can't allocate GRM tile buffer.");
+        if(posix_memalign((void**)&N, 32, max_tile_elems * sizeof(uint32_t)) != 0)
+            LOGGER.e(0, "Can't allocate N tile buffer.");
+
         for(int tile_rs = full_rs; tile_rs < full_re; tile_rs += grm_tile_size){
             const int tile_re = std::min(tile_rs + grm_tile_size, full_re);
             grm_tile_rs   = tile_rs;
@@ -2200,13 +2214,8 @@ void GRM::processMakeGRM(){
             LOGGER.i(0, "  Tile rows " + to_string(tile_rs) + "-" + to_string(tile_re - 1)
                         + " (" + to_string(tile_gb).substr(0, 4) + " GB grm+N)");
 
-            if(posix_memalign((void**)&grm, 64, tile_elems * sizeof(double)) != 0)
-                LOGGER.e(0, "Can't allocate GRM tile buffer.");
             memset(grm, 0, tile_elems * sizeof(double));
-
-            if(posix_memalign((void**)&N, 32, tile_elems * sizeof(uint32_t)) != 0)
-                LOGGER.e(0, "Can't allocate N tile buffer.");
-            memset(N, 0, tile_elems * sizeof(uint32_t));
+            memset(N,   0, tile_elems * sizeof(uint32_t));
 
             // Reset per-pass accumulators (identical values each pass; resetting avoids accumulation).
             sub_miss.assign(index_keep.size() + 64, 0);
@@ -2235,10 +2244,10 @@ void GRM::processMakeGRM(){
             }
 
             flush_grm_tile(grm_out, N_out, thresh, isSparse, mtd_weight);
-
-            posix_mem_free(grm); grm = nullptr;
-            posix_mem_free(N);   N   = nullptr;
         }
+
+        posix_mem_free(grm); grm = nullptr;
+        posix_mem_free(N);   N   = nullptr;
 
         if(grm_out) fclose(grm_out);
         if(N_out)   fclose(N_out);
