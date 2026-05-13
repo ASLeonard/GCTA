@@ -178,9 +178,9 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
                 _grm.resize(0,0);
             }
         }
-        _A[_r_indx.size()-1]=eigenMatrix::Identity(_n, _n);
-        
+        // _A[last] left size-0 (identity convention) unless weights override the diagonal.
         if(!weight_file.empty()){
+            _A[_r_indx.size()-1]=eigenMatrix::Identity(_n, _n);
             std::vector<std::string> weight_ID;
             std::vector<double> weights;
 
@@ -301,6 +301,19 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
 
 gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m)
 {
+    // When --reml-trace-approx is active the last REML iteration stores only the
+    // Cholesky factor L in _Vi_L (lower triangle from in-place dpotrf) and releases
+    // _Vi to save RAM.  Materialise V^{-1} via dpotri (in-place inversion of L) on
+    // a copy, avoiding a second n×n allocation.
+    if (_Vi_use_llt) {
+        _Vi.swap(_Vi_L);  // O(1): _Vi gets L's storage, _Vi_L becomes empty
+        gcta_blas_int blas_n_m = static_cast<gcta_blas_int>(_n);
+        if (gcta_dpotri(blas_n_m, _Vi.data(), blas_n_m) != 0)
+            LOGGER.e(0, "dpotri failed materialising V^{-1} for mlma_calcu_stat.");
+        _Vi.triangularView<Eigen::Upper>() = _Vi.transpose();
+        _Vi_use_llt = false;
+    }
+
     const auto n = static_cast<Eigen::Index>(y.size());
     constexpr Eigen::Index max_block_size = 10000;
     unsigned long i = 0;
@@ -392,6 +405,18 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
 
 gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned long m)
 {
+    // When --reml-trace-approx is active the last REML iteration stores only the
+    // Cholesky factor L in _Vi_L (lower triangle from in-place dpotrf) and releases
+    // _Vi to save RAM.  Materialise V^{-1} via dpotri on a copy.
+    if (_Vi_use_llt) {
+        _Vi.swap(_Vi_L);  // O(1): _Vi gets L's storage, _Vi_L becomes empty
+        gcta_blas_int blas_n_mc = static_cast<gcta_blas_int>(_n);
+        if (gcta_dpotri(blas_n_mc, _Vi.data(), blas_n_mc) != 0)
+            LOGGER.e(0, "dpotri failed materialising V^{-1} for mlma_calcu_stat_covar.");
+        _Vi.triangularView<Eigen::Upper>() = _Vi.transpose();
+        _Vi_use_llt = false;
+    }
+
     const auto n = static_cast<Eigen::Index>(y.size());
     const Eigen::Index p = static_cast<Eigen::Index>(_X_c);  // number of fixed covariates
     constexpr Eigen::Index max_block_size = 10000;
@@ -597,7 +622,7 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
     _r_indx.resize(2);
     for(i=0; i<2; i++) _r_indx[i]=i;
     _A.resize(_r_indx.size());
-    _A[1]=eigenMatrix::Identity(_n, _n);
+    // _A[1] left size-0 (identity convention); hot paths handle this implicitly.
     
     eigenVector y_buf=_y;
     std::vector<float> y(_n);
@@ -673,9 +698,13 @@ void gcta::save_reml_state(const std::string& filename, bool no_adj_covar)
     // Ensure _Vi is materialised regardless of which REML path was taken:
     //   - Default path:  _Vi_use_llt == false, _Vi is already an n×n matrix.
     //   - Hutch++ path:  _Vi_use_llt == true, _Vi was released to save RAM.
-    //     _Vi_llt holds L from V = L Lᵀ so _Vi_llt.solve(I) gives V^{-1} in O(n²).
+    //     _Vi_L holds L (lower tri from dpotrf); dpotri on a copy gives V^{-1}.
     if (_Vi_use_llt) {
-        _Vi = _Vi_llt.solve(eigenMatrix::Identity(_n, _n));
+        _Vi.swap(_Vi_L);  // O(1): _Vi gets L's storage, _Vi_L becomes empty
+        gcta_blas_int blas_n_s = static_cast<gcta_blas_int>(_n);
+        if (gcta_dpotri(blas_n_s, _Vi.data(), blas_n_s) != 0)
+            LOGGER.e(0, "dpotri failed materialising V^{-1} in save_reml_state.");
+        _Vi.triangularView<Eigen::Upper>() = _Vi.transpose();
         _Vi_use_llt = false;
     }
 

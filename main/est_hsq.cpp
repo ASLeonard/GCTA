@@ -416,8 +416,12 @@ void gcta::fit_reml(std::string grm_file, std::string phen_file, std::string qco
         _r_indx.push_back(0);
         _A.resize(_r_indx.size());
     }
-    _A[_r_indx.size() - 1] = eigenMatrix::Identity(_n, _n);
+    // Do NOT unconditionally allocate eigenMatrix::Identity here: it can be large allocation for a matrix whose only effect is σ²_e * I.  Convention:
+    // _A[ci].size() == 0 means "identity component"; every hot path (calcu_Vi,
+    // ai_reml, calcu_tr_PA_hutchpp, etc.) handles this case explicitly.  The full
+    // n×n matrix is only allocated when a weight file overrides the diagonal.
     if(!weight_file.empty()){
+        _A[_r_indx.size() - 1] = eigenMatrix::Identity(_n, _n);
         // contruct weight
         Eigen::VectorXd v_weight(_n);
         for (int i = 0; i < weight_ID.size(); i++) {
@@ -755,6 +759,7 @@ void gcta::reml(bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, std:
         u.resize(_n, _r_indx.size());
         for (i = 0; i < _r_indx.size(); i++) {
             if (_bivar_reml || _within_family)(u.col(i)) = (((_Asp[_r_indx[i]]) * Py) * varcmp[i]);
+            else if (_A[_r_indx[i]].size() == 0) u.col(i) = Py * varcmp[i];
             else (u.col(i)) = (((_A[_r_indx[i]]) * Py) * varcmp[i]);
         }
     }
@@ -991,19 +996,26 @@ if (mlmassoc) {
 
         for(int i = 0; i < col_num; i++){
             bBlups.col(i) = bBlup_base * varcmp[i];
-            eigenVector gBlup_fix_eff_loo = _A[_r_indx[i]] * bBlups.col(i);
             int _y_size = _y.size();
+            eigenVector gBlup_fix_eff_loo(_y_size);
             eigenVector diag_H(_y_size);
-            for(int j = 0; j < _y_size; j++){
-                // _Vi stores only the lower triangle.  Vi.col(j) decomposes as:
-                //   rows k > j : lower triangle, contiguous in column-major
-                //   rows k < j : upper triangle -> use Vi(j,k) by symmetry (row access)
-                double s = _Vi(j, j) * _A[_r_indx[i]](j, j);
-                if (j > 0)
-                    s += _Vi.row(j).head(j).dot(_A[_r_indx[i]].row(j).head(j));
-                if (j + 1 < _y_size)
-                    s += _Vi.col(j).tail(_y_size - j - 1).dot(_A[_r_indx[i]].col(j).tail(_y_size - j - 1));
-                diag_H[j] = s * varcmp[i];
+            if (_A[_r_indx[i]].size() == 0) {
+                // Identity component: A*v = v; diag(A * V^{-1}) = diag(V^{-1}).
+                gBlup_fix_eff_loo = bBlups.col(i);
+                for (int j = 0; j < _y_size; j++) diag_H[j] = _Vi(j, j) * varcmp[i];
+            } else {
+                gBlup_fix_eff_loo.noalias() = _A[_r_indx[i]] * bBlups.col(i);
+                for(int j = 0; j < _y_size; j++){
+                    // _Vi stores only the lower triangle.  Vi.col(j) decomposes as:
+                    //   rows k > j : lower triangle, contiguous in column-major
+                    //   rows k < j : upper triangle -> use Vi(j,k) by symmetry (row access)
+                    double s = _Vi(j, j) * _A[_r_indx[i]](j, j);
+                    if (j > 0)
+                        s += _Vi.row(j).head(j).dot(_A[_r_indx[i]].row(j).head(j));
+                    if (j + 1 < _y_size)
+                        s += _Vi.col(j).tail(_y_size - j - 1).dot(_A[_r_indx[i]].col(j).tail(_y_size - j - 1));
+                    diag_H[j] = s * varcmp[i];
+                }
             }
             cvBlups.col(i) = (gBlup_fix_eff_loo.array() - diag_H.array() * y_tilde_centered.array()).array() / (1.0 - diag_H.array()).array();
         }
@@ -1350,6 +1362,14 @@ void gcta::calcu_sum_hsq(double Vp, double VarVp,
 bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, int &iter, bool factorize_only)
 {
     _Vi_use_llt = false;  // reset on every entry
+    // For the Hutch++ path (factorize_only=true) reuse _Vi_L's existing n×n
+    // allocation by swapping it into Vi before the resize.  On the first iteration
+    // _Vi_L is empty so the swap is a no-op and resize allocates normally; on
+    // subsequent iterations _Vi_L holds the previous L, the swap is O(1), and
+    // Vi.resize(_n,_n) is a same-dimensions no-op — eliminating the transient
+    // window where both Vi and _Vi_L are simultaneously allocated (was 2×n²).
+    if (factorize_only && static_cast<int>(_r_indx.size()) > 1)
+        Vi.swap(_Vi_L);
     Vi.resize(_n, _n);
     if (_r_indx.size() == 1) {
         Vi.diagonal() = eigenVector::Constant(_n, 1.0 / prev_varcmp[0]);
@@ -1372,24 +1392,47 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
         #pragma omp parallel for schedule(static)
         for (int j = 0; j < _n; j++) {
             for (int ci = 0; ci < num_comp; ci++)
-                Vi.col(j).tail(_n - j) += prev_varcmp[ci] * _A[_r_indx[ci]].col(j).tail(_n - j);
+                if (_A[_r_indx[ci]].size() > 0)
+                    Vi.col(j).tail(_n - j) += prev_varcmp[ci] * _A[_r_indx[ci]].col(j).tail(_n - j);
         }
+        // Identity components (size==0) contribute only σ² to the diagonal.
+        for (int ci = 0; ci < num_comp; ci++)
+            if (_A[_r_indx[ci]].size() == 0)
+                Vi.diagonal().array() += prev_varcmp[ci];
 
         // LLT-only path: factorize V but skip dpotri — used when the explicit V^{-1}
         // matrix is not needed (Hutch++ / skip_P mode).  V is assembled in the lower
-        // triangle; Eigen::LLT<Lower> reads only that half.
+        // triangle; gcta_dpotrf factors it in-place.
+        //
+        // Memory note: Eigen::LLT(matrix) COPIES matrix into its internal storage,
+        // creating a transient 2×n² peak every iteration.  Instead we call
+        // gcta_dpotrf directly on Vi.data() — factors in-place, no copy — then
+        // swap Vi's heap allocation into _Vi_L (O(1) pointer exchange).  Peak is
+        // now 1×n² throughout.
         if (factorize_only && !_reml_diagV_adj) {
-            Eigen::LLT<eigenMatrix> llt(Vi.selfadjointView<Eigen::Lower>());
-            if (llt.info() == Eigen::Success) {
-                // log|det(V)| = 2 * sum(log(diag(L)))
-                logdet = 2.0 * llt.matrixLLT().diagonal().array().log().sum();
-                _Vi_llt = std::move(llt);
+            gcta_blas_int blas_n = static_cast<gcta_blas_int>(_n);
+            if (gcta_dpotrf(blas_n, Vi.data(), blas_n) == 0) {
+                // Vi's lower triangle now holds L; diagonal = log entries for logdet.
+                logdet = 2.0 * Vi.diagonal().array().log().sum();
+                // O(1) swap: _Vi_L takes Vi's storage, Vi takes _Vi_L's old
+                // (empty) storage.  The subsequent resize(0,0) releases that slot.
+                _Vi_L.swap(Vi);
+                Vi.resize(0, 0);
                 _Vi_use_llt = true;
-                Vi.resize(0, 0);  // release n×n memory; V^{-1} not needed
                 return true;
             }
-            // V not positive-definite: fall through to full inversion below.
-            // Eigen::LLT does not modify Vi, so it still holds V.
+            // V not positive-definite: dpotrf has partially overwritten Vi's lower
+            // triangle.  Reassemble V before falling through to full inversion.
+            Vi.triangularView<Eigen::Lower>().setZero();
+            #pragma omp parallel for schedule(static)
+            for (int j = 0; j < _n; j++)
+                for (int ci = 0; ci < num_comp; ci++)
+                    if (_A[_r_indx[ci]].size() > 0)
+                        Vi.col(j).tail(_n - j) +=
+                            prev_varcmp[ci] * _A[_r_indx[ci]].col(j).tail(_n - j);
+            for (int ci = 0; ci < num_comp; ci++)
+                if (_A[_r_indx[ci]].size() == 0)
+                    Vi.diagonal().array() += prev_varcmp[ci];
         }
 
         constexpr bool use_lu = false;
@@ -1584,10 +1627,13 @@ double gcta::calcu_P_nomatrix(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &X
 
 double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatrix *P)
 {
-    // Vi_X = V^{-1} X: use Cholesky triangular solve when available (skip-P path),
-    // otherwise fall back to a symmetric matrix-vector product with the explicit V^{-1}.
+    // Vi_X = V^{-1} X.
+    // When _Vi_use_llt=true, _Vi_L holds L (lower triangle from dpotrf).
+    // Solve L L^T Vi_X = X via two triangular solves (DTRSM, no n×n matrix needed).
     if (_Vi_use_llt) {
-        Vi_X = _Vi_llt.solve(_X);   // k forward+back-substitutions, k = n_covariates
+        Vi_X = _X;
+        _Vi_L.triangularView<Eigen::Lower>().solveInPlace(Vi_X);
+        _Vi_L.triangularView<Eigen::Lower>().adjoint().solveInPlace(Vi_X);
     } else {
         Vi_X.noalias() = Vi.selfadjointView<Eigen::Lower>() * _X;
     }
@@ -1604,6 +1650,18 @@ double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi
 
     // Skip n×n P materialisation when caller passes nullptr (Hutch++ path)
     if (!P) return logdet_Xt_Vi_X;
+
+    // P materialisation requires the explicit V^{-1} in Vi.
+    // Swap _Vi_L into Vi (O(1), no copy): Vi gets L's storage, _Vi_L becomes empty.
+    // Then dpotri inverts L in-place → Vi = V^{-1}.  Peak stays at 1×n² (was 2×n²).
+    if (_Vi_use_llt) {
+        Vi.swap(_Vi_L);
+        gcta_blas_int blas_n_p = static_cast<gcta_blas_int>(_n);
+        if (gcta_dpotri(blas_n_p, Vi.data(), blas_n_p) != 0)
+            LOGGER.e(0, "dpotri failed when materialising V^{-1} for P.");
+        Vi.triangularView<Eigen::Upper>() = Vi.transpose();
+        _Vi_use_llt = false;  // Vi (=_Vi) is now the full V^{-1}; _Vi_L is empty
+    }
 
     // The correction Vi_X * Xt_Vi_X_i * Vi_X^T is symmetric PSD.
     // Factor Xt_Vi_X_i = L L^T (c×c Cholesky, negligible cost since c is tiny).
@@ -1638,8 +1696,11 @@ void gcta::calcu_Hi(eigenMatrix &P, eigenMatrix &Hi) {
     std::vector<eigenMatrix> PA(m);
 
     for (int i = 0; i < m; i++) {
-        PA[i] = P.selfadjointView<Eigen::Upper>()
-                * ((_bivar_reml || _within_family) ? _Asp[_r_indx[i]] : _A[_r_indx[i]]);
+        if (!_bivar_reml && !_within_family && _A[_r_indx[i]].size() == 0)
+            PA[i] = P;  // P * I = P (P already symmetrised above)
+        else
+            PA[i] = P.selfadjointView<Eigen::Upper>()
+                    * ((_bivar_reml || _within_family) ? _Asp[_r_indx[i]] : _A[_r_indx[i]]);
     }
 
     for (int i = 0; i < m; i++) {
@@ -1676,6 +1737,7 @@ void gcta::reml_equation(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigen
         eigenVector tmp(_n);
         for (int i = 0; i < (int)_r_indx.size(); i++) {
             if (_bivar_reml || _within_family) R(i) = (Py.transpose()*(_Asp[_r_indx[i]]) * Py)(0, 0);
+            else if (_A[_r_indx[i]].size() == 0) R(i) = Py.squaredNorm();
             else {
                 // selfadjointView dispatches to DSYMV (level-2 BLAS), exploiting
                 // symmetry to halve memory reads vs a general DGEMV on the full matrix.
@@ -1706,6 +1768,8 @@ void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector
     for (int i = 0; i < (int)_r_indx.size(); i++) {
         if (_bivar_reml || _within_family)
             APy.col(i).noalias() = _Asp[_r_indx[i]] * Py;
+        else if (_A[_r_indx[i]].size() == 0)
+            APy.col(i) = Py;
         else
             APy.col(i).noalias() = _A[_r_indx[i]].selfadjointView<Eigen::Lower>() * Py;
     }
@@ -1714,12 +1778,12 @@ void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector
     // Calculate Hi
     eigenVector R(_r_indx.size());
     if (use_approx) {
-        for (int i = 0; i < (int)_r_indx.size(); i++) {
-            R(i) = Py.dot(APy.col(i));
-            eigenVector cvec = applyP_vec(APy.col(i));
-            Hi(i, i) = APy.col(i).dot(cvec);
-            for (int j = 0; j < i; j++) Hi(j, i) = Hi(i, j) = APy.col(j).dot(cvec);
-        }
+        // R = APy' Py — DGEMV over all m components at once
+        R.noalias() = APy.transpose() * Py;
+        // PAPy: one DTRSM(n, m) reads L once for all m RHS instead of m DTRSV
+        // calls.  Then Hi = APy' PAPy via a single m×m DGEMM.
+        const eigenMatrix PAPy = applyP_mat(APy);
+        Hi.noalias() = APy.transpose() * PAPy;
     } else {
         // R(i) = Py · (A_i Py) — one DGEMV batching all m dot products
         R.noalias() = APy.transpose() * Py;
@@ -1781,6 +1845,7 @@ void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, ei
     for (auto i = 0; i < (int)_r_indx.size(); i++) {
         if (_bivar_reml || _within_family)
             R(i) = Py.dot(_Asp[_r_indx[i]] * Py);
+        else if (_A[_r_indx[i]].size() == 0) R(i) = Py.squaredNorm();
         else {
             tmp.noalias() = _A[_r_indx[i]].selfadjointView<Eigen::Lower>() * Py;
             R(i) = Py.dot(tmp);
@@ -1800,11 +1865,18 @@ void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, ei
 // Uses cached _Vi, _Vi_X, _Xt_Vi_X_i from calcu_P.
 eigenVector gcta::applyP_vec(const eigenVector &v) const
 {
-    // w = V^{-1} v: use Cholesky triangular solve when available (skip-P path),
+    // w = V^{-1} v: use Cholesky triangular solves when available (skip-P path),
     // otherwise use the precomputed explicit V^{-1} (dsymv on lower triangle).
-    eigenVector w = _Vi_use_llt
-        ? _Vi_llt.solve(v)
-        : eigenVector(_Vi.selfadjointView<Eigen::Lower>() * v);
+    // _Vi_L holds L from in-place dpotrf; two DTRSV calls (L w = v, then L^T w = w)
+    // give V^{-1} v without ever materialising V^{-1}.
+    eigenVector w;
+    if (_Vi_use_llt) {
+        w = v;
+        _Vi_L.triangularView<Eigen::Lower>().solveInPlace(w);
+        _Vi_L.triangularView<Eigen::Lower>().adjoint().solveInPlace(w);
+    } else {
+        w = eigenVector(_Vi.selfadjointView<Eigen::Lower>() * v);
+    }
     // a = X' w = X' V^{-1} v   (dgemv, c-dimensional)
     eigenVector a = _Vi_X.transpose() * v;
     // b = (X' V^{-1} X)^{-1} a   (tiny c×c symmetric solve)
@@ -1814,14 +1886,42 @@ eigenVector gcta::applyP_vec(const eigenVector &v) const
     return w;
 }
 
+// Batch version of applyP_vec: apply P to every column of Z simultaneously.
+// Uses DTRSM (triangular solve with k RHS) or DSYMM instead of k separate
+// DTRSV/DSYMV calls.  For a Cholesky factor L of size n×n (n²/2 entries), each
+// DTRSV reads L once; k calls therefore read L k times from RAM.  DTRSM uses
+// blocking to process all k columns while each cache-line of L is hot, reading
+// L only once — giving a k× bandwidth improvement on the dominant step.
+eigenMatrix gcta::applyP_mat(const eigenMatrix &Z) const
+{
+    // w_j = V^{-1} z_j for all j: one DTRSM (L read once) or DSYMM
+    // _Vi_L holds L from in-place dpotrf; DTRSM(L) + DTRSM(L^T) give V^{-1} Z
+    // without allocating a second n×n matrix.
+    eigenMatrix W;
+    if (_Vi_use_llt) {
+        W = Z;
+        _Vi_L.triangularView<Eigen::Lower>().solveInPlace(W);
+        _Vi_L.triangularView<Eigen::Lower>().adjoint().solveInPlace(W);
+    } else {
+        W = eigenMatrix(_Vi.selfadjointView<Eigen::Lower>() * Z);
+    }
+    // a = X'V^{-1}Z = (V^{-1}X)'Z  (c×k tiny DGEMM)
+    const eigenMatrix A = _Vi_X.transpose() * Z;
+    // PZ = V^{-1}Z - (V^{-1}X)(X'V^{-1}X)^{-1}(X'V^{-1}Z)
+    W.noalias() -= _Vi_X * (_Xt_Vi_X_i.selfadjointView<Eigen::Lower>() * A);
+    return W;
+}
+
 // Hutch++ stochastic trace estimation: tr(P * A_i) for all variance components.
 // NOTE: This is a MEMORY optimisation, not a speed optimisation. Each call does
-// ~2k dsymv(n×n) per component vs one O(n²) sweep for exact trace. The benefit
-// is avoiding materialisation of the n×n P matrix, saving 8n² bytes of RAM.
+// 3 DSYMM + 3 DTRSM(n,k) per component vs one O(n²) sweep for exact trace. The
+// benefit is avoiding materialisation of the n×n P matrix, saving 8n² bytes of RAM.
 // Probe vectors S and G are generated once (on first call) and cached in
 // _hutchpp_S / _hutchpp_G so that the trace estimate is a smooth deterministic
 // function of the variance components, allowing AI-REML to converge.
 // Reference: Meyer, Musco, Musco, Woodruff (2021), "Hutch++", SIAM SOSA.
+
+//TODO: we can add more probes when delta logL is small?
 void gcta::calcu_tr_PA_hutchpp(eigenVector &tr_PA, int m_probes)
 {
     const int ncomp = _r_indx.size();
@@ -1845,40 +1945,35 @@ void gcta::calcu_tr_PA_hutchpp(eigenVector &tr_PA, int m_probes)
     }
 
     for (int ci = 0; ci < ncomp; ci++) {
-        const auto &Ai = _A[_r_indx[ci]];
+        const bool is_I = (_A[_r_indx[ci]].size() == 0);
+        const auto &Ai  = _A[_r_indx[ci]];  // only read when !is_I
 
-        // Helper: apply (P * A_i) to a vector
-        auto applyPA = [&](const eigenVector &z) -> eigenVector {
-            eigenVector Az = Ai.selfadjointView<Eigen::Lower>() * z;
-            return applyP_vec(Az);
-        };
+        // Phase A: K = P * (A_i * S).  Identity: A_i * S = S → skip DSYMM.
+        eigenMatrix K = is_I
+            ? applyP_mat(_hutchpp_S)
+            : applyP_mat(eigenMatrix(Ai.selfadjointView<Eigen::Lower>() * _hutchpp_S));
 
-        // --- Phase A: range sketch ---
-        eigenMatrix K(_n, k);
-        for (int j = 0; j < k; j++)
-            K.col(j) = applyPA(_hutchpp_S.col(j));
-
-        // QR factorisation of K to get orthonormal basis Q (n x k)
+        // QR factorisation of K → orthonormal basis Q (n × k)
         Eigen::HouseholderQR<eigenMatrix> qr(K);
         eigenMatrix Q = qr.householderQ() * eigenMatrix::Identity(_n, k);
 
-        // --- Phase B: low-rank trace contribution ---
-        eigenMatrix MQ(_n, k);
-        for (int j = 0; j < k; j++) MQ.col(j) = applyPA(Q.col(j));
-        double t_lr = Q.cwiseProduct(MQ).sum();
+        // Phase B: low-rank trace contribution.  Identity: A_i * Q = Q → skip DSYMM.
+        const eigenMatrix MQ = is_I
+            ? applyP_mat(Q)
+            : applyP_mat(eigenMatrix(Ai.selfadjointView<Eigen::Lower>() * Q));
+        const double t_lr = Q.cwiseProduct(MQ).sum();
 
-        // --- Phase C: Hutchinson residual ---
-        eigenMatrix MG(_n, k);
-        for (int j = 0; j < k; j++) MG.col(j) = applyPA(_hutchpp_G.col(j));
+        // Phase C: Hutchinson residual.  Identity: A_i * G = G → skip DSYMM.
+        const eigenMatrix MG = is_I
+            ? applyP_mat(_hutchpp_G)
+            : applyP_mat(eigenMatrix(Ai.selfadjointView<Eigen::Lower>() * _hutchpp_G));
 
-        // Project out Q: R = G - Q*(Q'G), MR = MG - MQ*(Q'G)
-        eigenMatrix QtG = Q.transpose() * _hutchpp_G;   // k x k
-        eigenMatrix R = _hutchpp_G - Q * QtG;
-        eigenMatrix MR = MG - MQ * QtG;
+        // Project G orthogonal to Q: R = (I - QQ')G, MR = (I - QQ')MG
+        const eigenMatrix QtG = Q.transpose() * _hutchpp_G;   // k×k
+        const eigenMatrix R_  = _hutchpp_G - Q * QtG;         // n×k
+        const eigenMatrix MR  = MG          - MQ * QtG;       // n×k
 
-        double t_hutch = R.cwiseProduct(MR).sum() / k;
-
-        tr_PA(ci) = t_lr + t_hutch;
+        tr_PA(ci) = t_lr + R_.cwiseProduct(MR).sum() / k;
     }
 }
 
@@ -1909,7 +2004,13 @@ void gcta::calcu_tr_PA(eigenMatrix &P, eigenVector &tr_PA) {
             //LOGGER << "diag sum finished" << std::endl;
             //temp.resize(0,0);
         }
-        else {
+        else if (_A[_r_indx[i]].size() == 0) {
+            // Identity component: tr(P * I) = tr(P) — only the diagonal is needed.
+            double s = 0.0;
+            #pragma omp parallel for reduction(+:s) schedule(static)
+            for (int col = 0; col < _n; col++) s += P(col, col);
+            tr_PA(i) = s;
+        } else {
             // tr(P * A) = P ⊙ A elementwise summed. Both P and A are symmetric,
             // so only the lower triangle is needed: diagonal contributes weight 1,
             // off-diagonal weight 2. Column-major loop order (col outer, row inner)
