@@ -147,6 +147,7 @@ public:
     void set_reml_diag_mul(double value);
     void set_reml_diagV_adj(int method);
     void set_reml_trace_approx(bool on, int nprobes);
+    void set_reml_trace_power_iter(int q);
     void set_log_pval(bool log_pval);
     void set_reml_inv_method(int method);
 
@@ -332,7 +333,7 @@ private:
     void calcu_Hi(eigenMatrix &P, eigenMatrix &Hi);
     void reml_equation(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector &varcmp);
     double lgL_reduce_mdl(bool no_constrain);
-    void em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, eigenVector &varcmp);
+    void em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, eigenVector &varcmp, double dlogL = 1000.0);
     void ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector &prev_varcmp, eigenVector &varcmp, double dlogL);
     void calcu_tr_PA(eigenMatrix &P, eigenVector &tr_PA);
     eigenVector applyP_vec(const eigenVector &v) const;
@@ -592,6 +593,7 @@ private:
     eigenMatrix _P;
     bool _reml_trace_approx = false;
     int  _reml_trace_approx_nprobes = 90;  // ~1% relative trace error
+    int  _reml_trace_power_iter = 0;       // power iterations for range sketch; 0=off (no benefit for bulk-spectrum GRMs)
     eigenMatrix _hutchpp_S;   // cached Rademacher probes (n × k) for Hutch++ range sketch
     eigenMatrix _hutchpp_G;   // cached Rademacher probes (n × k) for Hutch++ residual
     eigenVector _b;

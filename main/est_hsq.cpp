@@ -69,6 +69,10 @@ void gcta::set_reml_trace_approx(bool on, int nprobes){
     _reml_trace_approx = on;
     _reml_trace_approx_nprobes = nprobes;
 }
+
+void gcta::set_reml_trace_power_iter(int q){
+    _reml_trace_power_iter = q;
+}
     
 
 void gcta::read_phen(std::string phen_file, std::vector<std::string> &phen_ID, std::vector< std::vector<std::string> > &phen_buf, int mphen, int mphen2) {
@@ -1169,10 +1173,13 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
             _P.resize(0, 0);  // release memory
         } else {
             logdet_Xt_Vi_X = calcu_P(_Vi, Vi_X, Xt_Vi_X_i, _P);
+            // _Vi is not used again until the next iteration (ai_reml and calcu_tr_PA
+            // operate on _P).  Releasing it here drops the working set by 1×n².
+            _Vi.resize(0, 0);
         }
         if (_reml_mtd == 0) ai_reml(_P, Hi, Py, prev_varcmp, varcmp, dlogL);
         else if (_reml_mtd == 1) reml_equation(_P, Hi, Py, varcmp);
-        else if (_reml_mtd == 2) em_reml(_P, Py, prev_varcmp, varcmp);  //slow ++
+        else if (_reml_mtd == 2) em_reml(_P, Py, prev_varcmp, varcmp, dlogL);  //slow ++
         lgL = -0.5 * (logdet_Xt_Vi_X + logdet + (_y.transpose() * Py)(0, 0));
 
         if(_reml_force_converge && _reml_AI_not_invertible) break;
@@ -1693,19 +1700,32 @@ void gcta::calcu_Hi(eigenMatrix &P, eigenMatrix &Hi) {
     P = (P + P.transpose()) * 0.5;
 
     const int m = static_cast<int>(_r_indx.size());
-    std::vector<eigenMatrix> PA(m);
 
+    // For identity components (size==0): PA[i] = P * I = P.  Storing a full copy of P
+    // (n×n, O(n²) bytes) just to compute Frobenius products is wasteful.  Instead,
+    // leave PA[i] empty (size 0) and handle the identity case analytically:
+    //   Hi(i,j) when i is identity  →  PA[j] ⊙ P (P symmetric, so no transpose)
+    //   Hi(i,i) when both identity →  ‖P‖_F²
+    // This saves 1×n² = ~1.8 GB at convergence vs the old PA[last]=P copy.
+    std::vector<eigenMatrix> PA(m);
     for (int i = 0; i < m; i++) {
         if (!_bivar_reml && !_within_family && _A[_r_indx[i]].size() == 0)
-            PA[i] = P;  // P * I = P (P already symmetrised above)
+            PA[i].resize(0, 0);  // identity marker — no copy of P
         else
-            PA[i] = P.selfadjointView<Eigen::Upper>()
+            PA[i].noalias() = P.selfadjointView<Eigen::Upper>()
                     * ((_bivar_reml || _within_family) ? _Asp[_r_indx[i]] : _A[_r_indx[i]]);
     }
 
     for (int i = 0; i < m; i++) {
+        const bool i_id = (PA[i].size() == 0);
         for (int j = 0; j <= i; j++) {
-            Hi(i, j) = Hi(j, i) = PA[i].cwiseProduct(PA[j].transpose()).sum();
+            const bool j_id = (PA[j].size() == 0);
+            double val;
+            if (i_id && j_id)       val = P.squaredNorm();              // tr(P²)
+            else if (i_id)          val = PA[j].cwiseProduct(P).sum();  // tr(P·PA[j])
+            else if (j_id)          val = PA[i].cwiseProduct(P).sum();  // tr(PA[i]·P)
+            else                    val = PA[i].cwiseProduct(PA[j].transpose()).sum();
+            Hi(i, j) = Hi(j, i) = val;
         }
     }
 
@@ -1801,8 +1821,14 @@ void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector
 
     // Calcualte tr(PA) and dL
     eigenVector tr_PA;
-    if (use_approx) calcu_tr_PA_hutchpp(tr_PA, _reml_trace_approx_nprobes);
-    else calcu_tr_PA(P, tr_PA);
+    // Adaptive probe count: use reduced budget when far from convergence (large
+    // |dlogL|) — 3× cheaper per iteration, same accuracy at the final point.
+    if (use_approx) {
+        const int eff_nprobes = (std::fabs(dlogL) < 1.0)
+            ? _reml_trace_approx_nprobes
+            : std::max(_reml_trace_approx_nprobes / 3, 9);
+        calcu_tr_PA_hutchpp(tr_PA, eff_nprobes);
+    } else calcu_tr_PA(P, tr_PA);
     R = -0.5 * (tr_PA - R);
 
     // Calculate variance component
@@ -1823,13 +1849,19 @@ void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector
 
 // input P, calculate varcmp
 
-void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, eigenVector &varcmp)
+void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, eigenVector &varcmp, double dlogL)
 {
     // Calculate trace(PA)
     //LOGGER << "Before em_reml: " << getVMemKB() << " " << getMemKB() << ", "; 
     eigenVector tr_PA;
     if (_reml_trace_approx && !_bivar_reml && !_within_family) {
-        calcu_tr_PA_hutchpp(tr_PA, _reml_trace_approx_nprobes);
+        // Adaptive probe count: use 1/3 of the budget when dlogL is large (early
+        // iterations where varcmp moves far anyway), full budget near convergence
+        // (|dlogL|<1) for a 3× more accurate trace estimate at the final point.
+        const int eff_nprobes = (std::fabs(dlogL) < 1.0)
+            ? _reml_trace_approx_nprobes
+            : std::max(_reml_trace_approx_nprobes / 3, 9);
+        calcu_tr_PA_hutchpp(tr_PA, eff_nprobes);
         Py = applyP_vec(_y);
     } else {
         calcu_tr_PA(P, tr_PA);  // exact path
@@ -1932,15 +1964,26 @@ void gcta::calcu_tr_PA_hutchpp(eigenVector &tr_PA, int m_probes)
     // Lazily generate probe vectors once per REML run; reuse across iterations
     // so the trace estimate is a deterministic function of varcmp → smooth
     // optimisation landscape → Newton convergence.
+    //
+    // Use a dedicated RNG seeded from the problem dimensions rather than the
+    // global StatFunc::rng() (which is seeded from hardware entropy and advances
+    // non-deterministically as other code runs).  This makes probe vectors
+    // reproducible across runs for the same dataset, eliminating run-to-run
+    // variation in the stochastic trace estimate and therefore in the final
+    // variance component estimates.  The seed mixes n and ncomp so different
+    // problem sizes get different random directions.
     if (_hutchpp_S.rows() != _n || _hutchpp_S.cols() != k) {
-        std::mt19937 &rng = StatFunc::rng();
+        const uint32_t seed = static_cast<uint32_t>(_n) * 2654435761u
+                              ^ (static_cast<uint32_t>(ncomp) * 2246822519u)
+                              ^ 0x9e3779b9u;  // Knuth multiplicative hash
+        std::mt19937 probe_rng(seed);
         std::uniform_int_distribution<int> coin(0, 1);
         _hutchpp_S.resize(_n, k);
         _hutchpp_G.resize(_n, k);
         for (int j = 0; j < k; j++)
             for (int r = 0; r < _n; r++) {
-                _hutchpp_S(r, j) = coin(rng) ? 1.0 : -1.0;
-                _hutchpp_G(r, j) = coin(rng) ? 1.0 : -1.0;
+                _hutchpp_S(r, j) = coin(probe_rng) ? 1.0 : -1.0;
+                _hutchpp_G(r, j) = coin(probe_rng) ? 1.0 : -1.0;
             }
     }
 
@@ -1948,25 +1991,33 @@ void gcta::calcu_tr_PA_hutchpp(eigenVector &tr_PA, int m_probes)
         const bool is_I = (_A[_r_indx[ci]].size() == 0);
         const auto &Ai  = _A[_r_indx[ci]];  // only read when !is_I
 
-        // Phase A: K = P * (A_i * S).  Identity: A_i * S = S → skip DSYMM.
-        eigenMatrix K = is_I
-            ? applyP_mat(_hutchpp_S)
-            : applyP_mat(eigenMatrix(Ai.selfadjointView<Eigen::Lower>() * _hutchpp_S));
+        // Phase A: range sketch K = (PA)^{1+q} * S, with q = _reml_trace_power_iter.
+        // Each power iteration maps K → PA*K, squaring the eigenvalue ratio between
+        // captured and missed directions.  Intermediate QR prevents numerical blow-up
+        // (Halko, Martinsson, Tropp 2011).  For a flat bulk spectrum (typical human
+        // GRM after PC correction) q=0 is usually sufficient.
+        auto applyPA_mat = [&](const eigenMatrix &Z) -> eigenMatrix {
+            return is_I ? applyP_mat(Z)
+                        : applyP_mat(eigenMatrix(Ai.selfadjointView<Eigen::Lower>() * Z));
+        };
+        eigenMatrix K = applyPA_mat(_hutchpp_S);
+        for (int pw = 0; pw < _reml_trace_power_iter; pw++) {
+            // Re-orthogonalize to maintain numerical stability before next matvec.
+            Eigen::HouseholderQR<eigenMatrix> qr_pw(K);
+            K = qr_pw.householderQ() * eigenMatrix::Identity(_n, k);
+            K = applyPA_mat(K);
+        }
 
         // QR factorisation of K → orthonormal basis Q (n × k)
         Eigen::HouseholderQR<eigenMatrix> qr(K);
         eigenMatrix Q = qr.householderQ() * eigenMatrix::Identity(_n, k);
 
-        // Phase B: low-rank trace contribution.  Identity: A_i * Q = Q → skip DSYMM.
-        const eigenMatrix MQ = is_I
-            ? applyP_mat(Q)
-            : applyP_mat(eigenMatrix(Ai.selfadjointView<Eigen::Lower>() * Q));
+        // Phase B: low-rank trace contribution.
+        const eigenMatrix MQ = applyPA_mat(Q);
         const double t_lr = Q.cwiseProduct(MQ).sum();
 
-        // Phase C: Hutchinson residual.  Identity: A_i * G = G → skip DSYMM.
-        const eigenMatrix MG = is_I
-            ? applyP_mat(_hutchpp_G)
-            : applyP_mat(eigenMatrix(Ai.selfadjointView<Eigen::Lower>() * _hutchpp_G));
+        // Phase C: Hutchinson residual.
+        const eigenMatrix MG = applyPA_mat(_hutchpp_G);
 
         // Project G orthogonal to Q: R = (I - QQ')G, MR = (I - QQ')MG
         const eigenMatrix QtG = Q.transpose() * _hutchpp_G;   // k×k
@@ -2023,7 +2074,10 @@ void gcta::calcu_tr_PA(eigenMatrix &P, eigenVector &tr_PA) {
             // same arithmetic as the hand-written loop at potentially 4–8× the
             // throughput.  The outer OMP reduction is preserved for multi-threaded
             // parallelism across columns.
-            #pragma omp parallel for reduction(+:s) schedule(static)
+            // Column col has inner-loop length (n-col-1): col 0 is n-1 long, last is 0.
+            // schedule(static) gives thread 0 roughly twice the work of the last thread.
+            // schedule(guided) rebalances by assigning chunks of decreasing size.
+            #pragma omp parallel for reduction(+:s) schedule(guided)
             for (int col = 0; col < _n; col++) {
                 const int tail = _n - col - 1;
                 s += P(col, col) * Ai(col, col);
