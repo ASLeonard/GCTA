@@ -791,6 +791,18 @@ void gcta::reml(bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, std:
         if (LRT < 0.0) LRT = 0.0;
     }
 
+    // In the non-approx mlmassoc path the REML loop releases _Vi after every
+    // iteration (including the last) to save n² memory between iterations.
+    // _Vi_use_llt is left false, so mlma_calcu_stat would receive a 0×0 matrix
+    // and crash.  Recompute V^{-1} from the converged variance components here,
+    // before returning, so the caller has a valid _Vi.
+    // The approx path (_Vi_use_llt=true) stores L in _Vi_L and is unaffected.
+    if (mlmassoc && !_reml_trace_approx && !_bivar_reml && !_within_family) {
+        double logdet_dummy = 0.0;
+        int iter_dummy = 0;
+        calcu_Vi(_Vi, varcmp, logdet_dummy, iter_dummy, /*factorize_only=*/false);
+    }
+
 if (mlmassoc) {
     _varcmp = eigenVector2Vector(varcmp);
 
@@ -1458,6 +1470,52 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
         */
         int rank = 0;
         bool ret = true;
+
+        // Hot-path optimisation for the default LLT inversion: call dpotrf/dpotri
+        // directly in-place instead of via SquareMatrixInverse.
+        // SquareMatrixInverse always makes an n×n A_orig backup copy so it can restore
+        // the matrix if dpotri fails and fall through to LU.  For n=15k that copy is
+        // ~1.8 GB allocated on every REML iteration.  Instead, on failure we reassemble
+        // V from the stored variance components (O(n²) work, O(1) extra memory) — the
+        // same strategy used by the factorize_only failure path above.
+        //
+        // Guard with !factorize_only: if the factorize_only dpotrf above already failed
+        // and fell through, Vi holds a lower-tri-only reconstruction; we let
+        // SquareMatrixInverse handle it (it will fail dpotrf again and fall to LU).
+        // Guard with _reml_inv_mtd==0||1: user-specified LU/QR goes through the normal
+        // SquareMatrixInverse path unchanged.
+        if (method_try == INV_LLT && !factorize_only) {
+            gcta_blas_int blas_n_f = static_cast<gcta_blas_int>(_n);
+            bool llt_ok = (gcta_dpotrf(blas_n_f, Vi.data(), blas_n_f) == 0);
+            if (llt_ok) {
+                logdet = Vi.diagonal().array().square().log().sum();
+                llt_ok = (gcta_dpotri(blas_n_f, Vi.data(), blas_n_f) == 0);
+            }
+            if (llt_ok) {
+                Vi.triangularView<Eigen::Upper>() = Vi.transpose();
+                return true;
+            }
+            // V is not positive-definite (common with GRMs that have negative
+            // eigenvalues).  dpotrf has partially overwritten Vi's lower triangle;
+            // reassemble the full symmetric V from stored components so the LU
+            // cascade below receives a valid matrix.  No extra n×n allocation needed.
+            Vi.triangularView<Eigen::Lower>().setZero();
+            #pragma omp parallel for schedule(static)
+            for (int j = 0; j < _n; j++)
+                for (int ci = 0; ci < num_comp; ci++)
+                    if (_A[_r_indx[ci]].size() > 0)
+                        Vi.col(j).tail(_n - j) +=
+                            prev_varcmp[ci] * _A[_r_indx[ci]].col(j).tail(_n - j);
+            for (int ci = 0; ci < num_comp; ci++)
+                if (_A[_r_indx[ci]].size() == 0)
+                    Vi.diagonal().array() += prev_varcmp[ci];
+            // Symmetrise: LU (dgetrf) requires the full matrix.
+            Vi.triangularView<Eigen::Upper>() =
+                Vi.triangularView<Eigen::Lower>().transpose();
+            method_try = INV_LU;
+            // fall through to SquareMatrixInverse below for LU/QR/SVD cascade
+        }
+
         if(!SquareMatrixInverse(Vi, logdet, rank, method_try)){
             LOGGER<<"Warning: the variance-covaraince matrix V is invertible." << std::endl;
             if(_reml_diagV_adj == 1){

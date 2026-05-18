@@ -117,12 +117,12 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
             (_A[0]).resize(_n, _n);
             eigenMatrix A_N_buf(_n, _n);
             {
-                eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
-                Eigen::MatrixXf grm_N_sym_f(_grm_N.selfadjointView<Eigen::Lower>());
-                eigenMatrix grm_N_sym = grm_N_sym_f.cast<double>();
+                // read_grm_bin/gz fill both triangles; no selfadjointView copy needed for _grm.
+                // _grm_N is float so a cast<double>() temporary is unavoidable, but we
+                // avoid the intermediate MatrixXf symmetrization copy.
                 Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
-                (_A[0]) = grm_sym(kp_idx, kp_idx);
-                A_N_buf = grm_N_sym(kp_idx, kp_idx);
+                (_A[0]) = _grm(kp_idx, kp_idx);
+                A_N_buf = _grm_N.cast<double>()(kp_idx, kp_idx);
             }
 
             LOGGER << "\nReading the secondary GRM from [" << grm_files[0] << "] ..." << std::endl;
@@ -130,12 +130,9 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
             LOGGER<<"\nSubtracting [" << grm_files[1] << "] from [" << grm_files[0] << "] ..." << std::endl;
             StrFunc::match(uni_id, grm_id, kp);
             {
-                eigenMatrix grm2_sym(_grm.selfadjointView<Eigen::Lower>());
-                Eigen::MatrixXf grm2_N_sym_f(_grm_N.selfadjointView<Eigen::Lower>());
-                eigenMatrix grm2_N_sym = grm2_N_sym_f.cast<double>();
                 Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
-                eigenMatrix grm2_slice = grm2_sym(kp_idx, kp_idx);
-                eigenMatrix grm2_N_slice = grm2_N_sym(kp_idx, kp_idx);
+                eigenMatrix grm2_slice = _grm(kp_idx, kp_idx);
+                eigenMatrix grm2_N_slice = _grm_N.cast<double>()(kp_idx, kp_idx);
                 _A[0] = ((_A[0].array() * A_N_buf.array()) - (grm2_slice.array() * grm2_N_slice.array()))
                          / (A_N_buf.array() - grm2_N_slice.array());
             }
@@ -148,12 +145,23 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
             _A.resize(_r_indx.size());
             if(grm_flag){
                 StrFunc::match(uni_id, grm_id, kp);
-                {
-                    eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
-                    Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
-                    (_A[0]) = grm_sym(kp_idx, kp_idx);
+                // If all GRM individuals are kept in original order, swap _grm directly
+                // into _A[0] (O(1), zero extra allocation) instead of an n×n copy.
+                // kp is the identity permutation iff _n == _grm.rows() and kp[i]==i.
+                bool identity_kp = (static_cast<int>(_n) == _grm.rows());
+                if (identity_kp) {
+                    for (int ii = 0; ii < static_cast<int>(_n) && identity_kp; ii++)
+                        if (kp[ii] != ii) identity_kp = false;
                 }
-                _grm.resize(0,0);
+                if (identity_kp) {
+                    _A[0].swap(_grm);  // O(1): transfers ownership, _grm becomes empty
+                } else {
+                    // read_grm_bin/gz fill both triangles, so no selfadjointView copy needed.
+                    Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+                    (_A[0]) = _grm(kp_idx, kp_idx);
+                    _grm.resize(0,0);
+                }
+                _grm_N.resize(0,0);  // not needed after _A[0] is filled
             }
             else if(m_grm_flag){
                 LOGGER << "There are " << grm_files.size() << " GRM file names specified in the file [" + grm_file + "]." << std::endl;
@@ -161,11 +169,20 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
                     LOGGER << "Reading the GRM from the " << i + 1 << "th file ..." << std::endl;
                     read_grm(grm_files[i], grm_id, true, false, true);
                     StrFunc::match(uni_id, grm_id, kp);
-                    {
-                        eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
-                        Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
-                        (_A[i]) = grm_sym(kp_idx, kp_idx);
+                    bool identity_kp_m = (static_cast<int>(_n) == _grm.rows());
+                    if (identity_kp_m) {
+                        for (int ii = 0; ii < static_cast<int>(_n) && identity_kp_m; ii++)
+                            if (kp[ii] != ii) identity_kp_m = false;
                     }
+                    if (identity_kp_m) {
+                        _A[i].swap(_grm);
+                    } else {
+                        // read_grm_bin/gz fill both triangles, so no selfadjointView copy needed.
+                        Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+                        (_A[i]) = _grm(kp_idx, kp_idx);
+                        _grm.resize(0,0);
+                    }
+                    _grm_N.resize(0,0);  // not needed after _A[i] is filled
                 }
             }
             else{
@@ -347,8 +364,9 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
     int k = 0, l = 0;
     // Pre-allocate at max_block_size — no heap activity inside the hot loop.
     // leftCols(bs) selects the active columns for partial (last) blocks.
+    // UX_block is eliminated: cblas_strmm overwrites X_block in-place (see below),
+    // saving the full n×max_block_size float allocation (~600 MB for n=15k).
     Eigen::MatrixXf X_block(n, max_block_size);
-    Eigen::MatrixXf UX_block(n, max_block_size);
     Eigen::VectorXf Xt_Vi_y_block(max_block_size);
     Eigen::VectorXf xvx_diag(max_block_size);    // diag(X^T Vi X)
 
@@ -372,14 +390,17 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
         // X^T Vi_y (bs×1) — single GEMV into pre-allocated target.
         Xt_Vi_y_block.head(bs).noalias() = X_block.leftCols(bs).transpose() * Vi_y;
 
-        // STRMM second — reading the full n×n U will evict X_block from cache
-        // regardless, so issuing this after the GEMV saves one full n×bs reload.
-        // U * X_block via STRMM: Eigen dispatches the TriangularView product
-        // to cblas_strmm; writing into a plain MatrixXf avoids an intermediate copy.
-        UX_block.leftCols(bs).noalias() = Vi_llt.matrixU() * X_block.leftCols(bs);
+        // In-place STRMM: overwrite X_block with U * X_block (= L^T * X_block).
+        // Vi_llt stores L in its lower triangle; CblasTrans gives L^T = U.
+        // cblas_strmm is safe to call in-place (B is overwritten, A is read-only).
+        // This eliminates the separate UX_block allocation (~600 MB for n=15k).
+        cblas_strmm(CblasColMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
+                    static_cast<int>(n), static_cast<int>(bs), 1.0f,
+                    Vi_llt.matrixLLT().data(), static_cast<int>(n),
+                    X_block.data(), static_cast<int>(n));
 
-        // diag(X^T Vi X) = ||col_j(UX_block)||^2
-        xvx_diag.head(bs) = UX_block.leftCols(bs).colwise().squaredNorm();
+        // diag(X^T Vi X) = ||col_j(U * X_block)||^2  (X_block now holds U * original X)
+        xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
 
         for(l = 0; l < bs; l++){
             // xvx_diag[l] is a sum of squares, so >= 0 and never NaN from
@@ -464,8 +485,9 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
     LOGGER << "\nRunning association tests for " << m << " SNPs ..." << std::endl;
 
     int k = 0, l = 0;
+    // UX_block eliminated: cblas_strmm overwrites X_block in-place after all
+    // operations that need the original genotype data are complete (~600 MB savings).
     Eigen::MatrixXf X_block;
-    Eigen::MatrixXf UX_block;                    // n×bs, reused across blocks
     std::vector<int> indx;
 
     // Pre-allocated block temporaries — zero heap activity per SNP
@@ -489,28 +511,34 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
         for(k = 0; k < bs; k++) indx[k] = i + k;
         make_XMat_subset(X_block, indx, false);  // X_block is n×bs
 
-        // U * X_block via STRMM: RHS is a TriangularView product, dispatched to
-        // cblas_strmm.  LHS is a plain MatrixXf, eliminating an intermediate copy.
-        UX_block.noalias() = Vi_llt.matrixU() * X_block;
+        // All operations using the original genotype values must come first,
+        // before the in-place STRMM overwrites X_block.
 
-        // diag(X^T Vi X) = ||col_j(UX_block)||^2
-        xvx_diag.head(bs) = UX_block.colwise().squaredNorm();
-
-        // D = C^T Vi X = Vi_C^T X  (p×bs); Vi symmetric so (Vi C)^T = C^T Vi.
-        // Cost O(p*n*bs) with p << n; replaces the O(n^2*bs) Vi*X_block SGEMM.
+        // D = C^T Vi X = Vi_C^T X  (p×bs)
         D_block.leftCols(bs).noalias() = Vi_C.transpose() * X_block;
-
-        // E = A^{-1} * D  (p×bs)
-        E_block.leftCols(bs).noalias() = A_llt.solve(D_block.leftCols(bs));
 
         // f = X^T Vi_y  (bs×1)
         f_vec.head(bs).noalias() = X_block.transpose() * Vi_y;
 
-        // Dt_t = D^T t  (bs×1)
+        // E = A^{-1} * D  (p×bs)  — does not need X_block
+        E_block.leftCols(bs).noalias() = A_llt.solve(D_block.leftCols(bs));
+
+        // Dt_t = D^T t  (bs×1)  — does not need X_block
         Dt_t_vec.head(bs).noalias() = D_block.leftCols(bs).transpose() * t_vec;
 
-        // diag(D^T E) via elementwise product + colwise sum
+        // diag(D^T E)  — does not need X_block
         d_dot_e_diag.head(bs) = (D_block.leftCols(bs).cwiseProduct(E_block.leftCols(bs))).colwise().sum();
+
+        // In-place STRMM: overwrite X_block with U * X_block (= L^T * X_block).
+        // Vi_llt stores L in lower triangle; CblasTrans gives L^T = U.
+        // Eliminates the separate UX_block allocation (~600 MB for n=15k).
+        cblas_strmm(CblasColMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
+                    static_cast<int>(X_block.rows()), static_cast<int>(bs), 1.0f,
+                    Vi_llt.matrixLLT().data(), static_cast<int>(X_block.rows()),
+                    X_block.data(), static_cast<int>(X_block.rows()));
+
+        // diag(X^T Vi X) = ||col_j(U * X_block)||^2  (X_block now holds U * original X)
+        xvx_diag.head(bs) = X_block.colwise().squaredNorm();
 
         for(l = 0; l < bs; l++){
             const float S = xvx_diag[l] - d_dot_e_diag[l];  // Schur complement = 1/Var(beta_snp)
