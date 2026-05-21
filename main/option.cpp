@@ -87,7 +87,7 @@ void option(int option_num, char* option_str[])
     bool project_flag = false;
     std::string denseness_metric = "";
     double grm_adj_fac = -2.0, grm_cutoff = -2.0, rm_high_ld_cutoff = -1.0, bK_threshold = -10.0;
-    int dosage_compen = -2, out_pc_num = 20, make_grm_mtd = 0;
+    int dosage_compen = -2, out_pc_num = 0, make_grm_mtd = 0;
     std::string grm_file = "", paa_file = "", pc_file = "";
     std::string genetic_model = ""; // genetic model for dosage calculation
     //pca projection
@@ -541,13 +541,14 @@ void option(int option_num, char* option_str[])
         } else if (flag == "--pca") {
             pca_flag = true;
             thread_flag = true;
-            i++;
-            if (flag == "gcta" || std::string_view{argv[i]}.substr(0, 2) == "--") {
-                out_pc_num = 20;
-                i--;
-            } else out_pc_num = std::atoi(argv[i]);
+            if (i + 1 < argc && std::string_view{argv[i+1]}.substr(0, 2) != "--") {
+                out_pc_num = std::atoi(argv[++i]);
+                if (out_pc_num < 0) LOGGER.e(0, "\n the value to be specified after --pca should be positive.\n");
+            }
+            else {
+                LOGGER << "\n  No number specified after --pca, default to output all PCs." << std::endl;
+            }
             LOGGER << "--pca " << out_pc_num << std::endl;
-            if (out_pc_num < 1) LOGGER.e(0, "\n the value to be specified after --pca should be positive.\n");
         } else if (flag == "--pca-approx") {
             i++;
             if (i >= argc || std::string_view{argv[i]}.substr(0, 2) == "--") {

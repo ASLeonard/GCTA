@@ -340,19 +340,16 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
     Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
     _Vi.resize(0,0);
 
-    // Precompute Vi * y once (SSYMV/GEMV on the dense symmetric Vi).
+    // Precompute Vi * y once (GEMV on the dense symmetric Vi).
     Eigen::Map<const Eigen::VectorXf> y_vec(y.data(), n);
     Eigen::VectorXf Vi_y(n);
     Vi_y.noalias() = Vi * y_vec;
 
     // Cholesky-factor Vi = U^T U (U upper triangular) once.
-    // Per-block quadratic form x^T Vi x = (Ux)^T(Ux) = ||Ux||^2, evaluated
-    // via STRMM (triangular matrix-matrix multiply) rather than SGEMM on the
-    // full symmetric Vi.  STRMM reads only the n(n+1)/2 upper triangle of U
-    // (~half the memory traffic of SGEMM on the full n×n Vi) and computes
-    // half as many flops, yielding ~2× speedup on the dominant matrix multiply.
-    // Eigen dispatches to cblas_strmm because the RHS is a TriangularView
-    // product; the LHS being a plain MatrixXf eliminates an intermediate copy.
+    // Per-block quadratic form x^T Vi x = (Ux)^T(Ux) = ||Ux||^2 via STRMM rather
+    // than SGEMM on the full symmetric Vi.  STRMM reads only the n(n+1)/2 upper
+    // triangle of U (~half the memory traffic of SGEMM) and maps directly to
+    // blocked GEMM, yielding ~2× speedup on the dominant matrix multiply.
     // Factorisation cost O(n^3/3) is negligible vs the O(n^2*m) GEMM total.
     Eigen::LLT<Eigen::MatrixXf> Vi_llt(Vi);
     if(Vi_llt.info() != Eigen::Success)
@@ -472,11 +469,9 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
     t_vec.noalias() = C.transpose() * Vi_y;
     t_vec = A_llt.solve(t_vec);
 
-    // Cholesky-factor Vi = U^T U once.
-    // Per-block: x^T Vi x = ||Ux||^2 via STRMM (half the flops and memory
-    // traffic of SGEMM on the full n×n Vi).  Combined with D = Vi_C^T X, the
-    // n×bs Vi*X_block product is eliminated entirely from the hot loop.
-    // Vi_llt and Vi_C are both retained for the loop; the dense Vi is freed.
+    // Cholesky-factor Vi = U^T U once; per-block STRMM below uses U.
+    // Combined with D = Vi_C^T X, the n×bs Vi*X_block product is eliminated
+    // from the hot loop entirely.  Vi_llt and Vi_C are both retained; Vi is freed.
     Eigen::LLT<Eigen::MatrixXf> Vi_llt(Vi);
     if(Vi_llt.info() != Eigen::Success)
         LOGGER.e(0, "mlma_calcu_stat_covar: Vi is not positive definite.");

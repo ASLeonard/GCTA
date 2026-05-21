@@ -524,7 +524,7 @@ target_sources(gcta64 PRIVATE
 
 set(GCTA_TARGETS gcta64)
 
-set(GCTA_IPO_ENABLED OFF)
+set(GCTA_IPO_ENABLED ON)
 if(GCTA_ENABLE_IPO AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
     include(CheckIPOSupported)
     check_ipo_supported(RESULT GCTA_IPO_SUPPORTED OUTPUT GCTA_IPO_OUTPUT LANGUAGES CXX)
@@ -552,7 +552,7 @@ foreach(target IN LISTS GCTA_TARGETS)
 endforeach()
 
 # Explicit LTO flags per compiler (supplements INTERPROCEDURAL_OPTIMIZATION)
-if(CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
+if(GCTA_IPO_ENABLED AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         # Thin LTO: most of the benefit of full LTO at a fraction of link time
         target_compile_options(gcta64 PRIVATE -flto=thin)
