@@ -956,6 +956,18 @@ void gcta::grm_denseness(std::string grm_file, std::string keep_indi_file, std::
         }
     }
 }
+struct ParallelSymMatProd {
+    using Scalar = double;
+    const Eigen::MatrixXd& m_mat;
+    int rows() const { return m_mat.rows(); }
+    int cols() const { return m_mat.cols(); }
+
+    void perform_op(const double* x_in, double* y_out) const {
+        Eigen::Map<const Eigen::VectorXd> x(x_in, m_mat.cols());
+        Eigen::Map<Eigen::VectorXd>       y(y_out, m_mat.rows());
+        y.noalias() = m_mat * x;  // full GEMV — MKL/OpenBLAS threaded
+    }
+};
 
 void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num, std::string pca_approx)
 {
@@ -1035,9 +1047,14 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
  
         else if (pca_approx == "Lanczos") {
             // Spectra Lanczos path
-            Spectra::DenseSymMatProd<double> op(grm_dbl);
             int ncv = std::min(n, std::max(3 * out_pc_num + 1, 30));
-            Spectra::SymEigsSolver<Spectra::DenseSymMatProd<double>> eigs(op, out_pc_num, ncv);
+
+            // We use a custom operation struct here to exploit multithreaded GEMV, rather than Spectra's sequential approach.
+            // This inccurs a 2x flop penalty, but the threading generally wins out.
+            ParallelSymMatProd op(grm_dbl);
+            Spectra::SymEigsSolver<ParallelSymMatProd> eigs(op, out_pc_num, ncv);
+            //Spectra::DenseSymMatProd<double> op(grm_dbl);
+            //Spectra::SymEigsSolver<Spectra::DenseSymMatProd<double>> eigs(op, out_pc_num, ncv);
             eigs.init();
             eigs.compute(Spectra::SortRule::LargestAlge);
             if (eigs.info() != Spectra::CompInfo::Successful)
@@ -1048,6 +1065,8 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
             LOGGER.e(0, "--pca-approx: unrecognised method '" + pca_approx + "'. Use 'Lanczos' or 'SVD'.");
         }
     } else {
+        if (n >= 32766)
+            LOGGER << "Warning: n = " << n << " likely exceeds LAPACKE's strict internal limit for workspace. Consider using --pca-approx for large GRMs." << std::endl;
         LOGGER << "Using full eigenvalue decomposition (--pca-approx not set)." << std::endl;
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigs(grm_dbl);
         if (eigs.info() != Eigen::Success)
