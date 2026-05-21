@@ -162,6 +162,12 @@ private:
     int  grm_tile_re    = 0;  // tile row end   (global, exclusive)
     int  grm_tile_rows  = 0;  // grm_tile_re - grm_tile_rs
     int  grm_tile_cols  = 0;  // grm_tile_re (rectangular buffer width)
+    // When true, calculate_GRM_blas skips accumulating sub_miss / sd /
+    // numValidMarkers / finished_marker.  Set after the first tile so that
+    // subsequent tiles reuse the values computed on the first pass — these
+    // quantities depend only on global genotype state, not on which tile row
+    // range is being processed.
+    bool grm_skip_global_state = false;
 
     // Write the current tile's normalised rows to already-open output files.
     void flush_grm_tile(FILE *grm_out, FILE *N_out,

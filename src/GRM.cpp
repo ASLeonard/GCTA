@@ -971,8 +971,10 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
     for(int i = 0; i < curNumValidMarkers; i++){
         memcpy(stdGeno + i * stdGenoLD, gbufitems[validIndexBuf[i]].geno.data(), grm_bytes_std_geno);
     }
-    for(int i = 0; i < curNumValidMarkers; i++){
-        sd.push_back(gbufitems[validIndexBuf[i]].sd);
+    if(!grm_skip_global_state){
+        for(int i = 0; i < curNumValidMarkers; i++){
+            sd.push_back(gbufitems[validIndexBuf[i]].sd);
+        }
     }
 
     static const double alpha = 1.0;
@@ -1030,8 +1032,10 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
                 block_buf[baseMissIndex + k - baseMarkerIndex] = 0UL;
             }
             flip64(&block_buf[baseMissIndex]);
-            for(int k = baseMissIndex; k < baseMissIndex + markerPerN; k++){
-                sub_miss[k] += std::popcount(block_buf[k]);
+            if(!grm_skip_global_state){
+                for(int k = baseMissIndex; k < baseMissIndex + markerPerN; k++){
+                    sub_miss[k] += std::popcount(block_buf[k]);
+                }
             }
         }
     }
@@ -1048,8 +1052,10 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
         }
     }
 
-    finished_marker += num_marker;
-    numValidMarkers += curNumValidMarkers;
+    if(!grm_skip_global_state){
+        finished_marker += num_marker;
+        numValidMarkers += curNumValidMarkers;
+    }
 }
 
     /*
@@ -1438,6 +1444,10 @@ void GRM::deduce_GRM(){
         const int grm_n_write = static_cast<int>(part_keep_indices.second + 1);
         constexpr int BLAS_OUT_BLOCK = 1024;
 
+        // Worst-case block: BLAS_OUT_BLOCK rows × grm_n_write cols (last block).
+        // Allocate once and reuse to avoid per-iteration malloc/free overhead.
+        std::vector<float> grm_block(static_cast<size_t>(BLAS_OUT_BLOCK) * grm_n_write);
+
         for(int block_start = static_cast<int>(part_keep_indices.first);
                 block_start < grm_n_write;
                 block_start += BLAS_OUT_BLOCK){
@@ -1447,9 +1457,6 @@ void GRM::deduce_GRM(){
             // so the widest row in this block needs block_end columns.
             const int block_cols = block_end;
             const int local_block_start = block_start - static_cast<int>(part_keep_indices.first);
-
-            // Transpose the sub-block from column-major double to row-major float.
-            std::vector<float> grm_block(static_cast<size_t>(block_rows) * block_cols);
             {
                 using RowMajF = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
                 Eigen::Map<const Eigen::MatrixXd> G_cm(grm, grm_m, grm_n_write);
@@ -1560,14 +1567,16 @@ void GRM::flush_grm_tile(FILE *grm_out, FILE *N_out,
     std::vector<float> w_N(tile_re);
 
     constexpr int BLAS_OUT_BLOCK = 1024;
+
+    // Worst-case block: BLAS_OUT_BLOCK rows × tile_cols cols (last block).
+    // Allocate once outside the loop to avoid per-iteration malloc/free overhead.
+    std::vector<float> grm_block(static_cast<size_t>(BLAS_OUT_BLOCK) * tile_cols);
+
     for(int block_start = tile_rs; block_start < tile_re; block_start += BLAS_OUT_BLOCK){
         const int block_end  = std::min(block_start + BLAS_OUT_BLOCK, tile_re);
         const int block_rows = block_end - block_start;
         const int block_cols = block_end;           // lower-triangle max column
         const int local_block_start = block_start - tile_rs;
-
-        // Blocked transpose: column-major double → row-major float slab.
-        std::vector<float> grm_block(static_cast<size_t>(block_rows) * block_cols);
         {
             using RowMajF = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
             Eigen::Map<const Eigen::MatrixXd> G_cm(grm, tile_rows, tile_cols);
@@ -2202,6 +2211,17 @@ void GRM::processMakeGRM(){
         if(posix_memalign((void**)&N, 32, max_tile_elems * sizeof(uint32_t)) != 0)
             LOGGER.e(0, "Can't allocate N tile buffer.");
 
+        // sub_miss / sd / numValidMarkers / finished_marker depend only on global
+        // genotype state (all markers × all samples), not on which tile row-range is
+        // being processed.  Initialise them once here and let calculate_GRM_blas
+        // populate them on the first tile; subsequent tiles reuse the values via
+        // grm_skip_global_state so the expensive flip64+popcount work is done once.
+        sub_miss.assign(index_keep.size() + 64, 0);
+        numValidMarkers = 0;
+        finished_marker = 0;
+        sd.clear();
+        grm_skip_global_state = false;  // first tile must accumulate global state
+
         for(int tile_rs = full_rs; tile_rs < full_re; tile_rs += grm_tile_size){
             const int tile_re = std::min(tile_rs + grm_tile_size, full_re);
             grm_tile_rs   = tile_rs;
@@ -2217,12 +2237,6 @@ void GRM::processMakeGRM(){
             memset(grm, 0, tile_elems * sizeof(double));
             memset(N,   0, tile_elems * sizeof(uint32_t));
 
-            // Reset per-pass accumulators (identical values each pass; resetting avoids accumulation).
-            sub_miss.assign(index_keep.size() + 64, 0);
-            numValidMarkers = 0;
-            finished_marker = 0;
-            sd.clear();
-
             // Rebuild thread pair ranges for this tile.
             index_grm_pairs.clear();
             vector<uint32_t> tile_parts = divide_parts(tile_rs, tile_re - 1, num_thread);
@@ -2231,6 +2245,10 @@ void GRM::processMakeGRM(){
                 index_grm_pairs.push_back(std::make_pair(tile_parts[i-1] + 1, tile_parts[i]));
 
             geno->loopDouble(processIndex, nMarkerBlock, true, true, isSTD, true, callBacks);
+
+            // After the first tile sub_miss/sd/numValidMarkers are complete.
+            // All subsequent tiles skip that work.
+            grm_skip_global_state = true;
 
             // Compute mtd_weight from this tile's sd (same values each tile).
             float mtd_weight = 1.0f;
