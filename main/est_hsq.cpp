@@ -793,14 +793,14 @@ void gcta::reml(bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, std:
 
     // In the non-approx mlmassoc path the REML loop releases _Vi after every
     // iteration (including the last) to save n² memory between iterations.
-    // _Vi_use_llt is left false, so mlma_calcu_stat would receive a 0×0 matrix
-    // and crash.  Recompute V^{-1} from the converged variance components here,
-    // before returning, so the caller has a valid _Vi.
+    // Use factorize_only=true so both exact and Hutch++ paths enter mlma_calcu_stat
+    // with L in _Vi_L and _Vi_use_llt=true, allowing mlma_calcu_stat to skip the
+    // dpotri call entirely (see comment there).
     // The approx path (_Vi_use_llt=true) stores L in _Vi_L and is unaffected.
     if (mlmassoc && !_reml_trace_approx && !_bivar_reml && !_within_family) {
         double logdet_dummy = 0.0;
         int iter_dummy = 0;
-        calcu_Vi(_Vi, varcmp, logdet_dummy, iter_dummy, /*factorize_only=*/false);
+        calcu_Vi(_Vi, varcmp, logdet_dummy, iter_dummy, /*factorize_only=*/true);
     }
 
 if (mlmassoc) {
@@ -1256,6 +1256,16 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
             } // for calculation of SE
             break;
         }
+        // Park _P's buffer into _Vi so that:
+        //  (1) _P is logically empty (size 0) when calcu_Vi runs next iteration,
+        //      avoiding the simultaneous _A + _Vi + _P = 3×n² ≈ 5.77 GB peak.
+        //  (2) _Vi holds an n×n allocation, so calcu_Vi's resize(_n,_n) is a
+        //      no-op and fills in-place — zero malloc/free overhead per iteration.
+        // All code paths that use _P after ai/em_reml (calcu_Hi in break
+        // branches above) exit via break before reaching here, so _P is valid
+        // in those paths.  The existing _P.resize(0,0) after the loop handles
+        // final cleanup.
+        _Vi.swap(_P);
         prev_prev_varcmp = prev_varcmp;
         prev_varcmp = varcmp;
         prev_lgL = lgL;
@@ -1273,6 +1283,9 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
             }
         }
     }
+    // _P is not needed after REML convergence; free it now so it does not
+    // linger through the MLMA phase (~n² doubles = ~2 GB for n≈15 500).
+    _P.resize(0, 0);
     return lgL;
 }
 
@@ -1737,8 +1750,10 @@ double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi
     if(llt.info() == Eigen::Success) {
         eigenMatrix Z;
         Z.noalias() = Vi_X * llt.matrixL();
-        P->resize(_n, _n);
-        P->triangularView<Eigen::Lower>() = Vi.triangularView<Eigen::Lower>();
+        // Swap Vi → P in O(1): P inherits V^{-1}'s storage, Vi becomes empty.
+        // This eliminates the simultaneous Vi+P allocation (~n²×8 ≈ 1.92 GB saved).
+        // Z was computed from Vi_X before the swap, so the ordering is safe.
+        P->swap(Vi);
         P->selfadjointView<Eigen::Lower>().rankUpdate(Z, static_cast<eigenMatrix::Scalar>(-1));
         P->triangularView<Eigen::Upper>() = P->transpose();
     } else {
@@ -1746,7 +1761,7 @@ double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi
         // edge case). Use general n×n products; noalias() avoids a defensive copy.
         eigenMatrix W;
         W.noalias() = Vi_X * Xt_Vi_X_i;
-        *P = Vi;
+        P->swap(Vi);
         P->noalias() -= W * Vi_X.transpose();
     }
 

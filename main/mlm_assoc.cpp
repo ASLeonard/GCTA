@@ -318,51 +318,65 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
 
 gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m)
 {
-    // When --reml-trace-approx is active the last REML iteration stores only the
-    // Cholesky factor L in _Vi_L (lower triangle from in-place dpotrf) and releases
-    // _Vi to save RAM.  Materialise V^{-1} via dpotri (in-place inversion of L) on
-    // a copy, avoiding a second n×n allocation.
-    if (_Vi_use_llt) {
-        _Vi.swap(_Vi_L);  // O(1): _Vi gets L's storage, _Vi_L becomes empty
-        gcta_blas_int blas_n_m = static_cast<gcta_blas_int>(_n);
-        if (gcta_dpotri(blas_n_m, _Vi.data(), blas_n_m) != 0)
-            LOGGER.e(0, "dpotri failed materialising V^{-1} for mlma_calcu_stat.");
-        _Vi.triangularView<Eigen::Upper>() = _Vi.transpose();
-        _Vi_use_llt = false;
-    }
+    // When _Vi_use_llt=true (both exact and Hutch++ paths after their respective REML
+    // preps), _Vi_L holds the lower Cholesky factor L of V (from dpotrf).
+    // We cast L to float and use triangular solves directly, skipping dpotri and the
+    // float LLT entirely.  Mathematical identities used:
+    //   V^{-1} y  = L^{-T}(L^{-1} y)   [two STRSV — forward + backward solve on L]
+    //   x^T V^{-1} x = ||L^{-1} x||^2  [STRSM: L^{-1} X in-place, then squared norms]
+    // Saves one dpotri O(n³/3 double) + one float LLT O(n³/3 float) per MLMA run.
+    // The fallback (!use_L) preserves the old dpotri path for any caller that still
+    // arrives with _Vi_use_llt=false and a valid _Vi.
+    const bool use_L = _Vi_use_llt;
 
     const auto n = static_cast<Eigen::Index>(y.size());
     constexpr Eigen::Index max_block_size = 10000;
     unsigned long i = 0;
     std::vector<float> beta(m, 0.0f), se(m, 0.0f), pval(m, 2.0f);
 
-    // Symmetrise Vi into a plain dense float matrix for SSYMV below.
-    Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
-    _Vi.resize(0,0);
-
-    // Precompute Vi * y once (GEMV on the dense symmetric Vi).
     Eigen::Map<const Eigen::VectorXf> y_vec(y.data(), n);
     Eigen::VectorXf Vi_y(n);
-    Vi_y.noalias() = Vi * y_vec;
 
-    // Cholesky-factor Vi = U^T U (U upper triangular) once.
-    // Per-block quadratic form x^T Vi x = (Ux)^T(Ux) = ||Ux||^2 via STRMM rather
-    // than SGEMM on the full symmetric Vi.  STRMM reads only the n(n+1)/2 upper
-    // triangle of U (~half the memory traffic of SGEMM) and maps directly to
-    // blocked GEMM, yielding ~2× speedup on the dominant matrix multiply.
-    // Factorisation cost O(n^3/3) is negligible vs the O(n^2*m) GEMM total.
-    Eigen::LLT<Eigen::MatrixXf> Vi_llt(Vi);
-    if(Vi_llt.info() != Eigen::Success)
-        LOGGER.e(0, "mlma_calcu_stat: Vi is not positive definite.");
-    Vi.resize(0, 0);   // free n×n dense matrix; Vi_llt holds the triangular factor
+    Eigen::MatrixXf L_f;                         // lower Cholesky of V  (when use_L)
+    Eigen::LLT<Eigen::MatrixXf> Vi_llt;          // Cholesky of V^{-1}  (when !use_L)
+
+    if (use_L) {
+        L_f = _Vi_L.cast<float>();
+        _Vi_L.resize(0, 0);
+        _Vi_use_llt = false;
+        // Vi_y = V^{-1} y = L^{-T}(L^{-1} y) via two float triangular solves.
+        Vi_y = y_vec;
+        cblas_strsv(CblasColMajor, CblasLower, CblasNoTrans, CblasNonUnit,
+                    static_cast<int>(n), L_f.data(), static_cast<int>(n), Vi_y.data(), 1);
+        cblas_strsv(CblasColMajor, CblasLower, CblasTrans, CblasNonUnit,
+                    static_cast<int>(n), L_f.data(), static_cast<int>(n), Vi_y.data(), 1);
+    } else {
+        if (_Vi_use_llt) {
+            _Vi.swap(_Vi_L);  // O(1): _Vi gets L's storage, _Vi_L becomes empty
+            gcta_blas_int blas_n_m = static_cast<gcta_blas_int>(_n);
+            if (gcta_dpotri(blas_n_m, _Vi.data(), blas_n_m) != 0)
+                LOGGER.e(0, "dpotri failed materialising V^{-1} for mlma_calcu_stat.");
+            _Vi.triangularView<Eigen::Upper>() = _Vi.transpose();
+            _Vi_use_llt = false;
+        }
+        // Symmetrise Vi into a plain dense float matrix for SSYMV below.
+        Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
+        _Vi.resize(0,0);
+        Vi_y.noalias() = Vi * y_vec;
+        // Cholesky-factor Vi for the per-block STRMM below.
+        Vi_llt = Eigen::LLT<Eigen::MatrixXf>(Vi);
+        if (Vi_llt.info() != Eigen::Success)
+            LOGGER.e(0, "mlma_calcu_stat: Vi is not positive definite.");
+        Vi.resize(0, 0);
+    }
 
     LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<std::endl;
 
     int k = 0, l = 0;
     // Pre-allocate at max_block_size — no heap activity inside the hot loop.
     // leftCols(bs) selects the active columns for partial (last) blocks.
-    // UX_block is eliminated: cblas_strmm overwrites X_block in-place (see below),
-    // saving the full n×max_block_size float allocation (~600 MB for n=15k).
+    // The STRMM/STRSM overwrites X_block in-place (B is overwritten, A is read-only),
+    // eliminating the separate UX_block allocation (~600 MB for n=15k).
     Eigen::MatrixXf X_block(n, max_block_size);
     Eigen::VectorXf Xt_Vi_y_block(max_block_size);
     Eigen::VectorXf xvx_diag(max_block_size);    // diag(X^T Vi X)
@@ -387,16 +401,24 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
         // X^T Vi_y (bs×1) — single GEMV into pre-allocated target.
         Xt_Vi_y_block.head(bs).noalias() = X_block.leftCols(bs).transpose() * Vi_y;
 
-        // In-place STRMM: overwrite X_block with U * X_block (= L^T * X_block).
-        // Vi_llt stores L in its lower triangle; CblasTrans gives L^T = U.
-        // cblas_strmm is safe to call in-place (B is overwritten, A is read-only).
-        // This eliminates the separate UX_block allocation (~600 MB for n=15k).
-        cblas_strmm(CblasColMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
-                    static_cast<int>(n), static_cast<int>(bs), 1.0f,
-                    Vi_llt.matrixLLT().data(), static_cast<int>(n),
-                    X_block.data(), static_cast<int>(n));
+        if (use_L) {
+            // In-place STRSM: X_block = L^{-1} * X_block.
+            // x^T V^{-1} x = ||L^{-1} x||^2  (L is lower Cholesky of V).
+            cblas_strsm(CblasColMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
+                        static_cast<int>(n), static_cast<int>(bs), 1.0f,
+                        L_f.data(), static_cast<int>(n),
+                        X_block.data(), static_cast<int>(n));
+        } else {
+            // In-place STRMM: X_block = L_vit^T * X_block  (L_vit = lower Cholesky of V^{-1}).
+            // x^T V^{-1} x = ||L_vit^T x||^2.
+            // cblas_strmm is safe to call in-place (B is overwritten, A is read-only).
+            cblas_strmm(CblasColMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
+                        static_cast<int>(n), static_cast<int>(bs), 1.0f,
+                        Vi_llt.matrixLLT().data(), static_cast<int>(n),
+                        X_block.data(), static_cast<int>(n));
+        }
 
-        // diag(X^T Vi X) = ||col_j(U * X_block)||^2  (X_block now holds U * original X)
+        // diag(X^T Vi X) = ||col_j(transformed X_block)||^2
         xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
 
         for(l = 0; l < bs; l++){
@@ -423,17 +445,15 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
 
 gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned long m)
 {
-    // When --reml-trace-approx is active the last REML iteration stores only the
-    // Cholesky factor L in _Vi_L (lower triangle from in-place dpotrf) and releases
-    // _Vi to save RAM.  Materialise V^{-1} via dpotri on a copy.
-    if (_Vi_use_llt) {
-        _Vi.swap(_Vi_L);  // O(1): _Vi gets L's storage, _Vi_L becomes empty
-        gcta_blas_int blas_n_mc = static_cast<gcta_blas_int>(_n);
-        if (gcta_dpotri(blas_n_mc, _Vi.data(), blas_n_mc) != 0)
-            LOGGER.e(0, "dpotri failed materialising V^{-1} for mlma_calcu_stat_covar.");
-        _Vi.triangularView<Eigen::Upper>() = _Vi.transpose();
-        _Vi_use_llt = false;
-    }
+    // When _Vi_use_llt=true (both exact and Hutch++ paths after their respective REML
+    // preps), _Vi_L holds the lower Cholesky factor L of V (from dpotrf).
+    // Cast L to float and use triangular solves directly, skipping dpotri and the
+    // float LLT entirely.  Mathematical identities:
+    //   V^{-1} y  = L^{-T}(L^{-1} y)   [two STRSV — forward + backward solve on L]
+    //   V^{-1} C  = L^{-T}(L^{-1} C)   [two STRSM on n×p]
+    //   x^T V^{-1} x = ||L^{-1} x||^2  [STRSM: L^{-1} X in-place, then squared norms]
+    // Saves one dpotri O(n³/3 double) + one float LLT O(n³/3 float) per MLMA run.
+    const bool use_L = _Vi_use_llt;
 
     const auto n = static_cast<Eigen::Index>(y.size());
     const Eigen::Index p = static_cast<Eigen::Index>(_X_c);  // number of fixed covariates
@@ -441,23 +461,56 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
     unsigned long i = 0;
     std::vector<float> beta(m, 0.0f), se(m, 0.0f), pval(m, 2.0f);
 
-    // Symmetrise Vi once into a plain dense float matrix.
-    Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
-    _Vi.resize(0,0);
-
-    // Precompute Vi * y once (GEMV on the dense Vi).
     Eigen::Map<const Eigen::VectorXf> y_vec(y.data(), n);
     Eigen::VectorXf Vi_y(n);
-    Vi_y.noalias() = Vi * y_vec;
-
-    // C (n×p): fixed covariate matrix.
-    // Vi_C = Vi * C (n×p) is retained for the hot loop: D = C^T Vi X = Vi_C^T X
-    // (Vi symmetric), avoiding the n×bs Vi*X_block intermediate each iteration.
     Eigen::MatrixXf C = _X.cast<float>();
     Eigen::MatrixXf Vi_C(n, p);
-    Vi_C.noalias() = Vi * C;
 
-    // A = C^T Vi C = Vi_C^T C  (p×p); factor immediately via LLT.
+    Eigen::MatrixXf L_f;                         // lower Cholesky of V  (when use_L)
+    Eigen::LLT<Eigen::MatrixXf> Vi_llt;          // Cholesky of V^{-1}  (when !use_L)
+
+    if (use_L) {
+        L_f = _Vi_L.cast<float>();
+        _Vi_L.resize(0, 0);
+        _Vi_use_llt = false;
+        // Vi_y = V^{-1} y = L^{-T}(L^{-1} y) via two float triangular solves.
+        Vi_y = y_vec;
+        cblas_strsv(CblasColMajor, CblasLower, CblasNoTrans, CblasNonUnit,
+                    static_cast<int>(n), L_f.data(), static_cast<int>(n), Vi_y.data(), 1);
+        cblas_strsv(CblasColMajor, CblasLower, CblasTrans, CblasNonUnit,
+                    static_cast<int>(n), L_f.data(), static_cast<int>(n), Vi_y.data(), 1);
+        // Vi_C = V^{-1} C = L^{-T}(L^{-1} C) via two float STRSM on n×p.
+        Vi_C = C;
+        cblas_strsm(CblasColMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
+                    static_cast<int>(n), static_cast<int>(p), 1.0f,
+                    L_f.data(), static_cast<int>(n), Vi_C.data(), static_cast<int>(n));
+        cblas_strsm(CblasColMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
+                    static_cast<int>(n), static_cast<int>(p), 1.0f,
+                    L_f.data(), static_cast<int>(n), Vi_C.data(), static_cast<int>(n));
+    } else {
+        if (_Vi_use_llt) {
+            _Vi.swap(_Vi_L);  // O(1): _Vi gets L's storage, _Vi_L becomes empty
+            gcta_blas_int blas_n_mc = static_cast<gcta_blas_int>(_n);
+            if (gcta_dpotri(blas_n_mc, _Vi.data(), blas_n_mc) != 0)
+                LOGGER.e(0, "dpotri failed materialising V^{-1} for mlma_calcu_stat_covar.");
+            _Vi.triangularView<Eigen::Upper>() = _Vi.transpose();
+            _Vi_use_llt = false;
+        }
+        // Symmetrise Vi once into a plain dense float matrix.
+        Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
+        _Vi.resize(0,0);
+        Vi_y.noalias() = Vi * y_vec;
+        // Vi_C = Vi * C (n×p): retained for the hot loop D = Vi_C^T * X.
+        Vi_C.noalias() = Vi * C;
+        // Cholesky-factor Vi for the per-block STRMM below.
+        Vi_llt = Eigen::LLT<Eigen::MatrixXf>(Vi);
+        if (Vi_llt.info() != Eigen::Success)
+            LOGGER.e(0, "mlma_calcu_stat_covar: Vi is not positive definite.");
+        Vi.resize(0, 0);
+    }
+
+    // A = C^T Vi C = Vi_C^T C  (p×p); same formula regardless of path since
+    // Vi_C = V^{-1} C is already computed above.
     Eigen::MatrixXf A_mat(p, p);
     A_mat.noalias() = Vi_C.transpose() * C;
     Eigen::LLT<Eigen::MatrixXf> A_llt(A_mat);
@@ -469,21 +522,14 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
     t_vec.noalias() = C.transpose() * Vi_y;
     t_vec = A_llt.solve(t_vec);
 
-    // Cholesky-factor Vi = U^T U once; per-block STRMM below uses U.
-    // Combined with D = Vi_C^T X, the n×bs Vi*X_block product is eliminated
-    // from the hot loop entirely.  Vi_llt and Vi_C are both retained; Vi is freed.
-    Eigen::LLT<Eigen::MatrixXf> Vi_llt(Vi);
-    if(Vi_llt.info() != Eigen::Success)
-        LOGGER.e(0, "mlma_calcu_stat_covar: Vi is not positive definite.");
-    Vi.resize(0, 0);
-
     LOGGER << "\nRunning association tests for " << m << " SNPs ..." << std::endl;
 
     int k = 0, l = 0;
-    // UX_block eliminated: cblas_strmm overwrites X_block in-place after all
-    // operations that need the original genotype data are complete (~600 MB savings).
-    Eigen::MatrixXf X_block;
+    // The STRMM/STRSM overwrites X_block in-place after all operations using the
+    // original genotype data are complete (~600 MB savings vs a separate UX_block).
+    Eigen::MatrixXf X_block(n, max_block_size);
     std::vector<int> indx;
+    indx.reserve(max_block_size);
 
     // Pre-allocated block temporaries — zero heap activity per SNP
     Eigen::MatrixXf D_block(p, max_block_size);      // Vi_C^T * X_block  (p×bs)
@@ -507,7 +553,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
         make_XMat_subset(X_block, indx, false);  // X_block is n×bs
 
         // All operations using the original genotype values must come first,
-        // before the in-place STRMM overwrites X_block.
+        // before the in-place STRMM/STRSM overwrites X_block.
 
         // D = C^T Vi X = Vi_C^T X  (p×bs)
         D_block.leftCols(bs).noalias() = Vi_C.transpose() * X_block;
@@ -524,16 +570,24 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
         // diag(D^T E)  — does not need X_block
         d_dot_e_diag.head(bs) = (D_block.leftCols(bs).cwiseProduct(E_block.leftCols(bs))).colwise().sum();
 
-        // In-place STRMM: overwrite X_block with U * X_block (= L^T * X_block).
-        // Vi_llt stores L in lower triangle; CblasTrans gives L^T = U.
-        // Eliminates the separate UX_block allocation (~600 MB for n=15k).
-        cblas_strmm(CblasColMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
-                    static_cast<int>(X_block.rows()), static_cast<int>(bs), 1.0f,
-                    Vi_llt.matrixLLT().data(), static_cast<int>(X_block.rows()),
-                    X_block.data(), static_cast<int>(X_block.rows()));
+        if (use_L) {
+            // In-place STRSM: X_block = L^{-1} * X_block.
+            // x^T V^{-1} x = ||L^{-1} x||^2  (L is lower Cholesky of V).
+            cblas_strsm(CblasColMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
+                        static_cast<int>(n), static_cast<int>(bs), 1.0f,
+                        L_f.data(), static_cast<int>(n),
+                        X_block.data(), static_cast<int>(n));
+        } else {
+            // In-place STRMM: X_block = L_vit^T * X_block  (L_vit = lower Cholesky of V^{-1}).
+            // x^T V^{-1} x = ||L_vit^T x||^2.
+            cblas_strmm(CblasColMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
+                        static_cast<int>(n), static_cast<int>(bs), 1.0f,
+                        Vi_llt.matrixLLT().data(), static_cast<int>(n),
+                        X_block.data(), static_cast<int>(n));
+        }
 
-        // diag(X^T Vi X) = ||col_j(U * X_block)||^2  (X_block now holds U * original X)
-        xvx_diag.head(bs) = X_block.colwise().squaredNorm();
+        // diag(X^T Vi X) = ||col_j(transformed X_block)||^2
+        xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
 
         for(l = 0; l < bs; l++){
             const float S = xvx_diag[l] - d_dot_e_diag[l];  // Schur complement = 1/Var(beta_snp)
