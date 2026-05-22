@@ -117,12 +117,12 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
             (_A[0]).resize(_n, _n);
             eigenMatrix A_N_buf(_n, _n);
             {
-                eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
-                Eigen::MatrixXf grm_N_sym_f(_grm_N.selfadjointView<Eigen::Lower>());
-                eigenMatrix grm_N_sym = grm_N_sym_f.cast<double>();
+                // read_grm_bin/gz fill both triangles; no selfadjointView copy needed for _grm.
+                // _grm_N is float so a cast<double>() temporary is unavoidable, but we
+                // avoid the intermediate MatrixXf symmetrization copy.
                 Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
-                (_A[0]) = grm_sym(kp_idx, kp_idx);
-                A_N_buf = grm_N_sym(kp_idx, kp_idx);
+                (_A[0]) = _grm(kp_idx, kp_idx);
+                A_N_buf = _grm_N.cast<double>()(kp_idx, kp_idx);
             }
 
             LOGGER << "\nReading the secondary GRM from [" << grm_files[0] << "] ..." << std::endl;
@@ -130,12 +130,9 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
             LOGGER<<"\nSubtracting [" << grm_files[1] << "] from [" << grm_files[0] << "] ..." << std::endl;
             StrFunc::match(uni_id, grm_id, kp);
             {
-                eigenMatrix grm2_sym(_grm.selfadjointView<Eigen::Lower>());
-                Eigen::MatrixXf grm2_N_sym_f(_grm_N.selfadjointView<Eigen::Lower>());
-                eigenMatrix grm2_N_sym = grm2_N_sym_f.cast<double>();
                 Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
-                eigenMatrix grm2_slice = grm2_sym(kp_idx, kp_idx);
-                eigenMatrix grm2_N_slice = grm2_N_sym(kp_idx, kp_idx);
+                eigenMatrix grm2_slice = _grm(kp_idx, kp_idx);
+                eigenMatrix grm2_N_slice = _grm_N.cast<double>()(kp_idx, kp_idx);
                 _A[0] = ((_A[0].array() * A_N_buf.array()) - (grm2_slice.array() * grm2_N_slice.array()))
                          / (A_N_buf.array() - grm2_N_slice.array());
             }
@@ -148,12 +145,23 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
             _A.resize(_r_indx.size());
             if(grm_flag){
                 StrFunc::match(uni_id, grm_id, kp);
-                {
-                    eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
-                    Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
-                    (_A[0]) = grm_sym(kp_idx, kp_idx);
+                // If all GRM individuals are kept in original order, swap _grm directly
+                // into _A[0] (O(1), zero extra allocation) instead of an n×n copy.
+                // kp is the identity permutation iff _n == _grm.rows() and kp[i]==i.
+                bool identity_kp = (static_cast<int>(_n) == _grm.rows());
+                if (identity_kp) {
+                    for (int ii = 0; ii < static_cast<int>(_n) && identity_kp; ii++)
+                        if (kp[ii] != ii) identity_kp = false;
                 }
-                _grm.resize(0,0);
+                if (identity_kp) {
+                    _A[0].swap(_grm);  // O(1): transfers ownership, _grm becomes empty
+                } else {
+                    // read_grm_bin/gz fill both triangles, so no selfadjointView copy needed.
+                    Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+                    (_A[0]) = _grm(kp_idx, kp_idx);
+                    _grm.resize(0,0);
+                }
+                _grm_N.resize(0,0);  // not needed after _A[0] is filled
             }
             else if(m_grm_flag){
                 LOGGER << "There are " << grm_files.size() << " GRM file names specified in the file [" + grm_file + "]." << std::endl;
@@ -161,11 +169,20 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
                     LOGGER << "Reading the GRM from the " << i + 1 << "th file ..." << std::endl;
                     read_grm(grm_files[i], grm_id, true, false, true);
                     StrFunc::match(uni_id, grm_id, kp);
-                    {
-                        eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
-                        Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
-                        (_A[i]) = grm_sym(kp_idx, kp_idx);
+                    bool identity_kp_m = (static_cast<int>(_n) == _grm.rows());
+                    if (identity_kp_m) {
+                        for (int ii = 0; ii < static_cast<int>(_n) && identity_kp_m; ii++)
+                            if (kp[ii] != ii) identity_kp_m = false;
                     }
+                    if (identity_kp_m) {
+                        _A[i].swap(_grm);
+                    } else {
+                        // read_grm_bin/gz fill both triangles, so no selfadjointView copy needed.
+                        Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
+                        (_A[i]) = _grm(kp_idx, kp_idx);
+                        _grm.resize(0,0);
+                    }
+                    _grm_N.resize(0,0);  // not needed after _A[i] is filled
                 }
             }
             else{
@@ -178,9 +195,9 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
                 _grm.resize(0,0);
             }
         }
-        _A[_r_indx.size()-1]=eigenMatrix::Identity(_n, _n);
-        
+        // _A[last] left size-0 (identity convention) unless weights override the diagonal.
         if(!weight_file.empty()){
+            _A[_r_indx.size()-1]=eigenMatrix::Identity(_n, _n);
             std::vector<std::string> weight_ID;
             std::vector<double> weights;
 
@@ -301,41 +318,66 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
 
 gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m)
 {
+    // When _Vi_use_llt=true (both exact and Hutch++ paths after their respective REML
+    // preps), _Vi_L holds the lower Cholesky factor L of V (from dpotrf).
+    // We cast L to float and use triangular solves directly, skipping dpotri and the
+    // float LLT entirely.  Mathematical identities used:
+    //   V^{-1} y  = L^{-T}(L^{-1} y)   [two STRSV — forward + backward solve on L]
+    //   x^T V^{-1} x = ||L^{-1} x||^2  [STRSM: L^{-1} X in-place, then squared norms]
+    // Saves one dpotri O(n³/3 double) + one float LLT O(n³/3 float) per MLMA run.
+    // The fallback (!use_L) preserves the old dpotri path for any caller that still
+    // arrives with _Vi_use_llt=false and a valid _Vi.
+    const bool use_L = _Vi_use_llt;
+
     const auto n = static_cast<Eigen::Index>(y.size());
     constexpr Eigen::Index max_block_size = 10000;
     unsigned long i = 0;
     std::vector<float> beta(m, 0.0f), se(m, 0.0f), pval(m, 2.0f);
 
-    // Symmetrise Vi into a plain dense float matrix for SSYMV below.
-    Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
-    _Vi.resize(0,0);
-
-    // Precompute Vi * y once (SSYMV/GEMV on the dense symmetric Vi).
     Eigen::Map<const Eigen::VectorXf> y_vec(y.data(), n);
     Eigen::VectorXf Vi_y(n);
-    Vi_y.noalias() = Vi * y_vec;
 
-    // Cholesky-factor Vi = U^T U (U upper triangular) once.
-    // Per-block quadratic form x^T Vi x = (Ux)^T(Ux) = ||Ux||^2, evaluated
-    // via STRMM (triangular matrix-matrix multiply) rather than SGEMM on the
-    // full symmetric Vi.  STRMM reads only the n(n+1)/2 upper triangle of U
-    // (~half the memory traffic of SGEMM on the full n×n Vi) and computes
-    // half as many flops, yielding ~2× speedup on the dominant matrix multiply.
-    // Eigen dispatches to cblas_strmm because the RHS is a TriangularView
-    // product; the LHS being a plain MatrixXf eliminates an intermediate copy.
-    // Factorisation cost O(n^3/3) is negligible vs the O(n^2*m) GEMM total.
-    Eigen::LLT<Eigen::MatrixXf> Vi_llt(Vi);
-    if(Vi_llt.info() != Eigen::Success)
-        LOGGER.e(0, "mlma_calcu_stat: Vi is not positive definite.");
-    Vi.resize(0, 0);   // free n×n dense matrix; Vi_llt holds the triangular factor
+    Eigen::MatrixXf L_f;                         // lower Cholesky of V  (when use_L)
+    Eigen::LLT<Eigen::MatrixXf> Vi_llt;          // Cholesky of V^{-1}  (when !use_L)
+
+    if (use_L) {
+        L_f = _Vi_L.cast<float>();
+        _Vi_L.resize(0, 0);
+        _Vi_use_llt = false;
+        // Vi_y = V^{-1} y = L^{-T}(L^{-1} y) via two float triangular solves.
+        Vi_y = y_vec;
+        cblas_strsv(CblasColMajor, CblasLower, CblasNoTrans, CblasNonUnit,
+                    static_cast<int>(n), L_f.data(), static_cast<int>(n), Vi_y.data(), 1);
+        cblas_strsv(CblasColMajor, CblasLower, CblasTrans, CblasNonUnit,
+                    static_cast<int>(n), L_f.data(), static_cast<int>(n), Vi_y.data(), 1);
+    } else {
+        if (_Vi_use_llt) {
+            _Vi.swap(_Vi_L);  // O(1): _Vi gets L's storage, _Vi_L becomes empty
+            gcta_blas_int blas_n_m = static_cast<gcta_blas_int>(_n);
+            if (gcta_dpotri(blas_n_m, _Vi.data(), blas_n_m) != 0)
+                LOGGER.e(0, "dpotri failed materialising V^{-1} for mlma_calcu_stat.");
+            _Vi.triangularView<Eigen::Upper>() = _Vi.transpose();
+            _Vi_use_llt = false;
+        }
+        // Symmetrise Vi into a plain dense float matrix for SSYMV below.
+        Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
+        _Vi.resize(0,0);
+        Vi_y.noalias() = Vi * y_vec;
+        // Cholesky-factor Vi for the per-block STRMM below.
+        Vi_llt = Eigen::LLT<Eigen::MatrixXf>(Vi);
+        if (Vi_llt.info() != Eigen::Success)
+            LOGGER.e(0, "mlma_calcu_stat: Vi is not positive definite.");
+        Vi.resize(0, 0);
+    }
 
     LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<std::endl;
 
     int k = 0, l = 0;
     // Pre-allocate at max_block_size — no heap activity inside the hot loop.
     // leftCols(bs) selects the active columns for partial (last) blocks.
+    // The STRMM/STRSM overwrites X_block in-place (B is overwritten, A is read-only),
+    // eliminating the separate UX_block allocation (~600 MB for n=15k).
     Eigen::MatrixXf X_block(n, max_block_size);
-    Eigen::MatrixXf UX_block(n, max_block_size);
     Eigen::VectorXf Xt_Vi_y_block(max_block_size);
     Eigen::VectorXf xvx_diag(max_block_size);    // diag(X^T Vi X)
 
@@ -359,14 +401,25 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
         // X^T Vi_y (bs×1) — single GEMV into pre-allocated target.
         Xt_Vi_y_block.head(bs).noalias() = X_block.leftCols(bs).transpose() * Vi_y;
 
-        // STRMM second — reading the full n×n U will evict X_block from cache
-        // regardless, so issuing this after the GEMV saves one full n×bs reload.
-        // U * X_block via STRMM: Eigen dispatches the TriangularView product
-        // to cblas_strmm; writing into a plain MatrixXf avoids an intermediate copy.
-        UX_block.leftCols(bs).noalias() = Vi_llt.matrixU() * X_block.leftCols(bs);
+        if (use_L) {
+            // In-place STRSM: X_block = L^{-1} * X_block.
+            // x^T V^{-1} x = ||L^{-1} x||^2  (L is lower Cholesky of V).
+            cblas_strsm(CblasColMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
+                        static_cast<int>(n), static_cast<int>(bs), 1.0f,
+                        L_f.data(), static_cast<int>(n),
+                        X_block.data(), static_cast<int>(n));
+        } else {
+            // In-place STRMM: X_block = L_vit^T * X_block  (L_vit = lower Cholesky of V^{-1}).
+            // x^T V^{-1} x = ||L_vit^T x||^2.
+            // cblas_strmm is safe to call in-place (B is overwritten, A is read-only).
+            cblas_strmm(CblasColMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
+                        static_cast<int>(n), static_cast<int>(bs), 1.0f,
+                        Vi_llt.matrixLLT().data(), static_cast<int>(n),
+                        X_block.data(), static_cast<int>(n));
+        }
 
-        // diag(X^T Vi X) = ||col_j(UX_block)||^2
-        xvx_diag.head(bs) = UX_block.leftCols(bs).colwise().squaredNorm();
+        // diag(X^T Vi X) = ||col_j(transformed X_block)||^2
+        xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
 
         for(l = 0; l < bs; l++){
             // xvx_diag[l] is a sum of squares, so >= 0 and never NaN from
@@ -392,29 +445,72 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
 
 gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned long m)
 {
+    // When _Vi_use_llt=true (both exact and Hutch++ paths after their respective REML
+    // preps), _Vi_L holds the lower Cholesky factor L of V (from dpotrf).
+    // Cast L to float and use triangular solves directly, skipping dpotri and the
+    // float LLT entirely.  Mathematical identities:
+    //   V^{-1} y  = L^{-T}(L^{-1} y)   [two STRSV — forward + backward solve on L]
+    //   V^{-1} C  = L^{-T}(L^{-1} C)   [two STRSM on n×p]
+    //   x^T V^{-1} x = ||L^{-1} x||^2  [STRSM: L^{-1} X in-place, then squared norms]
+    // Saves one dpotri O(n³/3 double) + one float LLT O(n³/3 float) per MLMA run.
+    const bool use_L = _Vi_use_llt;
+
     const auto n = static_cast<Eigen::Index>(y.size());
     const Eigen::Index p = static_cast<Eigen::Index>(_X_c);  // number of fixed covariates
     constexpr Eigen::Index max_block_size = 10000;
     unsigned long i = 0;
     std::vector<float> beta(m, 0.0f), se(m, 0.0f), pval(m, 2.0f);
 
-    // Symmetrise Vi once into a plain dense float matrix.
-    Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
-    _Vi.resize(0,0);
-
-    // Precompute Vi * y once (GEMV on the dense Vi).
     Eigen::Map<const Eigen::VectorXf> y_vec(y.data(), n);
     Eigen::VectorXf Vi_y(n);
-    Vi_y.noalias() = Vi * y_vec;
-
-    // C (n×p): fixed covariate matrix.
-    // Vi_C = Vi * C (n×p) is retained for the hot loop: D = C^T Vi X = Vi_C^T X
-    // (Vi symmetric), avoiding the n×bs Vi*X_block intermediate each iteration.
     Eigen::MatrixXf C = _X.cast<float>();
     Eigen::MatrixXf Vi_C(n, p);
-    Vi_C.noalias() = Vi * C;
 
-    // A = C^T Vi C = Vi_C^T C  (p×p); factor immediately via LLT.
+    Eigen::MatrixXf L_f;                         // lower Cholesky of V  (when use_L)
+    Eigen::LLT<Eigen::MatrixXf> Vi_llt;          // Cholesky of V^{-1}  (when !use_L)
+
+    if (use_L) {
+        L_f = _Vi_L.cast<float>();
+        _Vi_L.resize(0, 0);
+        _Vi_use_llt = false;
+        // Vi_y = V^{-1} y = L^{-T}(L^{-1} y) via two float triangular solves.
+        Vi_y = y_vec;
+        cblas_strsv(CblasColMajor, CblasLower, CblasNoTrans, CblasNonUnit,
+                    static_cast<int>(n), L_f.data(), static_cast<int>(n), Vi_y.data(), 1);
+        cblas_strsv(CblasColMajor, CblasLower, CblasTrans, CblasNonUnit,
+                    static_cast<int>(n), L_f.data(), static_cast<int>(n), Vi_y.data(), 1);
+        // Vi_C = V^{-1} C = L^{-T}(L^{-1} C) via two float STRSM on n×p.
+        Vi_C = C;
+        cblas_strsm(CblasColMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
+                    static_cast<int>(n), static_cast<int>(p), 1.0f,
+                    L_f.data(), static_cast<int>(n), Vi_C.data(), static_cast<int>(n));
+        cblas_strsm(CblasColMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
+                    static_cast<int>(n), static_cast<int>(p), 1.0f,
+                    L_f.data(), static_cast<int>(n), Vi_C.data(), static_cast<int>(n));
+    } else {
+        if (_Vi_use_llt) {
+            _Vi.swap(_Vi_L);  // O(1): _Vi gets L's storage, _Vi_L becomes empty
+            gcta_blas_int blas_n_mc = static_cast<gcta_blas_int>(_n);
+            if (gcta_dpotri(blas_n_mc, _Vi.data(), blas_n_mc) != 0)
+                LOGGER.e(0, "dpotri failed materialising V^{-1} for mlma_calcu_stat_covar.");
+            _Vi.triangularView<Eigen::Upper>() = _Vi.transpose();
+            _Vi_use_llt = false;
+        }
+        // Symmetrise Vi once into a plain dense float matrix.
+        Eigen::MatrixXf Vi = _Vi.cast<float>().selfadjointView<Eigen::Upper>();
+        _Vi.resize(0,0);
+        Vi_y.noalias() = Vi * y_vec;
+        // Vi_C = Vi * C (n×p): retained for the hot loop D = Vi_C^T * X.
+        Vi_C.noalias() = Vi * C;
+        // Cholesky-factor Vi for the per-block STRMM below.
+        Vi_llt = Eigen::LLT<Eigen::MatrixXf>(Vi);
+        if (Vi_llt.info() != Eigen::Success)
+            LOGGER.e(0, "mlma_calcu_stat_covar: Vi is not positive definite.");
+        Vi.resize(0, 0);
+    }
+
+    // A = C^T Vi C = Vi_C^T C  (p×p); same formula regardless of path since
+    // Vi_C = V^{-1} C is already computed above.
     Eigen::MatrixXf A_mat(p, p);
     A_mat.noalias() = Vi_C.transpose() * C;
     Eigen::LLT<Eigen::MatrixXf> A_llt(A_mat);
@@ -426,22 +522,14 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
     t_vec.noalias() = C.transpose() * Vi_y;
     t_vec = A_llt.solve(t_vec);
 
-    // Cholesky-factor Vi = U^T U once.
-    // Per-block: x^T Vi x = ||Ux||^2 via STRMM (half the flops and memory
-    // traffic of SGEMM on the full n×n Vi).  Combined with D = Vi_C^T X, the
-    // n×bs Vi*X_block product is eliminated entirely from the hot loop.
-    // Vi_llt and Vi_C are both retained for the loop; the dense Vi is freed.
-    Eigen::LLT<Eigen::MatrixXf> Vi_llt(Vi);
-    if(Vi_llt.info() != Eigen::Success)
-        LOGGER.e(0, "mlma_calcu_stat_covar: Vi is not positive definite.");
-    Vi.resize(0, 0);
-
     LOGGER << "\nRunning association tests for " << m << " SNPs ..." << std::endl;
 
     int k = 0, l = 0;
-    Eigen::MatrixXf X_block;
-    Eigen::MatrixXf UX_block;                    // n×bs, reused across blocks
+    // The STRMM/STRSM overwrites X_block in-place after all operations using the
+    // original genotype data are complete (~600 MB savings vs a separate UX_block).
+    Eigen::MatrixXf X_block(n, max_block_size);
     std::vector<int> indx;
+    indx.reserve(max_block_size);
 
     // Pre-allocated block temporaries — zero heap activity per SNP
     Eigen::MatrixXf D_block(p, max_block_size);      // Vi_C^T * X_block  (p×bs)
@@ -464,28 +552,42 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
         for(k = 0; k < bs; k++) indx[k] = i + k;
         make_XMat_subset(X_block, indx, false);  // X_block is n×bs
 
-        // U * X_block via STRMM: RHS is a TriangularView product, dispatched to
-        // cblas_strmm.  LHS is a plain MatrixXf, eliminating an intermediate copy.
-        UX_block.noalias() = Vi_llt.matrixU() * X_block;
+        // All operations using the original genotype values must come first,
+        // before the in-place STRMM/STRSM overwrites X_block.
 
-        // diag(X^T Vi X) = ||col_j(UX_block)||^2
-        xvx_diag.head(bs) = UX_block.colwise().squaredNorm();
-
-        // D = C^T Vi X = Vi_C^T X  (p×bs); Vi symmetric so (Vi C)^T = C^T Vi.
-        // Cost O(p*n*bs) with p << n; replaces the O(n^2*bs) Vi*X_block SGEMM.
+        // D = C^T Vi X = Vi_C^T X  (p×bs)
         D_block.leftCols(bs).noalias() = Vi_C.transpose() * X_block;
-
-        // E = A^{-1} * D  (p×bs)
-        E_block.leftCols(bs).noalias() = A_llt.solve(D_block.leftCols(bs));
 
         // f = X^T Vi_y  (bs×1)
         f_vec.head(bs).noalias() = X_block.transpose() * Vi_y;
 
-        // Dt_t = D^T t  (bs×1)
+        // E = A^{-1} * D  (p×bs)  — does not need X_block
+        E_block.leftCols(bs).noalias() = A_llt.solve(D_block.leftCols(bs));
+
+        // Dt_t = D^T t  (bs×1)  — does not need X_block
         Dt_t_vec.head(bs).noalias() = D_block.leftCols(bs).transpose() * t_vec;
 
-        // diag(D^T E) via elementwise product + colwise sum
+        // diag(D^T E)  — does not need X_block
         d_dot_e_diag.head(bs) = (D_block.leftCols(bs).cwiseProduct(E_block.leftCols(bs))).colwise().sum();
+
+        if (use_L) {
+            // In-place STRSM: X_block = L^{-1} * X_block.
+            // x^T V^{-1} x = ||L^{-1} x||^2  (L is lower Cholesky of V).
+            cblas_strsm(CblasColMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
+                        static_cast<int>(n), static_cast<int>(bs), 1.0f,
+                        L_f.data(), static_cast<int>(n),
+                        X_block.data(), static_cast<int>(n));
+        } else {
+            // In-place STRMM: X_block = L_vit^T * X_block  (L_vit = lower Cholesky of V^{-1}).
+            // x^T V^{-1} x = ||L_vit^T x||^2.
+            cblas_strmm(CblasColMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
+                        static_cast<int>(n), static_cast<int>(bs), 1.0f,
+                        Vi_llt.matrixLLT().data(), static_cast<int>(n),
+                        X_block.data(), static_cast<int>(n));
+        }
+
+        // diag(X^T Vi X) = ||col_j(transformed X_block)||^2
+        xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
 
         for(l = 0; l < bs; l++){
             const float S = xvx_diag[l] - d_dot_e_diag[l];  // Schur complement = 1/Var(beta_snp)
@@ -597,7 +699,7 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
     _r_indx.resize(2);
     for(i=0; i<2; i++) _r_indx[i]=i;
     _A.resize(_r_indx.size());
-    _A[1]=eigenMatrix::Identity(_n, _n);
+    // _A[1] left size-0 (identity convention); hot paths handle this implicitly.
     
     eigenVector y_buf=_y;
     std::vector<float> y(_n);
@@ -673,9 +775,13 @@ void gcta::save_reml_state(const std::string& filename, bool no_adj_covar)
     // Ensure _Vi is materialised regardless of which REML path was taken:
     //   - Default path:  _Vi_use_llt == false, _Vi is already an n×n matrix.
     //   - Hutch++ path:  _Vi_use_llt == true, _Vi was released to save RAM.
-    //     _Vi_llt holds L from V = L Lᵀ so _Vi_llt.solve(I) gives V^{-1} in O(n²).
+    //     _Vi_L holds L (lower tri from dpotrf); dpotri on a copy gives V^{-1}.
     if (_Vi_use_llt) {
-        _Vi = _Vi_llt.solve(eigenMatrix::Identity(_n, _n));
+        _Vi.swap(_Vi_L);  // O(1): _Vi gets L's storage, _Vi_L becomes empty
+        gcta_blas_int blas_n_s = static_cast<gcta_blas_int>(_n);
+        if (gcta_dpotri(blas_n_s, _Vi.data(), blas_n_s) != 0)
+            LOGGER.e(0, "dpotri failed materialising V^{-1} in save_reml_state.");
+        _Vi.triangularView<Eigen::Upper>() = _Vi.transpose();
         _Vi_use_llt = false;
     }
 

@@ -974,7 +974,7 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
     manipulate_grm(grm_file, keep_indi_file, remove_indi_file, "", grm_cutoff, -2.0, -2, merge_grm_flag, true);
     _grm_N.resize(0, 0);
     int n = _keep.size();
-    if (out_pc_num > n) out_pc_num = n;
+    if (out_pc_num > n || out_pc_num == 0) out_pc_num = n;
     LOGGER << "\nPerforming principal component analysis ..." << _grm.rows() << "x" << _grm.cols() << std::endl;
 
     //_grm is either MatrixXf or MatrixXd; if it's MatrixXf, we need to cast it to MatrixXd. If it's already MatrixXd, we can use it directly.
@@ -990,24 +990,13 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
     Eigen::VectorXd eval;
     Eigen::MatrixXd evec;
 
+    if (out_pc_num == n && !pca_approx.empty()) {
+        LOGGER << "Warning: --pca-approx is set, but all PCs requested. Falling back to full eigenvalue decomposition." << std::endl;
+        pca_approx="";
+    }
     if (!pca_approx.empty()) {
-        //This is randomized SVD, not full SVD
+
         if (pca_approx == "SVD") {
-            // Randomized SVD
-            int oversample = 10;
-            int pca_power_iter = 2;
-            int k = out_pc_num + oversample;
-            Eigen::MatrixXd omega = Eigen::MatrixXd::Random(n, k);
-            Eigen::MatrixXd Y = grm_dbl * omega;
-            for (int i = 0; i < pca_power_iter; ++i)
-                Y = grm_dbl * (grm_dbl * Y);
-            Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
-            Eigen::MatrixXd Q = qr.householderQ() * Eigen::MatrixXd::Identity(n, k);
-            Eigen::MatrixXd B = Q.transpose() * grm_dbl * Q;
-            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(B);
-            eval = es.eigenvalues().reverse().head(out_pc_num);
-            evec = Q * es.eigenvectors().rowwise().reverse().leftCols(out_pc_num);
-        } else if (pca_approx == "randomized") {
 
             int oversample    = 20;          // bump from 10
             int pca_power_iter = 3;          // one extra pass helps GRMs
@@ -1067,6 +1056,8 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
     } else {
         if (n >= 32766)
             LOGGER << "Warning: n = " << n << " likely exceeds LAPACKE's strict internal limit for workspace. Consider using --pca-approx for large GRMs." << std::endl;
+        if (out_pc_num != n)
+            LOGGER << "Warning: computing all " << n << " eigenvalues/vectors for PCA, but only " << out_pc_num << " will be output. Consider using --pca-approx for large GRMs." << std::endl;
         LOGGER << "Using full eigenvalue decomposition (--pca-approx not set)." << std::endl;
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigs(grm_dbl);
         if (eigs.info() != Eigen::Success)

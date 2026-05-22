@@ -147,6 +147,7 @@ public:
     void set_reml_diag_mul(double value);
     void set_reml_diagV_adj(int method);
     void set_reml_trace_approx(bool on, int nprobes);
+    void set_reml_trace_power_iter(int q);
     void set_log_pval(bool log_pval);
     void set_reml_inv_method(int method);
 
@@ -332,10 +333,11 @@ private:
     void calcu_Hi(eigenMatrix &P, eigenMatrix &Hi);
     void reml_equation(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector &varcmp);
     double lgL_reduce_mdl(bool no_constrain);
-    void em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, eigenVector &varcmp);
+    void em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, eigenVector &varcmp, double dlogL = 1000.0);
     void ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector &prev_varcmp, eigenVector &varcmp, double dlogL);
     void calcu_tr_PA(eigenMatrix &P, eigenVector &tr_PA);
     eigenVector applyP_vec(const eigenVector &v) const;
+    eigenMatrix applyP_mat(const eigenMatrix &Z) const;  // batch DTRSM/DSYMM version
     void calcu_tr_PA_hutchpp(eigenVector &tr_PA, int m_probes);
     void calcu_Vp(double &Vp, double &Vp2, double &VarVp, double &VarVp2, const eigenVector &varcmp, const eigenMatrix &Hi);
     void calcu_hsq(int i, double Vp, double Vp2, double VarVp, double VarVp2, double &hsq, double &var_hsq, const eigenVector &varcmp, const eigenMatrix &Hi);
@@ -583,13 +585,15 @@ private:
     std::vector<eigenMatrix> _A;
     eigenVector _y;
     eigenMatrix _Vi;
-    Eigen::LLT<eigenMatrix> _Vi_llt;  // Cholesky factor of V (skip-P / Hutch++ path)
-    bool _Vi_use_llt = false;          // true when _Vi_llt is valid and _Vi is empty
+    Eigen::LLT<eigenMatrix> _Vi_llt;  // unused — kept for ABI compat; remove in next major version
+    eigenMatrix _Vi_L;                 // Cholesky factor L (lower tri) from in-place dpotrf; replaces _Vi_llt
+    bool _Vi_use_llt = false;          // true when _Vi_L is valid and _Vi is empty
     eigenMatrix _Vi_X;        // cached V^{-1} X for implicit P matvecs
     eigenMatrix _Xt_Vi_X_i;   // cached (X' V^{-1} X)^{-1} for implicit P matvecs
     eigenMatrix _P;
     bool _reml_trace_approx = false;
     int  _reml_trace_approx_nprobes = 90;  // ~1% relative trace error
+    int  _reml_trace_power_iter = 0;       // power iterations for range sketch; 0=off (no benefit for bulk-spectrum GRMs)
     eigenMatrix _hutchpp_S;   // cached Rademacher probes (n × k) for Hutch++ range sketch
     eigenMatrix _hutchpp_G;   // cached Rademacher probes (n × k) for Hutch++ residual
     eigenVector _b;

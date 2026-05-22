@@ -87,7 +87,7 @@ void option(int option_num, char* option_str[])
     bool project_flag = false;
     std::string denseness_metric = "";
     double grm_adj_fac = -2.0, grm_cutoff = -2.0, rm_high_ld_cutoff = -1.0, bK_threshold = -10.0;
-    int dosage_compen = -2, out_pc_num = 20, make_grm_mtd = 0;
+    int dosage_compen = -2, out_pc_num = 0, make_grm_mtd = 0;
     std::string grm_file = "", paa_file = "", pc_file = "";
     std::string genetic_model = ""; // genetic model for dosage calculation
     //pca projection
@@ -123,6 +123,7 @@ void option(int option_num, char* option_str[])
     bool reml_allow_constrain_run = false;
     bool reml_trace_approx = false;
     int  reml_trace_nprobes = 90;
+    int  reml_trace_power_iter = 0;  // off by default; only helps GRMs with dominant low-rank structure
     double prevalence = -2.0, prevalence2 = -2.0;
     bool reml_flag = false, pred_rand_eff = false, est_fix_eff = false, est_fix_eff_var = false, blup_snp_flag = false, no_constrain = false, reml_lrt_flag = false, no_lrt = false, bivar_reml_flag = false, ignore_Ce = false, within_family = false, reml_bending = false, HE_reg_flag = false, reml_diag_one = false, bivar_no_constrain = false;
     int reml_diagV_adj = 0;
@@ -540,13 +541,14 @@ void option(int option_num, char* option_str[])
         } else if (flag == "--pca") {
             pca_flag = true;
             thread_flag = true;
-            i++;
-            if (flag == "gcta" || std::string_view{argv[i]}.substr(0, 2) == "--") {
-                out_pc_num = 20;
-                i--;
-            } else out_pc_num = std::atoi(argv[i]);
+            if (i + 1 < argc && std::string_view{argv[i+1]}.substr(0, 2) != "--") {
+                out_pc_num = std::atoi(argv[++i]);
+                if (out_pc_num < 0) LOGGER.e(0, "\n the value to be specified after --pca should be positive.\n");
+            }
+            else {
+                LOGGER << "\n  No number specified after --pca, default to output all PCs." << std::endl;
+            }
             LOGGER << "--pca " << out_pc_num << std::endl;
-            if (out_pc_num < 1) LOGGER.e(0, "\n the value to be specified after --pca should be positive.\n");
         } else if (flag == "--pca-approx") {
             i++;
             if (i >= argc || std::string_view{argv[i]}.substr(0, 2) == "--") {
@@ -826,6 +828,10 @@ void option(int option_num, char* option_str[])
             reml_trace_approx = true;
             LOGGER << "--reml-trace-nprobes " << reml_trace_nprobes << std::endl;
             if (reml_trace_nprobes < 9) LOGGER.e(0, "\n  --reml-trace-nprobes should be >= 9.\n");
+        } else if (flag == "--reml-trace-power-iter") {
+            reml_trace_power_iter = std::atoi(argv[++i]);
+            LOGGER << "--reml-trace-power-iter " << reml_trace_power_iter << std::endl;
+            if (reml_trace_power_iter < 0) LOGGER.e(0, "\n  --reml-trace-power-iter must be >= 0.\n");
         } else if (flag == "--reml-diag-one") {
             reml_diag_one = true;
             LOGGER << "--reml-diag-one " <<  std::endl;
@@ -1400,6 +1406,7 @@ void option(int option_num, char* option_str[])
     if(reml_fixed_var_flag) pter_gcta->set_reml_fixed_var();
     if(reml_allow_constrain_run) pter_gcta->set_reml_allow_constrain_run();
     if(reml_trace_approx) pter_gcta->set_reml_trace_approx(true, reml_trace_nprobes);
+    pter_gcta->set_reml_trace_power_iter(reml_trace_power_iter);
     if(reml_mtd != 0) pter_gcta->set_reml_mtd(reml_mtd);
     if(reml_inv_method != 0) pter_gcta->set_reml_inv_method(reml_inv_method);
     pter_gcta->set_reml_diagV_adj(reml_diagV_adj);
