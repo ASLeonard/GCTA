@@ -528,6 +528,10 @@ void gcta::fit_reml(std::string grm_file, std::string phen_file, std::string qco
     //LOGGER << "Prepare time: " << LOGGER.tp("main") << std::endl;
 
     // run REML algorithm
+    if (_woodbury_rank > 0)
+        compute_woodbury_basis(_woodbury_rank, 0.0, 0);
+    else if (_woodbury_rank < 0)
+        compute_woodbury_basis(0, _woodbury_buffer_factor, _woodbury_k_max);
     reml(pred_rand_eff, est_fix_eff, est_fix_eff_var, reml_priors, reml_priors_var, prevalence, -2.0, no_constrain, no_lrt, mlmassoc);
 }
 
@@ -1391,9 +1395,222 @@ void gcta::calcu_sum_hsq(double Vp, double VarVp,
                                  - (2.0 * cov12) / (V1 * Vp));
 }
 
+// Woodbury low-rank approximation helpers.
+// K * v ≈ λ_tail·v + U_k·((D_k − λ_tail) ⊙ (U_k^T·v))
+eigenVector gcta::woodbury_Kv(const eigenVector &v) const {
+    eigenVector Ukv = _Uk.transpose() * v;
+    Ukv.array() *= (_dk.array() - static_cast<eigenVector::Scalar>(_lambda_tail));
+    return static_cast<eigenVector::Scalar>(_lambda_tail) * v + _Uk * Ukv;
+}
+
+// V^{-1} v = (v − U_k·(c_k ⊙ (U_k^T·v))) / σ²_eff
+eigenVector gcta::woodbury_Viv(const eigenVector &v) const {
+    eigenVector Ukv = _Uk.transpose() * v;
+    Ukv.array() *= _ck.array();
+    return (v - _Uk * Ukv) / static_cast<eigenVector::Scalar>(_sigma2_eff);
+}
+
+// V^{-1} Z  (matrix version)
+eigenMatrix gcta::woodbury_ViZ(const eigenMatrix &Z) const {
+    eigenMatrix UkZ = _Uk.transpose() * Z;
+    UkZ.array().colwise() *= _ck.array();
+    return (Z - _Uk * UkZ) / static_cast<eigenMatrix::Scalar>(_sigma2_eff);
+}
+
+// Compute Woodbury low-rank basis from _A[_r_indx[0]] (GRM K).
+//
+// Fixed-k mode (buffer_factor == 0): run SVD to rank k exactly.
+// Auto-k mode  (buffer_factor  > 0): run SVD to k_max (default min(n−1, 2000)),
+//   count eigenvalues above the Marchenko-Pastur bulk edge
+//     λ+ = (1 + √(n/M))²
+//   where M = SNP count from _grm_N or _include.size(), then set
+//     k = min(k_max, max(20, ⌈k_signal × buffer_factor⌉)).
+//   Using buffer_factor > 1 retains extra "transition-region" eigenpairs
+//   that are treated exactly rather than collapsed to λ_tail·I, which
+//   directly reduces the Jensen logdet bias in the transition band.
+//
+// In both modes, tr(K²) is computed to derive _tail_d_var = var(d_{k+1:n}),
+// enabling a second-order logdet correction in calcu_Vi.
+void gcta::compute_woodbury_basis(int k, double buffer_factor, int k_max) {
+    if (!_reml_trace_approx)
+        LOGGER.e(0, "--reml-woodbury requires --reml-trace-approx.");
+    if (_reml_mtd == 1)
+        LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML (--reml-alg 1). Use AI-REML (default) or EM-REML (--reml-alg 2).");
+    if ((int)_r_indx.size() != 2)
+        LOGGER.e(0, "--reml-woodbury currently supports only single-GRM models (one genetic + one residual component).");
+    if (_A[_r_indx[0]].size() == 0)
+        LOGGER.e(0, "--reml-woodbury: GRM component appears to be an identity matrix; cannot compute low-rank basis.");
+
+    const bool auto_k = (buffer_factor > 0.0);
+    const int  n      = _n;
+
+    // Determine how many eigenpairs to compute
+    int k_svd;
+    if (auto_k) {
+        k_svd = (k_max > 0) ? k_max : std::min(n - 1, 1200);
+        LOGGER << "\nComputing Woodbury basis (auto-k, k_max=" << k_svd
+               << ", buffer=" << buffer_factor << ") ..." << std::endl;
+    } else {
+        k_svd = k;
+        LOGGER << "\nComputing Woodbury low-rank basis (k=" << k << ") ..." << std::endl;
+    }
+    if (k_svd >= n) LOGGER.e(0, "--reml-woodbury rank must be < n.");
+
+    // Alias (double-precision mode) or upcast (single-precision mode) to double.
+    // In double-precision mode eigenMatrix is already MatrixXd, so we take a
+    // const reference to avoid duplicating the O(n²) GRM in memory.
+#ifdef SINGLE_PRECISION
+    Eigen::MatrixXd K_dbl = _A[_r_indx[0]].cast<double>();
+#else
+    const Eigen::MatrixXd& K_dbl = _A[_r_indx[0]];
+#endif
+
+    // ---- Randomised eigendecomposition (Halko et al. 2011) ----
+    const int oversample = 20;
+    const int k_ext = std::min(k_svd + oversample, n - 1);
+    Eigen::MatrixXd omega = Eigen::MatrixXd::Random(n, k_ext);
+    Eigen::MatrixXd Y = K_dbl.selfadjointView<Eigen::Lower>() * omega;
+    omega.resize(0, 0);  // free: no longer needed after initial sketch
+
+    constexpr int power_iter = 3;
+    for (int pi = 0; pi < power_iter; ++pi) {
+        Eigen::HouseholderQR<Eigen::MatrixXd> qr_pi(Y);
+        Y = qr_pi.householderQ() * Eigen::MatrixXd::Identity(n, k_ext);
+        Y = K_dbl.selfadjointView<Eigen::Lower>() * Y;
+    }
+    {
+        Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
+        Y = qr.householderQ() * Eigen::MatrixXd::Identity(n, k_ext);
+    }
+
+    Eigen::MatrixXd KY = K_dbl.selfadjointView<Eigen::Lower>() * Y;
+    Eigen::MatrixXd B  = Y.transpose() * KY;
+    KY.resize(0, 0);  // free: B = Y^T KY is all we need henceforth
+
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(B);
+    if (es.info() != Eigen::Success)
+        LOGGER.e(0, "Woodbury: eigendecomposition of projected GRM failed. "
+                    "Try a smaller rank or use --reml-woodbury auto.");
+
+    // Eigenvalues/vectors in descending order (k_svd of them)
+    Eigen::VectorXd eval_full = es.eigenvalues().tail(k_svd).reverse();
+    Eigen::MatrixXd evec_full = Y * es.eigenvectors().rightCols(k_svd).rowwise().reverse();
+
+    // ---- Auto-k: Marchenko-Pastur upper edge ----
+    if (auto_k) {
+        double M = 0.0;
+        if (_grm_N.rows() == n && _grm_N.cols() == n)
+            M = _grm_N.diagonal().cast<double>().mean();
+        else if (!_include.empty())
+            M = static_cast<double>(_include.size());
+        if (M <= 0.0)
+            LOGGER.e(0, "--reml-woodbury auto: cannot determine SNP count for MP threshold. "
+                        "Use --reml-woodbury <k> for a fixed rank.");
+
+        const double gamma       = static_cast<double>(n) / M;
+        const double lambda_plus = std::pow(1.0 + std::sqrt(gamma), 2.0);
+        const int    k_signal   = static_cast<int>((eval_full.array() > lambda_plus).count());
+        const int    k_buffered = std::max(20, static_cast<int>(std::ceil(k_signal * buffer_factor)));
+        k = std::min(k_svd, k_buffered);
+        LOGGER << "MP bulk edge λ+ = " << lambda_plus
+               << " (n=" << n << ", M=" << static_cast<long long>(M) << ")"
+               << ", eigenvalues above λ+ = " << k_signal
+               << ", using k = " << k << " (buffer=" << buffer_factor << ")" << std::endl;
+        // Warn if k_max clamps the buffer-implied rank: the score equation is sensitive
+        // to λᵢ², so quadratic-form accuracy requires k ~ k_signal×√k_signal, not just
+        // k_signal. Truncation means the user should increase k_max.
+        if (k_buffered > k_svd) {
+            LOGGER.w(0, "Woodbury auto-k: buffer-implied k=" + std::to_string(k_buffered)
+                        + " exceeds k_max=" + std::to_string(k_svd) + "; clamped to k_max. "
+                        "REML score accuracy degrades when k < k_signal\u00d7\u221ak_signal. "
+                        "Increase k_max via: --reml-woodbury auto:"
+                        + std::to_string(k_buffered) + ":" + std::to_string(buffer_factor));
+        }
+    }
+
+    // Truncate to chosen k
+    Eigen::VectorXd eval = eval_full.head(k);
+    Eigen::MatrixXd evec = evec_full.leftCols(k);
+
+    // ---- λ_tail from trace ----
+    const double trace_K = K_dbl.diagonal().sum();
+    _lambda_tail = (trace_K - eval.sum()) / static_cast<double>(n - k);
+    if (_lambda_tail < 0.0) {
+        LOGGER.w(0, "Woodbury: λ_tail < 0 (" + std::to_string(_lambda_tail) + "); clamped to 0. "
+                    "Consider increasing rank.");
+        _lambda_tail = 0.0;
+    }
+
+    // ---- Second-order logdet correction: var of tail eigenvalues ----
+    // tr(K²) = Σ K_ii² + 2·Σ_{i>j} K_ij²  (reading only the lower triangle).
+    // _tail_d_var = [tr(K²) − Σ_{j≤k} d_j²] / (n−k)  −  λ_tail²
+    {
+        double diag_sq = K_dbl.diagonal().squaredNorm();
+        double off_sq  = 0.0;
+        #pragma omp parallel for reduction(+:off_sq) schedule(static)
+        for (int j = 0; j < n; ++j)
+            off_sq += K_dbl.col(j).tail(n - j - 1).squaredNorm();
+        const double trace_K2    = diag_sq + 2.0 * off_sq;
+        const double tail_sum_sq = trace_K2 - eval.squaredNorm();
+        _tail_d_var = std::max(0.0, tail_sum_sq / static_cast<double>(n - k)
+                                     - _lambda_tail * _lambda_tail);
+    }
+
+    // Clamp top-k eigenvalues to ≥ 0 (guard against small numerical negatives)
+    eval = eval.cwiseMax(0.0);
+
+    // Store
+    _dk = eval.cast<eigenVector::Scalar>();
+    _Uk = evec.cast<eigenMatrix::Scalar>();
+    _woodbury_rank = k;
+
+    // Free K to recover O(n²) memory; mark woodbury as active
+    _A[_r_indx[0]].resize(0, 0);
+    _Vi_use_woodbury = true;
+
+    LOGGER << "Woodbury basis: k=" << k
+           << ", λ_tail=" << _lambda_tail
+           << ", tail_d_var=" << _tail_d_var << std::endl;
+}
+
 bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, int &iter, bool factorize_only)
 {
     _Vi_use_llt = false;  // reset on every entry
+
+    // Woodbury low-rank path: no V assembly needed.
+    // Update σ²_eff, c_k, logdet analytically from the precomputed eigendecomposition.
+    if (_Vi_use_woodbury) {
+        if (!factorize_only)
+            LOGGER.e(0, "Woodbury REML (--reml-woodbury) requires --reml-trace-approx "
+                        "and is incompatible with --reml-pred-rand (explicit V^{-1} not supported in this mode).");
+        Vi.resize(0, 0);
+        const double sg2 = static_cast<double>(prev_varcmp[0]);
+        const double se2 = static_cast<double>(prev_varcmp[_r_indx.size() - 1]);
+        _sigma2_eff = sg2 * _lambda_tail + se2;
+        if (_sigma2_eff <= 0.0) return false;
+        const int k = _woodbury_rank;
+        _ck.resize(k);
+        logdet = static_cast<double>(_n - k) * std::log(_sigma2_eff);
+        for (int j = 0; j < k; ++j) {
+            // Clamp delta to 0: if d_j < lambda_tail (can happen numerically when d_j
+            // is close to the tail average), treat the contribution as zero rather than
+            // introducing a negative correction that would make _ck negative.
+            const double delta    = std::max(0.0, static_cast<double>(_dk[j]) - _lambda_tail);
+            const double sig_delta = sg2 * delta;
+            _ck[j] = static_cast<eigenVector::Scalar>(sig_delta / (_sigma2_eff + sig_delta));
+            logdet += std::log(_sigma2_eff + sig_delta);
+        }
+        // Second-order logdet correction for tail eigenvalue variance:
+        //   Exact:  Σ_{j>k} log(σ²_g·d_j + σ²_e)
+        //   WB:     (n−k)·log(σ²_eff)  [Jensen over-estimates by ~(σ²_g/σ²_eff)²·(n−k)·var_tail/2]
+        // This term is stored once in compute_woodbury_basis and reused each REML iteration.
+        if (_tail_d_var > 0.0) {
+            const double r = sg2 / _sigma2_eff;
+            logdet -= 0.5 * r * r * static_cast<double>(_n - k) * _tail_d_var;
+        }
+        return true;
+    }
+
     // For the Hutch++ path (factorize_only=true) reuse _Vi_L's existing n×n
     // allocation by swapping it into Vi before the resize.  On the first iteration
     // _Vi_L is empty so the swap is a no-op and resize allocates normally; on
@@ -1708,7 +1925,9 @@ double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi
     // Vi_X = V^{-1} X.
     // When _Vi_use_llt=true, _Vi_L holds L (lower triangle from dpotrf).
     // Solve L L^T Vi_X = X via two triangular solves (DTRSM, no n×n matrix needed).
-    if (_Vi_use_llt) {
+    if (_Vi_use_woodbury) {
+        Vi_X = woodbury_ViZ(_X);
+    } else if (_Vi_use_llt) {
         Vi_X = _X;
         _Vi_L.triangularView<Eigen::Lower>().solveInPlace(Vi_X);
         _Vi_L.triangularView<Eigen::Lower>().adjoint().solveInPlace(Vi_X);
@@ -1732,7 +1951,21 @@ double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi
     // P materialisation requires the explicit V^{-1} in Vi.
     // Swap _Vi_L into Vi (O(1), no copy): Vi gets L's storage, _Vi_L becomes empty.
     // Then dpotri inverts L in-place → Vi = V^{-1}.  Peak stays at 1×n² (was 2×n²).
-    if (_Vi_use_llt) {
+    if (_Vi_use_woodbury) {
+        // Materialise V^{-1} = (1/σ²_eff)(I − U_k diag(c_k) U_k^T) into Vi.
+        Vi.resize(_n, _n);
+        Vi.setIdentity();
+        Vi /= static_cast<eigenMatrix::Scalar>(_sigma2_eff);
+        // Rank-k downdate: Vi -= (1/σ²_eff) U_k diag(c_k) U_k^T
+        // Use scaled U_k so that rankUpdate(Z, -1) gives the correct formula.
+        eigenMatrix Uk_scaled = _Uk;
+        for (int j = 0; j < _woodbury_rank; ++j)
+            Uk_scaled.col(j) *= std::sqrt(static_cast<double>(_ck[j]) / _sigma2_eff);
+        Vi.selfadjointView<Eigen::Lower>().rankUpdate(
+            Uk_scaled, static_cast<eigenMatrix::Scalar>(-1));
+        Vi.triangularView<Eigen::Upper>() = Vi.transpose();
+        // _Vi_use_woodbury stays true so calcu_Hi can use the K approximation.
+    } else if (_Vi_use_llt) {
         Vi.swap(_Vi_L);
         gcta_blas_int blas_n_p = static_cast<gcta_blas_int>(_n);
         if (gcta_dpotri(blas_n_p, Vi.data(), blas_n_p) != 0)
@@ -1782,9 +2015,16 @@ void gcta::calcu_Hi(eigenMatrix &P, eigenMatrix &Hi) {
     // This saves 1×n² = ~1.8 GB at convergence vs the old PA[last]=P copy.
     std::vector<eigenMatrix> PA(m);
     for (int i = 0; i < m; i++) {
-        if (!_bivar_reml && !_within_family && _A[_r_indx[i]].size() == 0)
+        if (_Vi_use_woodbury && !_bivar_reml && !_within_family && i == 0) {
+            // K was freed; use K_approx = λ_tail·I + U_k·(D−λ)·U_k^T
+            // PA[i] = P·K_approx = λ_tail·P + (P·U_k)·diag(D−λ)·U_k^T
+            eigenMatrix PUk = P.selfadjointView<Eigen::Upper>() * _Uk;
+            eigenVector delta = _dk.array() - static_cast<eigenVector::Scalar>(_lambda_tail);
+            PA[i] = static_cast<eigenMatrix::Scalar>(_lambda_tail) * P;
+            PA[i].noalias() += PUk * delta.asDiagonal() * _Uk.transpose();
+        } else if (!_bivar_reml && !_within_family && _A[_r_indx[i]].size() == 0) {
             PA[i].resize(0, 0);  // identity marker — no copy of P
-        else
+        } else
             PA[i].noalias() = P.selfadjointView<Eigen::Upper>()
                     * ((_bivar_reml || _within_family) ? _Asp[_r_indx[i]] : _A[_r_indx[i]]);
     }
@@ -1861,6 +2101,8 @@ void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector
     for (int i = 0; i < (int)_r_indx.size(); i++) {
         if (_bivar_reml || _within_family)
             APy.col(i).noalias() = _Asp[_r_indx[i]] * Py;
+        else if (_Vi_use_woodbury && i == 0)
+            APy.col(i) = woodbury_Kv(Py);
         else if (_A[_r_indx[i]].size() == 0)
             APy.col(i) = Py;
         else
@@ -1950,7 +2192,10 @@ void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, ei
     for (auto i = 0; i < (int)_r_indx.size(); i++) {
         if (_bivar_reml || _within_family)
             R(i) = Py.dot(_Asp[_r_indx[i]] * Py);
-        else if (_A[_r_indx[i]].size() == 0) R(i) = Py.squaredNorm();
+        else if (_Vi_use_woodbury && i == 0) {
+            tmp = woodbury_Kv(Py);
+            R(i) = Py.dot(tmp);
+        } else if (_A[_r_indx[i]].size() == 0) R(i) = Py.squaredNorm();
         else {
             tmp.noalias() = _A[_r_indx[i]].selfadjointView<Eigen::Lower>() * Py;
             R(i) = Py.dot(tmp);
@@ -1975,7 +2220,9 @@ eigenVector gcta::applyP_vec(const eigenVector &v) const
     // _Vi_L holds L from in-place dpotrf; two DTRSV calls (L w = v, then L^T w = w)
     // give V^{-1} v without ever materialising V^{-1}.
     eigenVector w;
-    if (_Vi_use_llt) {
+    if (_Vi_use_woodbury) {
+        w = woodbury_Viv(v);
+    } else if (_Vi_use_llt) {
         w = v;
         _Vi_L.triangularView<Eigen::Lower>().solveInPlace(w);
         _Vi_L.triangularView<Eigen::Lower>().adjoint().solveInPlace(w);
@@ -2003,7 +2250,9 @@ eigenMatrix gcta::applyP_mat(const eigenMatrix &Z) const
     // _Vi_L holds L from in-place dpotrf; DTRSM(L) + DTRSM(L^T) give V^{-1} Z
     // without allocating a second n×n matrix.
     eigenMatrix W;
-    if (_Vi_use_llt) {
+    if (_Vi_use_woodbury) {
+        W = woodbury_ViZ(Z);
+    } else if (_Vi_use_llt) {
         W = Z;
         _Vi_L.triangularView<Eigen::Lower>().solveInPlace(W);
         _Vi_L.triangularView<Eigen::Lower>().adjoint().solveInPlace(W);
@@ -2070,6 +2319,13 @@ void gcta::calcu_tr_PA_hutchpp(eigenVector &tr_PA, int m_probes)
         // (Halko, Martinsson, Tropp 2011).  For a flat bulk spectrum (typical human
         // GRM after PC correction) q=0 is usually sufficient.
         auto applyPA_mat = [&](const eigenMatrix &Z) -> eigenMatrix {
+            if (_Vi_use_woodbury && ci == 0) {
+                // K was freed; use low-rank approximation: K*Z = λ_tail·Z + U_k·((D−λ)⊙(U_k^T·Z))
+                eigenMatrix UkZ = _Uk.transpose() * Z;
+                UkZ.array().colwise() *= (_dk.array() - static_cast<eigenVector::Scalar>(_lambda_tail));
+                eigenMatrix KZ = static_cast<eigenMatrix::Scalar>(_lambda_tail) * Z + _Uk * UkZ;
+                return applyP_mat(KZ);
+            }
             return is_I ? applyP_mat(Z)
                         : applyP_mat(eigenMatrix(Ai.selfadjointView<Eigen::Lower>() * Z));
         };

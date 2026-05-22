@@ -246,8 +246,24 @@ public:
     void run_ecojo_blup_eR(std::string e_metafile, double lambda);
 
     // ERM
-    void make_erm(int erm_mtd, bool output_bin); 
+    void make_erm(int erm_mtd, bool output_bin);
 
+    // Woodbury low-rank REML
+    void set_reml_woodbury_rank(int k) { _woodbury_rank = k; }
+    void set_reml_woodbury_auto(double buf, int k_max) {
+        _woodbury_rank = -1;
+        _woodbury_buffer_factor = buf;
+        _woodbury_k_max = k_max;
+    }
+
+    // Float-precision cache shared between mlma_calcu_stat and mlma_calcu_stat_covar.
+    struct WoodburyMLMACache {
+        Eigen::MatrixXf Uk_f;
+        Eigen::VectorXf ck_f;
+        Eigen::VectorXf sqrt_ck_f;   // cwiseSqrt of ck_f; valid because _ck clamped >= 0
+        float sigma2_eff_f = 0.0f;
+    };
+    WoodburyMLMACache build_woodbury_mlma_cache() const;
 
 private:
     void init_keep();
@@ -339,6 +355,11 @@ private:
     eigenVector applyP_vec(const eigenVector &v) const;
     eigenMatrix applyP_mat(const eigenMatrix &Z) const;  // batch DTRSM/DSYMM version
     void calcu_tr_PA_hutchpp(eigenVector &tr_PA, int m_probes);
+    // Woodbury helpers
+    void compute_woodbury_basis(int k, double buffer_factor, int k_max);
+    eigenVector woodbury_Kv(const eigenVector &v) const;
+    eigenVector woodbury_Viv(const eigenVector &v) const;
+    eigenMatrix woodbury_ViZ(const eigenMatrix &Z) const;
     void calcu_Vp(double &Vp, double &Vp2, double &VarVp, double &VarVp2, const eigenVector &varcmp, const eigenMatrix &Hi);
     void calcu_hsq(int i, double Vp, double Vp2, double VarVp, double VarVp2, double &hsq, double &var_hsq, const eigenVector &varcmp, const eigenMatrix &Hi);
     void calcu_sum_hsq(double Vp, double VarVp, double &sum_hsq, double &var_sum_hsq, const eigenVector &varcmp, const eigenMatrix &Hi);
@@ -588,6 +609,17 @@ private:
     Eigen::LLT<eigenMatrix> _Vi_llt;  // unused — kept for ABI compat; remove in next major version
     eigenMatrix _Vi_L;                 // Cholesky factor L (lower tri) from in-place dpotrf; replaces _Vi_llt
     bool _Vi_use_llt = false;          // true when _Vi_L is valid and _Vi is empty
+    // Woodbury low-rank REML: K ≈ U_k D_k U_k^T + λ_tail(I − U_k U_k^T)
+    bool        _Vi_use_woodbury = false;  // true when woodbury basis is active
+    int         _woodbury_rank   = 0;      // >0 fixed k; -1 auto-k; 0 disabled
+    double      _woodbury_buffer_factor = 0.0;  // MP buffer for auto-k (default 1.5)
+    int         _woodbury_k_max  = 0;           // SVD rank cap for auto-k (0 → min(n−1,2000))
+    eigenMatrix _Uk;              // n×k leading eigenvectors of K
+    eigenVector _dk;              // k eigenvalues (clamped ≥ 0)
+    double      _lambda_tail = 0.0;  // average bulk eigenvalue
+    double      _tail_d_var  = 0.0;  // var of tail eigenvalues: Σ(d_j−λ_tail)²/(n−k)
+    double      _sigma2_eff  = 0.0;  // σ²_g·λ_tail + σ²_e (updated per iteration)
+    eigenVector _ck;              // Woodbury correction: c_j = σ²_g(d_j−λ)/(σ²_eff+σ²_g(d_j−λ))
     eigenMatrix _Vi_X;        // cached V^{-1} X for implicit P matvecs
     eigenMatrix _Xt_Vi_X_i;   // cached (X' V^{-1} X)^{-1} for implicit P matvecs
     eigenMatrix _P;
