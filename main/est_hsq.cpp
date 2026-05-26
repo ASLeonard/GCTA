@@ -1513,26 +1513,31 @@ void gcta::compute_woodbury_basis(int k, double buffer_factor, int k_max) {
 
     if (_woodbury_nystrom) {
         // ---- Nyström single-pass (1 DSYMM total) ----
-        // K ≈ Y C⁻¹ Yᵀ,  C = Ωᵀ Y = Ωᵀ K Ω  (k×k, should be SPD)
-        // Cholesky: C = L Lᵀ  →  Z = Y L⁻ᵀ  →  ZZᵀ = Y C⁻¹ Yᵀ ≈ K
-        // Thin SVD of Z: Z = U S Vᵀ  →  K ≈ U S² Uᵀ
+        // K ≈ Y C⁻¹ Yᵀ,  C = Ωᵀ Y = Ωᵀ K Ω  (k_ext × k_ext, symmetric)
+        // Let Z = Y C^{-1/2}.  Then ZZᵀ ≈ K  and  K ≈ U S² Uᵀ  via thin SVD of Z.
+        // C^{-1/2} via eigensolver: C = V Λ Vᵀ  →  C^{-1/2} = V Λ^{-1/2} Vᵀ
+        // Z = W Vᵀ  where  W = Y V Λ^{-1/2}.
+        // Key: SVD(Z) and SVD(W) share singular values and left singular vectors
+        //      because right-multiplying by orthogonal V doesn't change them.
+        // So SVD(W) directly gives eigenvalues (σ²) and eigenvectors (U).
+        // Using eigensolver (not Cholesky) makes this robust to GRMs with small
+        // negative eigenvalues from numerical noise in genotype standardisation.
         Eigen::MatrixXd C = omega.transpose() * Y;  // k_ext × k_ext
         omega.resize(0, 0);
-        // Diagonal regularisation against near-singular sketches from low-rank K.
-        C.diagonal().array() += 1e-8 * C.diagonal().maxCoeff();
-        Eigen::LLT<Eigen::MatrixXd> llt(C);
-        if (llt.info() != Eigen::Success)
-            LOGGER.e(0, "Woodbury Nyström: sketch matrix C = ΩᵀKΩ is not positive-definite. "
-                        "Try larger oversample or omit --reml-woodbury-nystrom.");
-        // Solve L Zᵀ = Yᵀ  →  Zᵀ = L⁻¹ Yᵀ  (k_ext × n, cheaper than forming n × k_ext Z)
-        Eigen::MatrixXd ZT = Y.transpose();
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_C(C);
+        if (es_C.info() != Eigen::Success)
+            LOGGER.e(0, "Woodbury Nyström: eigendecomposition of sketch matrix C = ΩᵀKΩ failed. "
+                        "Omit --reml-woodbury-nystrom to use the default power-iteration path.");
+        const double lam_max = es_C.eigenvalues().maxCoeff();
+        const double eps_C   = 1e-8 * std::max(lam_max, 1.0);
+        Eigen::VectorXd lam_sqrt_inv =
+            es_C.eigenvalues().cwiseMax(eps_C).cwiseSqrt().cwiseInverse();
+        // W = Y V diag(λ^{-1/2})  — form in-place to avoid extra n×k allocation
+        Y = Y * (es_C.eigenvectors() * lam_sqrt_inv.asDiagonal());
+        Eigen::BDCSVD<Eigen::MatrixXd> svd(Y, Eigen::ComputeThinU);
         Y.resize(0, 0);
-        llt.matrixL().solveInPlace(ZT);
-        // Thin SVD of Z = ZTᵀ  →  left singular vectors of Z = right singular vectors of ZT
-        // Singular values from BDCSVD are descending: eigenvalues = σ², already sorted.
-        Eigen::BDCSVD<Eigen::MatrixXd> svd(ZT, Eigen::ComputeThinV);
         eval_full = svd.singularValues().head(k_svd).array().square();
-        evec_full = svd.matrixV().leftCols(k_svd);
+        evec_full = svd.matrixU().leftCols(k_svd);
     } else {
         // ---- Power-iteration randomised SVD (Halko et al. 2011) — 5 DSYMMs total ----
         omega.resize(0, 0);  // free: not needed after initial sketch
