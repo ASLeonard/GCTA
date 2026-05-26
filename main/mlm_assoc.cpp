@@ -16,6 +16,54 @@
 #include <fstream>
 #include <string_view>
 
+// ---------------------------------------------------------------------------
+// Woodbury MLMA helpers (shared between mlma_calcu_stat and mlma_calcu_stat_covar)
+// ---------------------------------------------------------------------------
+
+gcta::WoodburyMLMACache gcta::build_woodbury_mlma_cache() const {
+    WoodburyMLMACache wb;
+    wb.Uk_f         = _Uk.cast<float>();
+    wb.ck_f         = _ck.cast<float>();
+    wb.sigma2_eff_f = static_cast<float>(_sigma2_eff);
+    // _ck is clamped >= 0 in calcu_Vi, so sqrt is safe here.
+    wb.sqrt_ck_f    = wb.ck_f.cwiseSqrt();
+    return wb;
+}
+
+namespace {
+
+// Apply V^{-1} to a float vector using the Woodbury identity:
+//   V^{-1} v = (v − U_k·(c_k ⊙ (U_k^T v))) / σ²_eff
+Eigen::VectorXf woodbury_apply_Vi_f(const gcta::WoodburyMLMACache &wb,
+                                     const Eigen::VectorXf &v) {
+    Eigen::VectorXf Ukv = wb.Uk_f.transpose() * v;
+    Ukv.array() *= wb.ck_f.array();
+    return (v - wb.Uk_f * Ukv) / wb.sigma2_eff_f;
+}
+
+// Apply V^{-1} to each column of a float matrix using the Woodbury identity.
+Eigen::MatrixXf woodbury_apply_Vi_mat_f(const gcta::WoodburyMLMACache &wb,
+                                         const Eigen::MatrixXf &M) {
+    Eigen::MatrixXf UkM = wb.Uk_f.transpose() * M;
+    UkM.array().colwise() *= wb.ck_f.array();
+    return (M - wb.Uk_f * UkM) / wb.sigma2_eff_f;
+}
+
+// Compute diag(X^T V^{-1} X) for columns 0..bs-1 of X_block using Woodbury:
+//   x^T V^{-1} x = (||x||² − ||sqrt_ck ⊙ (U_k^T x)||²) / σ²_eff
+// Result is clamped to >= 0 to guard against floating-point cancellation.
+void woodbury_xvx_diag_block(const gcta::WoodburyMLMACache &wb,
+                               const Eigen::MatrixXf &X_block, Eigen::Index bs,
+                               Eigen::VectorXf &xvx_diag) {
+    Eigen::MatrixXf UkX = wb.Uk_f.transpose() * X_block.leftCols(bs);
+    UkX.array().colwise() *= wb.sqrt_ck_f.array();
+    xvx_diag.head(bs) = (X_block.leftCols(bs).colwise().squaredNorm()
+                         - UkX.colwise().squaredNorm()) / wb.sigma2_eff_f;
+    xvx_diag.head(bs) = xvx_diag.head(bs).cwiseMax(0.0f);
+}
+
+} // anonymous namespace
+
 void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_file, std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool within_family, bool inbred, bool no_adj_covar, std::string weight_file, std::string save_reml_file, std::string load_reml_file)
 {
     _within_family=within_family;
@@ -255,6 +303,10 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
             load_reml_state(load_reml_file, no_adj_covar);
     } else {
         // Run REML estimation
+        if (_woodbury_rank > 0)
+            compute_woodbury_basis(_woodbury_rank, 0.0, 0);
+        else if (_woodbury_rank < 0)
+            compute_woodbury_basis(0, _woodbury_buffer_factor, _woodbury_k_max);
         reml(false, true, true, reml_priors, reml_priors_var, -2.0, -2.0, no_constrain, true, true);
         
         if(!save_reml_file.empty()) {
@@ -327,6 +379,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
     // Saves one dpotri O(n³/3 double) + one float LLT O(n³/3 float) per MLMA run.
     // The fallback (!use_L) preserves the old dpotri path for any caller that still
     // arrives with _Vi_use_llt=false and a valid _Vi.
+    const bool use_woodbury = _Vi_use_woodbury;
     const bool use_L = _Vi_use_llt;
 
     const auto n = static_cast<Eigen::Index>(y.size());
@@ -340,7 +393,13 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
     Eigen::MatrixXf L_f;                         // lower Cholesky of V  (when use_L)
     Eigen::LLT<Eigen::MatrixXf> Vi_llt;          // Cholesky of V^{-1}  (when !use_L)
 
-    if (use_L) {
+    // Precomputed woodbury float-precision quantities for the block loop
+    gcta::WoodburyMLMACache wb;
+
+    if (use_woodbury) {
+        wb   = build_woodbury_mlma_cache();
+        Vi_y = woodbury_apply_Vi_f(wb, y_vec);
+    } else if (use_L) {
         L_f = _Vi_L.cast<float>();
         _Vi_L.resize(0, 0);
         _Vi_use_llt = false;
@@ -401,13 +460,16 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
         // X^T Vi_y (bs×1) — single GEMV into pre-allocated target.
         Xt_Vi_y_block.head(bs).noalias() = X_block.leftCols(bs).transpose() * Vi_y;
 
-        if (use_L) {
+        if (use_woodbury) {
+            woodbury_xvx_diag_block(wb, X_block, bs, xvx_diag);
+        } else if (use_L) {
             // In-place STRSM: X_block = L^{-1} * X_block.
             // x^T V^{-1} x = ||L^{-1} x||^2  (L is lower Cholesky of V).
             cblas_strsm(CblasColMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
                         static_cast<int>(n), static_cast<int>(bs), 1.0f,
                         L_f.data(), static_cast<int>(n),
                         X_block.data(), static_cast<int>(n));
+            xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
         } else {
             // In-place STRMM: X_block = L_vit^T * X_block  (L_vit = lower Cholesky of V^{-1}).
             // x^T V^{-1} x = ||L_vit^T x||^2.
@@ -416,15 +478,12 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
                         static_cast<int>(n), static_cast<int>(bs), 1.0f,
                         Vi_llt.matrixLLT().data(), static_cast<int>(n),
                         X_block.data(), static_cast<int>(n));
+            xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
         }
 
-        // diag(X^T Vi X) = ||col_j(transformed X_block)||^2
-        xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
-
         for(l = 0; l < bs; l++){
-            // xvx_diag[l] is a sum of squares, so >= 0 and never NaN from
-            // finite inputs.  A single pre-division guard suffices; isfinite on
-            // the reciprocal is redundant.
+            // xvx_diag[l] >= 0 for LLT/STRMM paths (exact sums of squares);
+            // for the Woodbury path it is clamped to 0 in woodbury_xvx_diag_block.
             if(xvx_diag[l] > 1.0e-30f){
                 const float inv_xvx  = 1.0f / xvx_diag[l];
                 const float sqrt_inv = std::sqrt(inv_xvx);
@@ -453,6 +512,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
     //   V^{-1} C  = L^{-T}(L^{-1} C)   [two STRSM on n×p]
     //   x^T V^{-1} x = ||L^{-1} x||^2  [STRSM: L^{-1} X in-place, then squared norms]
     // Saves one dpotri O(n³/3 double) + one float LLT O(n³/3 float) per MLMA run.
+    const bool use_woodbury = _Vi_use_woodbury;
     const bool use_L = _Vi_use_llt;
 
     const auto n = static_cast<Eigen::Index>(y.size());
@@ -469,7 +529,14 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
     Eigen::MatrixXf L_f;                         // lower Cholesky of V  (when use_L)
     Eigen::LLT<Eigen::MatrixXf> Vi_llt;          // Cholesky of V^{-1}  (when !use_L)
 
-    if (use_L) {
+    // Precomputed woodbury float-precision quantities for the block loop
+    gcta::WoodburyMLMACache wb;
+
+    if (use_woodbury) {
+        wb   = build_woodbury_mlma_cache();
+        Vi_y = woodbury_apply_Vi_f(wb, y_vec);
+        Vi_C = woodbury_apply_Vi_mat_f(wb, C);
+    } else if (use_L) {
         L_f = _Vi_L.cast<float>();
         _Vi_L.resize(0, 0);
         _Vi_use_llt = false;
@@ -570,13 +637,16 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
         // diag(D^T E)  — does not need X_block
         d_dot_e_diag.head(bs) = (D_block.leftCols(bs).cwiseProduct(E_block.leftCols(bs))).colwise().sum();
 
-        if (use_L) {
+        if (use_woodbury) {
+            woodbury_xvx_diag_block(wb, X_block, bs, xvx_diag);
+        } else if (use_L) {
             // In-place STRSM: X_block = L^{-1} * X_block.
             // x^T V^{-1} x = ||L^{-1} x||^2  (L is lower Cholesky of V).
             cblas_strsm(CblasColMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
                         static_cast<int>(n), static_cast<int>(bs), 1.0f,
                         L_f.data(), static_cast<int>(n),
                         X_block.data(), static_cast<int>(n));
+            xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
         } else {
             // In-place STRMM: X_block = L_vit^T * X_block  (L_vit = lower Cholesky of V^{-1}).
             // x^T V^{-1} x = ||L_vit^T x||^2.
@@ -584,10 +654,8 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
                         static_cast<int>(n), static_cast<int>(bs), 1.0f,
                         Vi_llt.matrixLLT().data(), static_cast<int>(n),
                         X_block.data(), static_cast<int>(n));
+            xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
         }
-
-        // diag(X^T Vi X) = ||col_j(transformed X_block)||^2
-        xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
 
         for(l = 0; l < bs; l++){
             const float S = xvx_diag[l] - d_dot_e_diag[l];  // Schur complement = 1/Var(beta_snp)
@@ -773,9 +841,88 @@ void gcta::grm_minus_grm(float *grm, float *sub_grm)
 void gcta::save_reml_state(const std::string& filename, bool no_adj_covar)
 {
     // Ensure _Vi is materialised regardless of which REML path was taken:
-    //   - Default path:  _Vi_use_llt == false, _Vi is already an n×n matrix.
-    //   - Hutch++ path:  _Vi_use_llt == true, _Vi was released to save RAM.
-    //     _Vi_L holds L (lower tri from dpotrf); dpotri on a copy gives V^{-1}.
+    //   - Default path:    _Vi_use_llt == false, _Vi is already an n×n matrix.
+    //   - Hutch++ path:    _Vi_use_llt == true, _Vi was released to save RAM.
+    //                      _Vi_L holds L; dpotri on a copy gives V^{-1}.
+    //   - Woodbury path:   _Vi_use_woodbury == true; V^{-1} is stored implicitly
+    //                      as (I − U_k diag(c_k) U_k^T) / σ²_eff.
+    //                      Materialise it explicitly here before packing.
+    // ---- Woodbury path: compact "GWBY" format ----
+    // V^{-1} is never needed as a dense matrix in the Woodbury MLMA path —
+    // mlma_calcu_stat{,_covar} use _Uk/_dk/_ck/_sigma2_eff directly.
+    // Save just the Woodbury factors (~n*k floats) instead of the packed
+    // lower triangle (~n²/2 floats), saving ~100× in file size.
+    if (_Vi_use_woodbury) {
+        std::ofstream outfile(filename, std::ios::binary);
+        if(!outfile.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
+
+        struct WBHeader {
+            char    magic[4]    = {'G','W','B','Y'};
+            int32_t n           = 0;
+            int32_t x_c         = 0;
+            int32_t num_varcmp  = 0;
+            int32_t num_r_indx  = 0;
+            int32_t woodbury_k  = 0;
+        } hdr;
+        hdr.n          = static_cast<int32_t>(_n);
+        hdr.x_c        = static_cast<int32_t>(_X_c);
+        hdr.num_varcmp = static_cast<int32_t>(_varcmp.size());
+        hdr.num_r_indx = static_cast<int32_t>(_r_indx.size());
+        hdr.woodbury_k = static_cast<int32_t>(_woodbury_rank);
+        outfile.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+
+        // lambda_tail (double — keep full precision; small)
+        outfile.write(reinterpret_cast<const char*>(&_lambda_tail), sizeof(double));
+
+        // _Uk (n × k, float column-major)
+        {
+            Eigen::MatrixXf Uk_f = _Uk.cast<float>();
+            const size_t sz = static_cast<size_t>(_n) * _woodbury_rank;
+            outfile.write(reinterpret_cast<const char*>(Uk_f.data()),
+                          static_cast<std::streamsize>(sz * sizeof(float)));
+        }
+
+        // _dk (k, float)
+        {
+            Eigen::VectorXf dk_f = _dk.cast<float>();
+            outfile.write(reinterpret_cast<const char*>(dk_f.data()),
+                          static_cast<std::streamsize>(_woodbury_rank * sizeof(float)));
+        }
+
+        // _b (float, only when covariates are present)
+        if(!no_adj_covar) {
+            Eigen::VectorXf b_f = _b.cast<float>();
+            outfile.write(reinterpret_cast<const char*>(b_f.data()),
+                          static_cast<std::streamsize>(hdr.x_c * sizeof(float)));
+        }
+
+        // _varcmp (float)
+        {
+            Eigen::VectorXf vc_f =
+                Eigen::Map<const Eigen::VectorXd>(_varcmp.data(), hdr.num_varcmp).cast<float>();
+            outfile.write(reinterpret_cast<const char*>(vc_f.data()),
+                          static_cast<std::streamsize>(hdr.num_varcmp * sizeof(float)));
+        }
+
+        // _r_indx (int32)
+        outfile.write(reinterpret_cast<const char*>(_r_indx.data()),
+                      static_cast<std::streamsize>(hdr.num_r_indx * sizeof(int)));
+
+        outfile.flush();
+        if(!outfile)
+            LOGGER.e(0, "write error on ["+filename+"]: disk full or I/O failure.");
+
+        const size_t wb_bytes  = static_cast<size_t>(_n) * _woodbury_rank * sizeof(float);
+        const size_t tri_bytes = static_cast<size_t>(_n) * (_n + 1) / 2 * sizeof(float);
+        LOGGER << "Saved Woodbury REML state (n=" << _n << ", k=" << _woodbury_rank
+               << ", covariates=" << _X_c << ", variance components=" << hdr.num_varcmp
+               << ") to [" << filename << "] ("
+               << (wb_bytes >> 20) << " MiB factors vs "
+               << (tri_bytes >> 20) << " MiB dense triangle)." << std::endl;
+        return;
+    }
+
+    // ---- Dense path: "GOBY" packed-triangle format ----
     if (_Vi_use_llt) {
         _Vi.swap(_Vi_L);  // O(1): _Vi gets L's storage, _Vi_L becomes empty
         gcta_blas_int blas_n_s = static_cast<gcta_blas_int>(_n);
@@ -789,7 +936,7 @@ void gcta::save_reml_state(const std::string& filename, bool no_adj_covar)
     if(!outfile.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
 
     // ---- Header ----
-    // Magic "GOBY": packed-triangle symmetric format (replaces old "REML" dense format).
+    // Magic "GOBY": packed-triangle symmetric format.
     struct Header {
         char    magic[4]    = {'G','O','B','Y'};
         int32_t n           = 0;
@@ -806,7 +953,6 @@ void gcta::save_reml_state(const std::string& filename, bool no_adj_covar)
     // ---- _Vi: packed lower triangle (float) ----
     // _Vi is symmetric positive-definite, so only the n(n+1)/2 lower-triangle
     // elements are unique.  We save those directly rather than the full n×n matrix.
-    // This halves the file size vs the old dense layout.
     //
     // We save _Vi (the inverse) rather than the LLT factor L for two reasons:
     //   1. On the default (non-Hutch++) path _Vi_llt is not reliably populated
@@ -874,6 +1020,80 @@ void gcta::load_reml_state(const std::string& filename, bool no_adj_covar)
     } hdr;
     must_read(&hdr, sizeof(hdr));
 
+    // ---- Woodbury "GWBY" format ----
+    if(std::string_view(hdr.magic, 4) == "GWBY") {
+        // The Woodbury-format header has one extra int32 (woodbury_k).
+        int32_t woodbury_k = 0;
+        must_read(&woodbury_k, sizeof(int32_t));
+
+        if(hdr.n <= 0 || hdr.x_c < 0 || hdr.num_varcmp <= 0 || hdr.num_r_indx <= 0 || woodbury_k <= 0)
+            LOGGER.e(0, "file ["+filename+"] contains invalid Woodbury dimensions — file may be corrupt.");
+        if(hdr.n != static_cast<int32_t>(_n))
+            LOGGER.e(0, "sample size mismatch: REML state has n=" + std::to_string(hdr.n)
+                      + " but current dataset has n=" + std::to_string(_n));
+        if(hdr.x_c != static_cast<int32_t>(_X_c))
+            LOGGER.e(0, "number of covariates mismatch: REML state has "
+                      + std::to_string(hdr.x_c) + " but current dataset has " + std::to_string(_X_c));
+
+        // lambda_tail (double)
+        must_read(&_lambda_tail, sizeof(double));
+
+        // _Uk (n × k, float → eigenMatrix)
+        {
+            Eigen::MatrixXf Uk_f(hdr.n, woodbury_k);
+            must_read(Uk_f.data(),
+                      static_cast<std::streamsize>(static_cast<size_t>(hdr.n) * woodbury_k * sizeof(float)));
+            _Uk = Uk_f.cast<eigenMatrix::Scalar>();
+        }
+
+        // _dk (k, float → eigenVector)
+        {
+            Eigen::VectorXf dk_f(woodbury_k);
+            must_read(dk_f.data(),
+                      static_cast<std::streamsize>(woodbury_k * sizeof(float)));
+            _dk = dk_f.cast<eigenVector::Scalar>();
+        }
+
+        // _b
+        if(!no_adj_covar) {
+            Eigen::VectorXf b_f(hdr.x_c);
+            must_read(b_f.data(), static_cast<std::streamsize>(hdr.x_c * sizeof(float)));
+            _b = b_f.cast<double>();
+        }
+
+        // _varcmp
+        {
+            Eigen::VectorXf vc_f(hdr.num_varcmp);
+            must_read(vc_f.data(), static_cast<std::streamsize>(hdr.num_varcmp * sizeof(float)));
+            _varcmp.resize(hdr.num_varcmp);
+            Eigen::Map<Eigen::VectorXd>(_varcmp.data(), hdr.num_varcmp) = vc_f.cast<double>();
+        }
+
+        // _r_indx
+        _r_indx.resize(hdr.num_r_indx);
+        must_read(_r_indx.data(),
+                  static_cast<std::streamsize>(hdr.num_r_indx * sizeof(int)));
+
+        // Recompute _sigma2_eff and _ck from the loaded _varcmp + Woodbury basis
+        _woodbury_rank = woodbury_k;
+        const double sg2 = _varcmp[0];
+        const double se2 = _varcmp.back();
+        _sigma2_eff = sg2 * _lambda_tail + se2;
+        _ck.resize(woodbury_k);
+        for (int j = 0; j < woodbury_k; ++j) {
+            const double delta    = std::max(0.0, static_cast<double>(_dk[j]) - _lambda_tail);
+            const double sig_delta = sg2 * delta;
+            _ck[j] = static_cast<eigenVector::Scalar>(sig_delta / (_sigma2_eff + sig_delta));
+        }
+        _Vi_use_woodbury = true;
+
+        LOGGER << "Loaded Woodbury REML state from [" << filename << "]: n=" << hdr.n
+               << ", k=" << woodbury_k << ", covariates=" << hdr.x_c
+               << ", variance components=" << hdr.num_varcmp << std::endl;
+        return;
+    }
+
+    // ---- Dense "GOBY" packed-triangle format ----
     if(std::string_view(hdr.magic, 4) != "GOBY")
         LOGGER.e(0, "file ["+filename+"] is not a valid REML state file.");
     if(hdr.n <= 0 || hdr.x_c < 0 || hdr.num_varcmp <= 0 || hdr.num_r_indx <= 0)

@@ -124,6 +124,15 @@ void option(int option_num, char* option_str[])
     bool reml_trace_approx = false;
     int  reml_trace_nprobes = 90;
     int  reml_trace_power_iter = 0;  // off by default; only helps GRMs with dominant low-rank structure
+    int  reml_woodbury_rank = 0;     // >0 fixed k; -1 auto; 0 disabled
+    double reml_woodbury_buffer = 2.5; // MP buffer factor for auto-k
+    // Rationale: MP edge answers the logdet question (λ_i vs noise floor) but the
+    // REML score equation is sensitive to λᵢ², so the effective rank for quadratic
+    // form accuracy is ~k_signal×√k_signal ≈ k_signal^1.5, not just k_signal.
+    // buffer=2.5 approximates k_signal^1.5/k_signal = k_signal^0.5 ≈ √380 ≈ 2.5
+    // for a typical livestock dataset (k_signal ≈ 380), matching empirical k~1000.
+    int  reml_woodbury_k_max = 0;    // SVD rank cap for auto-k (0 → min(n-1,2000))
+    bool reml_woodbury_nystrom = false;
     double prevalence = -2.0, prevalence2 = -2.0;
     bool reml_flag = false, pred_rand_eff = false, est_fix_eff = false, est_fix_eff_var = false, blup_snp_flag = false, no_constrain = false, reml_lrt_flag = false, no_lrt = false, bivar_reml_flag = false, ignore_Ce = false, within_family = false, reml_bending = false, HE_reg_flag = false, reml_diag_one = false, bivar_no_constrain = false;
     int reml_diagV_adj = 0;
@@ -832,6 +841,36 @@ void option(int option_num, char* option_str[])
             reml_trace_power_iter = std::atoi(argv[++i]);
             LOGGER << "--reml-trace-power-iter " << reml_trace_power_iter << std::endl;
             if (reml_trace_power_iter < 0) LOGGER.e(0, "\n  --reml-trace-power-iter must be >= 0.\n");
+        } else if (flag == "--reml-woodbury") {
+            if (i + 1 >= argc) LOGGER.e(0, "\n  --reml-woodbury requires an argument (e.g. --reml-woodbury 100 or --reml-woodbury auto).\n");
+            std::string wb_arg = argv[++i];
+            if (wb_arg.substr(0, 4) == "auto") {
+                reml_woodbury_rank   = -1;   // auto-k mode sentinel
+                reml_woodbury_buffer = 2.5;  // default MP buffer (see rationale above)
+                reml_woodbury_k_max  = 0;    // 0 → min(n-1, 2000)
+                // Optional suffixes: "auto:<k_max>" or "auto:<k_max>:<buffer>"
+                if (wb_arg.size() > 4 && wb_arg[4] == ':') {
+                    std::string rest = wb_arg.substr(5);
+                    auto colon = rest.find(':');
+                    if (colon == std::string::npos) {
+                        reml_woodbury_k_max = std::atoi(rest.c_str());
+                    } else {
+                        reml_woodbury_k_max  = std::atoi(rest.substr(0, colon).c_str());
+                        reml_woodbury_buffer = std::atof(rest.substr(colon + 1).c_str());
+                    }
+                }
+                LOGGER << "--reml-woodbury auto (k_max=" << reml_woodbury_k_max
+                       << ", buffer=" << reml_woodbury_buffer << ")" << std::endl;
+                if (reml_woodbury_buffer < 1.0)
+                    LOGGER.e(0, "\n  --reml-woodbury auto: buffer factor must be >= 1.0.\n");
+            } else {
+                reml_woodbury_rank = std::atoi(wb_arg.c_str());
+                LOGGER << "--reml-woodbury " << reml_woodbury_rank << std::endl;
+                if (reml_woodbury_rank < 1) LOGGER.e(0, "\n  --reml-woodbury rank must be >= 1.\n");
+            }
+        } else if (flag == "--reml-woodbury-nystrom") {
+            reml_woodbury_nystrom = true;
+            LOGGER << "--reml-woodbury-nystrom (single-pass Nyström sketch)" << std::endl;
         } else if (flag == "--reml-diag-one") {
             reml_diag_one = true;
             LOGGER << "--reml-diag-one " <<  std::endl;
@@ -1407,6 +1446,11 @@ void option(int option_num, char* option_str[])
     if(reml_allow_constrain_run) pter_gcta->set_reml_allow_constrain_run();
     if(reml_trace_approx) pter_gcta->set_reml_trace_approx(true, reml_trace_nprobes);
     pter_gcta->set_reml_trace_power_iter(reml_trace_power_iter);
+    if(reml_woodbury_rank > 0)
+        pter_gcta->set_reml_woodbury_rank(reml_woodbury_rank);
+    else if(reml_woodbury_rank < 0)
+        pter_gcta->set_reml_woodbury_auto(reml_woodbury_buffer, reml_woodbury_k_max);
+    if(reml_woodbury_nystrom) pter_gcta->set_reml_woodbury_nystrom();
     if(reml_mtd != 0) pter_gcta->set_reml_mtd(reml_mtd);
     if(reml_inv_method != 0) pter_gcta->set_reml_inv_method(reml_inv_method);
     pter_gcta->set_reml_diagV_adj(reml_diagV_adj);
