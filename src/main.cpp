@@ -34,6 +34,7 @@
 #include "main/option.h"
 #include "utils.hpp" 
 #include <omp.h>
+#include "MLMA.h"
 #include <cstdlib>
 #include "mem.hpp"
 #include "config.h"
@@ -102,6 +103,8 @@ int main(int argc, char *argv[]){
         "--acat", "--gene-list", "--snp-list", "--min-mac", "--max-maf", "--wind",
         "--envir", "--optimal-rho", "--noSandwich", "--grid-size",
         "--GRM-tile-size",
+        "--mlma-stream", "--load-reml", "--mlma-no-preadj-covar", "--log-pval",
+        "--reml-trace-approx",
     };
     map<string, vector<string>> options;
     vector<string> keys;
@@ -254,7 +257,7 @@ int main(int argc, char *argv[]){
 
     //start register the options
     // Please take care of the order, C++ has few reflation feature, I did in a ugly way.
-    vector<string> module_names = {"phenotype", "marker", "genotype", "covar", "GRM", "fastFAM", "LD"};
+    vector<string> module_names = {"phenotype", "marker", "genotype", "covar", "GRM", "fastFAM", "LD", "mlma"};
     vector<int (*)(map<string, vector<string>>&)> registers = {
             Pheno::registerOption,
             Marker::registerOption,
@@ -262,7 +265,8 @@ int main(int argc, char *argv[]){
             Covar::registerOption,
             GRM::registerOption,
             FastFAM::registerOption,
-            LD::registerOption
+            LD::registerOption,
+            MLMA::registerOption
     };
     vector<void (*)()> processMains = {
             Pheno::processMain,
@@ -271,7 +275,8 @@ int main(int argc, char *argv[]){
             Covar::processMain,
             GRM::processMain,
             FastFAM::processMain,
-            LD::processMain
+            LD::processMain,
+            MLMA::processMain
     };
 
     vector<int> mains;

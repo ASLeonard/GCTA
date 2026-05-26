@@ -847,7 +847,7 @@ void gcta::save_reml_state(const std::string& filename, bool no_adj_covar)
     //   - Woodbury path:   _Vi_use_woodbury == true; V^{-1} is stored implicitly
     //                      as (I − U_k diag(c_k) U_k^T) / σ²_eff.
     //                      Materialise it explicitly here before packing.
-    // ---- Woodbury path: compact "GWBY" format ----
+    // ---- Woodbury path: compact "TUNA" format ----
     // V^{-1} is never needed as a dense matrix in the Woodbury MLMA path —
     // mlma_calcu_stat{,_covar} use _Uk/_dk/_ck/_sigma2_eff directly.
     // Save just the Woodbury factors (~n*k floats) instead of the packed
@@ -857,7 +857,7 @@ void gcta::save_reml_state(const std::string& filename, bool no_adj_covar)
         if(!outfile.is_open()) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
 
         struct WBHeader {
-            char    magic[4]    = {'G','W','B','Y'};
+            char    magic[4]    = {'T','U','N','A'};
             int32_t n           = 0;
             int32_t x_c         = 0;
             int32_t num_varcmp  = 0;
@@ -1020,8 +1020,8 @@ void gcta::load_reml_state(const std::string& filename, bool no_adj_covar)
     } hdr;
     must_read(&hdr, sizeof(hdr));
 
-    // ---- Woodbury "GWBY" format ----
-    if(std::string_view(hdr.magic, 4) == "GWBY") {
+    // ---- Woodbury "TUNA" format ----
+    if(std::string_view(hdr.magic, 4) == "TUNA") {
         // The Woodbury-format header has one extra int32 (woodbury_k).
         int32_t woodbury_k = 0;
         must_read(&woodbury_k, sizeof(int32_t));
