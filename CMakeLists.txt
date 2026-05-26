@@ -439,7 +439,7 @@ set(MAIN_SOURCE "${CMAKE_SOURCE_DIR}/src/main.cpp")
 set(SRCS
     ${CMAKE_SOURCE_DIR}/src/Covar.cpp
     ${CMAKE_SOURCE_DIR}/src/FastFAM.cpp
-    ${CMAKE_SOURCE_DIR}/src/MLMA2.cpp
+    ${CMAKE_SOURCE_DIR}/src/MLMA_stream.cpp
     ${CMAKE_SOURCE_DIR}/src/GRM.cpp
     ${CMAKE_SOURCE_DIR}/src/Geno.cpp
     ${CMAKE_SOURCE_DIR}/src/BedBackend.cpp
