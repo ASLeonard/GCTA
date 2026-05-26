@@ -1645,7 +1645,7 @@ void FastFAM::logLREML(const Ref<const VectorXd> pheno, vector<double> &varcomp,
     MatrixXd ViX = solverV.solve(covar); // n*c
 
     MatrixXd XtViX = covar.transpose() * ViX; // c*c
-    INVmethod method = INV_FQR;
+    INVmethod method = INV_LLT;   // XtViX = X^T V^{-1} X is SPD; LLT is fastest with fallback
     double logdet_XtViX;
     int rank;
     if(!SquareMatrixInverse(XtViX, logdet_XtViX, rank, method)){
@@ -1665,17 +1665,22 @@ void FastFAM::logLREML(const Ref<const VectorXd> pheno, vector<double> &varcomp,
             APy.col(i) = A[i] * Py;
         }
 
+        // Batch solve: all n_comp RHS at once instead of n_comp sequential solves.
+        MatrixXd Cvec = solverV.solve(APy);                      // n × n_comp
+        // Projection correction: precompute b_proj_t^T × APy (c × n_comp), then one GEMM.
+        const MatrixXd bpt_APy = b_proj_t.transpose() * APy;
+        Cvec.noalias() -= ViX * bpt_APy;
+
         MatrixXd Hi(n_comp, n_comp);
         for(int i = 0; i < n_comp; i++){
-            VectorXd cur_APy = APy.col(i);
-            VectorXd cvec = solverV.solve(cur_APy) - ViX * (b_proj_t.transpose() * cur_APy);
-            Hi(i, i) = 0.5 * cur_APy.dot(cvec);
+            Hi(i, i) = 0.5 * APy.col(i).dot(Cvec.col(i));
+            // Batch inner products: one GEMV instead of j individual dot products.
+            const VectorXd Hi_col = APy.transpose() * Cvec.col(i);
             for(int j = 0; j < i; j++){
-                Hi(j, i) = 0.5 * APy.col(j).dot(cvec);
-                Hi(i, j) = Hi(j, i);
+                Hi(j, i) = Hi(i, j) = 0.5 * Hi_col(j);
             }
         }
-        INVmethod mtd_hi = INV_FQR;
+        INVmethod mtd_hi = INV_LLT;  // Hi is SPD at convergence; LLT fastest with fallback
         double logdet_hi;
         int rank;
         if(!SquareMatrixInverse(Hi, logdet_hi, rank, mtd_hi)){

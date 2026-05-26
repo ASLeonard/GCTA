@@ -874,9 +874,9 @@ void gcta::save_reml_state(const std::string& filename, bool no_adj_covar)
         // lambda_tail (double — keep full precision; small)
         outfile.write(reinterpret_cast<const char*>(&_lambda_tail), sizeof(double));
 
-        // _Uk (n × k, float column-major)
+        // _Uk stored as k×n (transposed) for cache-efficient GEMM in mlma-stream hot path.
         {
-            Eigen::MatrixXf Uk_f = _Uk.cast<float>();
+            Eigen::MatrixXf Uk_f = _Uk.transpose().cast<float>();
             const size_t sz = static_cast<size_t>(_n) * _woodbury_rank;
             outfile.write(reinterpret_cast<const char*>(Uk_f.data()),
                           static_cast<std::streamsize>(sz * sizeof(float)));
