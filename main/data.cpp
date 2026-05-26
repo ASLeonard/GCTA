@@ -2308,6 +2308,7 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
     LOGGER << "The recoded genotype matrix has been saved in the file [" + X_zFile + "] (in compressed text format)." << std::endl;
 }
 
+//TODO: the divid_by_std pass is a separate second loop over all columns, touching each column's data again after it has already left L2 cache. You could fuse it into the column-fill loop at negligible code complexity cost: The branch on divid_by_std is loop-invariant so the compiler hoists it, and you halve the number of times each column passes through cache.
 bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
@@ -2323,15 +2324,27 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
         X.resize(n, m);
 
     if (_dosage_flag) {
+        // Precompute per-column scale factors so the std normalisation is fused
+        // into the fill loop below, avoiding a second pass over column data.
+        std::vector<float> sd_inv(m, 1.0f);
+        if (divid_by_std) {
+            for (int j = 0; j < m; j++) {
+                const int k = snp_indx[j];
+                const double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
+                if (sd > 1.0e-50)
+                    sd_inv[j] = static_cast<float>(1.0 / std::sqrt(sd));
+            }
+        }
+
         // After compact_dosage_data(): _keep[i]==i, _include[j]==j; direct access.
         #pragma omp parallel for schedule(static)
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < m; j++) {
                 const int k = snp_indx[j];
                 if (_geno_dose(i, k) < DOSAGE_NA) {
-                    X(i,j) = (_allele1[k] == _ref_A[k]) ? _geno_dose(i, k)
-                                                         : 2.0f - _geno_dose(i, k);
-                    X(i,j) -= static_cast<float>(_mu[k]);
+                    const float v = (_allele1[k] == _ref_A[k]) ? _geno_dose(i, k)
+                                                                : 2.0f - _geno_dose(i, k);
+                    X(i,j) = (v - static_cast<float>(_mu[k])) * sd_inv[j];
                 } else {
                     X(i,j) = 0.0f;
                 }
@@ -2339,59 +2352,47 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
         }
     } else {
         // After compact_snp_data(): _include[j]==j and _keep[i]==i.
-        // Pre-cache per-SNP metadata once.
+        // Pre-cache per-SNP metadata once, including the std scale so the
+        // normalisation pass is fused into the column-fill loop below.
         // snp_k[j] == snp_indx[j] post-compact, so we index snp_indx directly
         // and avoid the redundant copy.
         std::vector<bool>  snp_flip(m);
         std::vector<float> snp_mu(m);
+        std::vector<float> sd_inv(m, 1.0f);
         for (int j = 0; j < m; j++) {
             const int k  = snp_indx[j];
             snp_flip[j]  = (_allele1[k] != _ref_A[k]);
             snp_mu[j]    = static_cast<float>(_mu[k]);
+            if (divid_by_std) {
+                const double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
+                if (sd > 1.0e-50)
+                    sd_inv[j] = static_cast<float>(1.0 / std::sqrt(sd));
+            }
         }
 
         // Column-parallel: each thread writes one contiguous Eigen column (column-major).
+        // divid_by_std is loop-invariant; the compiler hoists the branch.
         // Note: std::vector<bool> is bit-packed; reading snp_flip[j] from
         // multiple threads is safe (different words) but each access goes
         // through a proxy.  Cost is negligible vs the inner loop work.
         #pragma omp parallel for schedule(static)
         for (int j = 0; j < m; j++) {
-            const int   k    = snp_indx[j];
-            const bool  flip = snp_flip[j];
-            const float mu_k = snp_mu[j];
-            const auto& s1   = _snp_1[k];
-            const auto& s2   = _snp_2[k];
+            const int   k     = snp_indx[j];
+            const bool  flip  = snp_flip[j];
+            const float mu_k  = snp_mu[j];
+            const float scale = sd_inv[j];
+            const auto& s1    = _snp_1[k];
+            const auto& s2    = _snp_2[k];
             auto col = X.col(j);
             for (int i = 0; i < n; i++) {
                 if (!s1[i] || s2[i]) {
                     float geno = static_cast<float>(s1[i]) + static_cast<float>(s2[i]);
                     if (flip) geno = 2.0f - geno;
-                    col(i) = geno - mu_k;
+                    col(i) = (geno - mu_k) * scale;
                 } else {
                     col(i) = 0.0f;
                 }
             }
-        }
-
-        if (divid_by_std) {
-            #pragma omp parallel for schedule(static)
-            for (int j = 0; j < m; j++) {
-                const double sd = _mu[snp_indx[j]] * (1.0 - 0.5 * _mu[snp_indx[j]]);
-                if (sd > 1.0e-50)
-                    X.col(j) *= static_cast<float>(1.0 / std::sqrt(sd));
-            }
-            return true;
-        }
-    }
-
-    // Dosage path divid_by_std only (non-dosage exits above via early return).
-    if (divid_by_std) {
-        #pragma omp parallel for schedule(static)
-        for (int j = 0; j < m; j++) {
-            const int    k  = snp_indx[j];
-            const double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
-            if (sd > 1.0e-50)
-                X.col(j) *= static_cast<float>(1.0 / std::sqrt(sd));
         }
     }
 
