@@ -1534,7 +1534,7 @@ void gcta::compute_woodbury_basis(int k, double buffer_factor, int k_max) {
             es_C.eigenvalues().cwiseMax(eps_C).cwiseSqrt().cwiseInverse();
         // W = Y V diag(λ^{-1/2})  — form in-place to avoid extra n×k allocation
         Y = Y * (es_C.eigenvectors() * lam_sqrt_inv.asDiagonal());
-        Eigen::BDCSVD<Eigen::MatrixXd> svd(Y, Eigen::ComputeThinU);
+        Eigen::BDCSVD<Eigen::MatrixXd, Eigen::ComputeThinU> svd(Y);
         Y.resize(0, 0);
         eval_full = svd.singularValues().head(k_svd).array().square();
         evec_full = svd.matrixU().leftCols(k_svd);
