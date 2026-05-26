@@ -132,6 +132,7 @@ void option(int option_num, char* option_str[])
     // buffer=2.5 approximates k_signal^1.5/k_signal = k_signal^0.5 ≈ √380 ≈ 2.5
     // for a typical livestock dataset (k_signal ≈ 380), matching empirical k~1000.
     int  reml_woodbury_k_max = 0;    // SVD rank cap for auto-k (0 → min(n-1,2000))
+    bool reml_woodbury_nystrom = false;
     double prevalence = -2.0, prevalence2 = -2.0;
     bool reml_flag = false, pred_rand_eff = false, est_fix_eff = false, est_fix_eff_var = false, blup_snp_flag = false, no_constrain = false, reml_lrt_flag = false, no_lrt = false, bivar_reml_flag = false, ignore_Ce = false, within_family = false, reml_bending = false, HE_reg_flag = false, reml_diag_one = false, bivar_no_constrain = false;
     int reml_diagV_adj = 0;
@@ -867,6 +868,9 @@ void option(int option_num, char* option_str[])
                 LOGGER << "--reml-woodbury " << reml_woodbury_rank << std::endl;
                 if (reml_woodbury_rank < 1) LOGGER.e(0, "\n  --reml-woodbury rank must be >= 1.\n");
             }
+        } else if (flag == "--reml-woodbury-nystrom") {
+            reml_woodbury_nystrom = true;
+            LOGGER << "--reml-woodbury-nystrom (single-pass Nyström sketch)" << std::endl;
         } else if (flag == "--reml-diag-one") {
             reml_diag_one = true;
             LOGGER << "--reml-diag-one " <<  std::endl;
@@ -1446,6 +1450,7 @@ void option(int option_num, char* option_str[])
         pter_gcta->set_reml_woodbury_rank(reml_woodbury_rank);
     else if(reml_woodbury_rank < 0)
         pter_gcta->set_reml_woodbury_auto(reml_woodbury_buffer, reml_woodbury_k_max);
+    if(reml_woodbury_nystrom) pter_gcta->set_reml_woodbury_nystrom();
     if(reml_mtd != 0) pter_gcta->set_reml_mtd(reml_mtd);
     if(reml_inv_method != 0) pter_gcta->set_reml_inv_method(reml_inv_method);
     pter_gcta->set_reml_diagV_adj(reml_diagV_adj);

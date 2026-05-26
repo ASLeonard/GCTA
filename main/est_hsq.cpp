@@ -801,7 +801,7 @@ void gcta::reml(bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, std:
     // with L in _Vi_L and _Vi_use_llt=true, allowing mlma_calcu_stat to skip the
     // dpotri call entirely (see comment there).
     // The approx path (_Vi_use_llt=true) stores L in _Vi_L and is unaffected.
-    if (mlmassoc && !_reml_trace_approx && !_bivar_reml && !_within_family) {
+    if (mlmassoc && !_reml_trace_approx && !_Vi_use_woodbury && !_bivar_reml && !_within_family) {
         double logdet_dummy = 0.0;
         int iter_dummy = 0;
         calcu_Vi(_Vi, varcmp, logdet_dummy, iter_dummy, /*factorize_only=*/true);
@@ -1104,6 +1104,43 @@ void gcta::init_varcomp(std::vector<double> &reml_priors_var, std::vector<double
         varcmp[_r_indx.size() - 1] = (1.0 - d_buf) * _y_Ssq;
     }
     else varcmp.setConstant(_y_Ssq / (_r_indx.size()));
+
+    // Woodbury path: replace the flat default with an HE regression estimate.
+    // The flat init (V(G) = V(e) = var(y)/2) is far from typical solutions (h² ≈ 0.1–0.3),
+    // causing the single mandatory EM step at iter=0 to land poorly and requiring many
+    // more AI-REML iterations to converge.
+    //
+    // HE estimator (assumes mean-centred y, negligible bias for typical GCTA phenotypes):
+    //   sg = (n·y'Ky − tr(K)·y'y) / (n·tr(K²) − tr(K)²)
+    // All quantities are O(nk) from woodbury members already computed.
+    //
+    // Only applied when no explicit priors were provided and the model is a standard
+    // single-GRM univariate REML (not bivariate, not within-family).
+    if (_Vi_use_woodbury && !_bivar_reml && !_within_family
+            && (int)_r_indx.size() == 2
+            && reml_priors.empty() && reml_priors_var.empty()) {
+        const int n    = _n;
+        const int k    = _woodbury_rank;
+        const double Vy = _y_Ssq;          // total variance (var(y) scale used by init)
+        const double trK  = _dk.sum() + static_cast<double>(n - k) * _lambda_tail;
+        // tr(K²) = Σ d_j² (top-k, exact) + (n−k)·E[d_bulk²]
+        // E[d_bulk²] = var(d_bulk) + mean(d_bulk)² = _tail_d_var + λ_tail²
+        const double trK2 = _dk.squaredNorm()
+                          + static_cast<double>(n - k) * (_tail_d_var + _lambda_tail * _lambda_tail);
+        // y'Ky via woodbury_Kv: K·y = λ_tail·y + U_k·(δ⊙(U_k^T·y)), O(nk)
+        const eigenVector Ky = woodbury_Kv(_y);
+        const double yKy = _y.dot(Ky);
+        const double yy  = _y.squaredNorm();   // y'y (≈ n·Vy when mean ≈ 0)
+        const double denom = static_cast<double>(n) * trK2 - trK * trK;
+        double sg_he = (denom > 1e-10)
+            ? (static_cast<double>(n) * yKy - trK * yy) / denom
+            : Vy * 0.5;
+        // Clamp: both components must be strictly positive
+        sg_he = std::max(sg_he, 0.01 * Vy);
+        sg_he = std::min(sg_he, 0.99 * Vy);
+        varcmp(0) = sg_he;
+        varcmp(1) = std::max(Vy - sg_he, 0.01 * Vy);
+    }
 }
 
 double gcta::lgL_reduce_mdl(bool no_constrain) {
@@ -1140,7 +1177,7 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
     int i = 0, constrain_num = 0, iter = 0, reml_mtd_tmp = _reml_mtd;
     double logdet = 0.0, logdet_Xt_Vi_X = 0.0, prev_lgL = -1e20, lgL = -1e20, dlogL = 1000.0;
     eigenVector prev_prev_varcmp(varcmp), prev_varcmp(varcmp), varcomp_init(varcmp);
-    if (_reml_trace_approx && !_bivar_reml && !_within_family) {
+    if (_reml_trace_approx && !_Vi_use_woodbury && !_bivar_reml && !_within_family) {
         LOGGER << "Using Hutch++ stochastic trace estimator with "
                << _reml_trace_approx_nprobes << " probes (memory-saving mode; "
                << "skips n*n P matrix materialisation)." << std::endl;
@@ -1168,9 +1205,9 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
         if (_bivar_reml) calcu_Vi_bivar(_Vi, prev_varcmp, logdet, iter); // Calculate Vi, bivariate analysis //very slow
         else if (_within_family) calcu_Vi_within_family(_Vi, prev_varcmp, logdet, iter); // within-family REML
         else {
-            // When using Hutch++ with AI-REML or EM-REML, skip the n×n P materialisation.
+            // Hutch++ and Woodbury both skip the n×n P materialisation (matrix-free P application).
             // Fisher scoring (mtd 1) always needs the full P for calcu_Hi every iteration.
-            const bool skip_P_this_iter = _reml_trace_approx && _reml_mtd != 1;
+            const bool skip_P_this_iter = (_reml_trace_approx || _Vi_use_woodbury) && _reml_mtd != 1;
             if (!calcu_Vi(_Vi, prev_varcmp, logdet, iter, skip_P_this_iter)){ // Calculate Vi
                 LOGGER<<"Warning: V matrix is not positive-definite.\n";
                 varcmp = prev_prev_varcmp;
@@ -1181,9 +1218,9 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
                 break;
             }
         }
-        // When using Hutch++ with AI-REML or EM-REML, skip the n×n P materialisation.
+        // Hutch++ and Woodbury both skip the n×n P materialisation (matrix-free P application).
         // Fisher scoring (mtd 1) always needs the full P for calcu_Hi every iteration.
-        const bool skip_P = _reml_trace_approx && !_bivar_reml && !_within_family && _reml_mtd != 1;
+        const bool skip_P = (_reml_trace_approx || _Vi_use_woodbury) && !_bivar_reml && !_within_family && _reml_mtd != 1;
         if (skip_P) {
             logdet_Xt_Vi_X = calcu_P_nomatrix(_Vi, Vi_X, Xt_Vi_X_i);
             _P.resize(0, 0);  // release memory
@@ -1431,9 +1468,9 @@ eigenMatrix gcta::woodbury_ViZ(const eigenMatrix &Z) const {
 //
 // In both modes, tr(K²) is computed to derive _tail_d_var = var(d_{k+1:n}),
 // enabling a second-order logdet correction in calcu_Vi.
+
+//TODO: can explore Nyström single-pass for woodbury basis.
 void gcta::compute_woodbury_basis(int k, double buffer_factor, int k_max) {
-    if (!_reml_trace_approx)
-        LOGGER.e(0, "--reml-woodbury requires --reml-trace-approx.");
     if (_reml_mtd == 1)
         LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML (--reml-alg 1). Use AI-REML (default) or EM-REML (--reml-alg 2).");
     if ((int)_r_indx.size() != 2)
@@ -1465,36 +1502,64 @@ void gcta::compute_woodbury_basis(int k, double buffer_factor, int k_max) {
     const Eigen::MatrixXd& K_dbl = _A[_r_indx[0]];
 #endif
 
-    // ---- Randomised eigendecomposition (Halko et al. 2011) ----
+    // ---- Randomised eigendecomposition ----
     const int oversample = 20;
     const int k_ext = std::min(k_svd + oversample, n - 1);
     Eigen::MatrixXd omega = Eigen::MatrixXd::Random(n, k_ext);
-    Eigen::MatrixXd Y = K_dbl.selfadjointView<Eigen::Lower>() * omega;
-    omega.resize(0, 0);  // free: no longer needed after initial sketch
+    Eigen::MatrixXd Y = K_dbl.selfadjointView<Eigen::Lower>() * omega;  // 1st (and for Nyström, only) DSYMM
 
-    constexpr int power_iter = 3;
-    for (int pi = 0; pi < power_iter; ++pi) {
-        Eigen::HouseholderQR<Eigen::MatrixXd> qr_pi(Y);
-        Y = qr_pi.householderQ() * Eigen::MatrixXd::Identity(n, k_ext);
-        Y = K_dbl.selfadjointView<Eigen::Lower>() * Y;
+    Eigen::VectorXd eval_full;
+    Eigen::MatrixXd evec_full;
+
+    if (_woodbury_nystrom) {
+        // ---- Nyström single-pass (1 DSYMM total) ----
+        // K ≈ Y C⁻¹ Yᵀ,  C = Ωᵀ Y = Ωᵀ K Ω  (k×k, should be SPD)
+        // Cholesky: C = L Lᵀ  →  Z = Y L⁻ᵀ  →  ZZᵀ = Y C⁻¹ Yᵀ ≈ K
+        // Thin SVD of Z: Z = U S Vᵀ  →  K ≈ U S² Uᵀ
+        Eigen::MatrixXd C = omega.transpose() * Y;  // k_ext × k_ext
+        omega.resize(0, 0);
+        // Diagonal regularisation against near-singular sketches from low-rank K.
+        C.diagonal().array() += 1e-8 * C.diagonal().maxCoeff();
+        Eigen::LLT<Eigen::MatrixXd> llt(C);
+        if (llt.info() != Eigen::Success)
+            LOGGER.e(0, "Woodbury Nyström: sketch matrix C = ΩᵀKΩ is not positive-definite. "
+                        "Try larger oversample or omit --reml-woodbury-nystrom.");
+        // Solve L Zᵀ = Yᵀ  →  Zᵀ = L⁻¹ Yᵀ  (k_ext × n, cheaper than forming n × k_ext Z)
+        Eigen::MatrixXd ZT = Y.transpose();
+        Y.resize(0, 0);
+        llt.matrixL().solveInPlace(ZT);
+        // Thin SVD of Z = ZTᵀ  →  left singular vectors of Z = right singular vectors of ZT
+        // Singular values from BDCSVD are descending: eigenvalues = σ², already sorted.
+        Eigen::BDCSVD<Eigen::MatrixXd> svd(ZT, Eigen::ComputeThinV);
+        eval_full = svd.singularValues().head(k_svd).array().square();
+        evec_full = svd.matrixV().leftCols(k_svd);
+    } else {
+        // ---- Power-iteration randomised SVD (Halko et al. 2011) — 5 DSYMMs total ----
+        omega.resize(0, 0);  // free: not needed after initial sketch
+
+        constexpr int power_iter = 3;
+        for (int pi = 0; pi < power_iter; ++pi) {
+            Eigen::HouseholderQR<Eigen::MatrixXd> qr_pi(Y);
+            Y = qr_pi.householderQ() * Eigen::MatrixXd::Identity(n, k_ext);
+            Y = K_dbl.selfadjointView<Eigen::Lower>() * Y;
+        }
+        {
+            Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
+            Y = qr.householderQ() * Eigen::MatrixXd::Identity(n, k_ext);
+        }
+
+        Eigen::MatrixXd KY = K_dbl.selfadjointView<Eigen::Lower>() * Y;
+        Eigen::MatrixXd B  = Y.transpose() * KY;
+        KY.resize(0, 0);
+
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(B);
+        if (es.info() != Eigen::Success)
+            LOGGER.e(0, "Woodbury: eigendecomposition of projected GRM failed. "
+                        "Try a smaller rank or use --reml-woodbury auto.");
+
+        eval_full = es.eigenvalues().tail(k_svd).reverse();
+        evec_full = Y * es.eigenvectors().rightCols(k_svd).rowwise().reverse();
     }
-    {
-        Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
-        Y = qr.householderQ() * Eigen::MatrixXd::Identity(n, k_ext);
-    }
-
-    Eigen::MatrixXd KY = K_dbl.selfadjointView<Eigen::Lower>() * Y;
-    Eigen::MatrixXd B  = Y.transpose() * KY;
-    KY.resize(0, 0);  // free: B = Y^T KY is all we need henceforth
-
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(B);
-    if (es.info() != Eigen::Success)
-        LOGGER.e(0, "Woodbury: eigendecomposition of projected GRM failed. "
-                    "Try a smaller rank or use --reml-woodbury auto.");
-
-    // Eigenvalues/vectors in descending order (k_svd of them)
-    Eigen::VectorXd eval_full = es.eigenvalues().tail(k_svd).reverse();
-    Eigen::MatrixXd evec_full = Y * es.eigenvectors().rightCols(k_svd).rowwise().reverse();
 
     // ---- Auto-k: Marchenko-Pastur upper edge ----
     if (auto_k) {
@@ -1581,13 +1646,14 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
     // Update σ²_eff, c_k, logdet analytically from the precomputed eigendecomposition.
     if (_Vi_use_woodbury) {
         if (!factorize_only)
-            LOGGER.e(0, "Woodbury REML (--reml-woodbury) requires --reml-trace-approx "
-                        "and is incompatible with --reml-pred-rand (explicit V^{-1} not supported in this mode).");
+            LOGGER.e(0, "Woodbury REML (--reml-woodbury) is incompatible with --reml-pred-rand "
+                        "(explicit V^{-1} not supported in this mode).");
         Vi.resize(0, 0);
         const double sg2 = static_cast<double>(prev_varcmp[0]);
         const double se2 = static_cast<double>(prev_varcmp[_r_indx.size() - 1]);
         _sigma2_eff = sg2 * _lambda_tail + se2;
         if (_sigma2_eff <= 0.0) return false;
+        _sg2 = sg2;  // cache for calcu_tr_PA_woodbury
         const int k = _woodbury_rank;
         _ck.resize(k);
         logdet = static_cast<double>(_n - k) * std::log(_sigma2_eff);
@@ -1926,7 +1992,20 @@ double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi
     // When _Vi_use_llt=true, _Vi_L holds L (lower triangle from dpotrf).
     // Solve L L^T Vi_X = X via two triangular solves (DTRSM, no n×n matrix needed).
     if (_Vi_use_woodbury) {
-        Vi_X = woodbury_ViZ(_X);
+        // Cache U_k^T X once — constant across all REML iterations.
+        // woodbury_ViZ(_X) would re-compute _Uk.T*_X every call (1st of 2 O(nkc) GEMMs);
+        // the _Uk_Vi_X assignment below added a 3rd.  With the cache:
+        //   calcu_P_impl cost: 3×O(nkc) → 1×O(nkc) + O(kc).
+        if (_UkTX.rows() != _woodbury_rank || _UkTX.cols() != (int)_X.cols())
+            _UkTX.noalias() = _Uk.transpose() * _X;   // O(nkc), computed ONCE
+        if (_UkTy.size() != _woodbury_rank)
+            _UkTy.noalias() = _Uk.transpose() * _y;   // O(nk),  computed ONCE
+        // V^{-1}X = (X − U_k diag(ck) UkTX) / σ²_eff  — single O(nkc) GEMM
+        const eigenMatrix ck_UkTX = _ck.asDiagonal() * _UkTX;  // k×c, O(kc)
+        Vi_X = (_X - _Uk * ck_UkTX) / static_cast<eigenMatrix::Scalar>(_sigma2_eff);
+        // U_k^T V^{-1}X = (UkTX − ck_UkTX) / σ²_eff  [_Uk orthonormal ⇒ _Uk.T*_Uk = I]
+        // O(kc) instead of the previous O(nkc) GEMM.
+        _Uk_Vi_X = (_UkTX - ck_UkTX) / static_cast<eigenMatrix::Scalar>(_sigma2_eff);
     } else if (_Vi_use_llt) {
         Vi_X = _X;
         _Vi_L.triangularView<Eigen::Lower>().solveInPlace(Vi_X);
@@ -1941,9 +2020,11 @@ double gcta::calcu_P_impl(eigenMatrix &Vi, eigenMatrix &Vi_X, eigenMatrix &Xt_Vi
     INVmethod method = (_reml_inv_mtd == 0) ? INV_LLT : static_cast<INVmethod>(_reml_inv_mtd);
     if(!SquareMatrixInverse(Xt_Vi_X_i, logdet_Xt_Vi_X, rank, method)) LOGGER.e(0, "\n  the X^t * V^-1 * X matrix is not invertible. Please check the covariate(s) and/or the environmental factor(s).");
 
-    // Cache for implicit P matvecs (applyP_vec / Hutch++)
+    // Cache for implicit P matvecs (applyP_vec / Hutch++ / analytical trace)
     _Vi_X = Vi_X;
     _Xt_Vi_X_i = Xt_Vi_X_i;
+    // _Uk_Vi_X already set analytically inside the woodbury branch above (O(kc));
+    // no additional O(nkc) GEMM needed here.
 
     // Skip n×n P materialisation when caller passes nullptr (Hutch++ path)
     if (!P) return logdet_Xt_Vi_X;
@@ -2090,10 +2171,11 @@ void gcta::reml_equation(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigen
 
 void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector &prev_varcmp, eigenVector &varcmp, double dlogL)
 {
-    const bool use_approx = _reml_trace_approx && !_bivar_reml && !_within_family;
+    const bool use_approx     = _reml_trace_approx && !_bivar_reml && !_within_family;
+    const bool woodbury_active = _Vi_use_woodbury  && !_bivar_reml && !_within_family;
 
     // Py = P * y
-    if (use_approx) Py = applyP_vec(_y);
+    if (use_approx || woodbury_active) Py = applyP_vec(_y);
     else Py.noalias() = P.selfadjointView<Eigen::Lower>() * _y;
     //eigenVector cvec(_n);
     eigenMatrix APy(_n, _r_indx.size());
@@ -2112,7 +2194,7 @@ void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector
     //LOGGER << "AI reml 2 start" << std::endl;
     // Calculate Hi
     eigenVector R(_r_indx.size());
-    if (use_approx) {
+    if (use_approx || woodbury_active) {
         // R = APy' Py — DGEMV over all m components at once
         R.noalias() = APy.transpose() * Py;
         // PAPy: one DTRSM(n, m) reads L once for all m RHS instead of m DTRSV
@@ -2134,11 +2216,13 @@ void gcta::ai_reml(eigenMatrix &P, eigenMatrix &Hi, eigenVector &Py, eigenVector
     //LOGGER << "AI reml 2 end" << std::endl;
     Hi = 0.5 * Hi;
 
-    // Calcualte tr(PA) and dL
+    // Calculate tr(PA) and dL
     eigenVector tr_PA;
-    // Adaptive probe count: use reduced budget when far from convergence (large
-    // |dlogL|) — 3× cheaper per iteration, same accuracy at the final point.
-    if (use_approx) {
+    // Woodbury path: exact analytical trace O(kc²) — replaces stochastic Hutch++.
+    // _Uk_Vi_X is set in calcu_P_impl each iteration.
+    if (_Vi_use_woodbury && !_bivar_reml && !_within_family) {
+        calcu_tr_PA_woodbury(tr_PA);
+    } else if (use_approx) {
         const int eff_nprobes = (std::fabs(dlogL) < 1.0)
             ? _reml_trace_approx_nprobes
             : std::max(_reml_trace_approx_nprobes / 3, 9);
@@ -2169,7 +2253,11 @@ void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, ei
     // Calculate trace(PA)
     //LOGGER << "Before em_reml: " << getVMemKB() << " " << getMemKB() << ", "; 
     eigenVector tr_PA;
-    if (_reml_trace_approx && !_bivar_reml && !_within_family) {
+    if (_Vi_use_woodbury && !_bivar_reml && !_within_family) {
+        // Woodbury path: exact analytical trace, no stochastic probes needed.
+        calcu_tr_PA_woodbury(tr_PA);
+        Py = applyP_vec(_y);
+    } else if (_reml_trace_approx && !_bivar_reml && !_within_family) {
         // Adaptive probe count: use 1/3 of the budget when dlogL is large (early
         // iterations where varcmp moves far anyway), full budget near convergence
         // (|dlogL|<1) for a 3× more accurate trace estimate at the final point.
@@ -2416,6 +2504,76 @@ void gcta::calcu_tr_PA(eigenMatrix &P, eigenVector &tr_PA) {
             tr_PA(i) = s;
         }
     }
+}
+
+// Exact analytical tr(PA_i) for the Woodbury low-rank path.
+//
+// Since V = σ²_eff·I + U_k·diag(σ²_g·δ_k)·U_k^T and
+//       K_approx = λ_tail·I + U_k·diag(δ_k)·U_k^T,
+// the traces can be computed algebraically without stochastic probes:
+//
+//   tr(V^{-1}·K_approx) = n·λ/σ²_eff + (σ²_e/(σ²_g·σ²_eff))·Σ c_k
+//   tr(V^{-1})          = (n − Σ c_k) / σ²_eff
+//
+// The projection correction uses the cached _Vi_X (= V^{-1}X, n×c) and
+// _Uk_Vi_X (= U_k^T·V^{-1}X, k×c) so no additional O(nk) GEMMs are needed:
+//
+//   tr(PA_i) = tr(V^{-1}·A_i) − tr(_Xt_Vi_X_i · V_X^T·A_i·V_X)
+//
+// Complexity: O(k·c²) after _Uk_Vi_X is set in calcu_P_impl.  With k ≈ 300
+// and c ≈ 10 covariates this is negligible (<1 ms per REML iteration).
+void gcta::calcu_tr_PA_woodbury(eigenVector &tr_PA) {
+    const int ncomp = static_cast<int>(_r_indx.size());
+    tr_PA.resize(ncomp);
+
+    const double sigma2_eff = _sigma2_eff;
+    const double sg2        = _sg2;
+    const double se2        = sigma2_eff - sg2 * _lambda_tail;
+    const double lambda_t   = _lambda_tail;
+    const int    n          = _n;
+    const int    k          = _woodbury_rank;
+
+    // ---- Scalar quantities (O(k)) ----
+    const double sum_ck = _ck.sum();
+
+    // tr(V^{-1}) = (n − Σcₖ) / σ²_eff
+    const double tr_Vinv = (n - sum_ck) / sigma2_eff;
+
+    // tr(V^{-1}·K_approx) = n·λ/σ²_eff + (σ²_e/(σ²_g·σ²_eff))·Σcₖ
+    // Guard against sg2≈0 (degenerate run); should never happen under woodbury guard.
+    const double tr_Vinv_K = (sg2 > 1e-15)
+        ? (n * lambda_t / sigma2_eff + (se2 / (sg2 * sigma2_eff)) * sum_ck)
+        : tr_Vinv * lambda_t;  // fallback: K ≈ λI → tr(V⁻¹K) ≈ λ·tr(V⁻¹)
+
+    // ---- Projection correction (O(k·c² + c²)) using cached _Uk_Vi_X ----
+    // _Uk_Vi_X = U_k^T · V^{-1}·X  (k×c), set in calcu_P_impl.
+    // _Vi_X    = V^{-1}·X           (n×c)
+    // _Xt_Vi_X_i = (X^T V^{-1} X)^{-1}  (c×c)
+
+    const int c = static_cast<int>(_Vi_X.cols());
+
+    // V_X^T · I · V_X = V^{-1}X)^T · (V^{-1}X) = Vi_X^T Vi_X  (c×c, O(nc²))
+    eigenMatrix ViXTViX(c, c);
+    ViXTViX.noalias() = _Vi_X.transpose() * _Vi_X;
+
+    // tr(M⁻¹ · ViX^T·ViX) where M = _Xt_Vi_X_i = (X^T V^{-1} X)^{-1}
+    const double tr_corr_I = (_Xt_Vi_X_i * ViXTViX).trace();
+
+    // tr(PA · I) for the residual component (last)
+    tr_PA(ncomp - 1) = tr_Vinv - tr_corr_I;
+
+    // ---- K_approx component (index 0) ----
+    // V_X^T · K_approx · V_X = λ·ViXTViX + UkViX^T · diag(δ) · UkViX   (c×c, O(kc²))
+    // where δ_j = d_k[j] − λ_tail.
+    eigenVector delta = _dk.array() - static_cast<eigenVector::Scalar>(lambda_t);
+    // Scale rows of _Uk_Vi_X by δ: result is k×c
+    eigenMatrix delta_UkViX = delta.asDiagonal() * _Uk_Vi_X;
+    eigenMatrix ViX_K_ViX = lambda_t * ViXTViX;
+    ViX_K_ViX.noalias() += _Uk_Vi_X.transpose() * delta_UkViX;  // c×c += (c×k)(k×c)
+
+    const double tr_corr_K = (_Xt_Vi_X_i * ViX_K_ViX).trace();
+
+    tr_PA(0) = tr_Vinv_K - tr_corr_K;
 }
 
 // blue estimate of SNP effect

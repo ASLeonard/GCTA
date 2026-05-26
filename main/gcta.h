@@ -255,6 +255,7 @@ public:
         _woodbury_buffer_factor = buf;
         _woodbury_k_max = k_max;
     }
+    void set_reml_woodbury_nystrom() { _woodbury_nystrom = true; }
 
     // Float-precision cache shared between mlma_calcu_stat and mlma_calcu_stat_covar.
     struct WoodburyMLMACache {
@@ -355,6 +356,7 @@ private:
     eigenVector applyP_vec(const eigenVector &v) const;
     eigenMatrix applyP_mat(const eigenMatrix &Z) const;  // batch DTRSM/DSYMM version
     void calcu_tr_PA_hutchpp(eigenVector &tr_PA, int m_probes);
+    void calcu_tr_PA_woodbury(eigenVector &tr_PA); // exact O(nkc) trace for woodbury path
     // Woodbury helpers
     void compute_woodbury_basis(int k, double buffer_factor, int k_max);
     eigenVector woodbury_Kv(const eigenVector &v) const;
@@ -614,14 +616,19 @@ private:
     int         _woodbury_rank   = 0;      // >0 fixed k; -1 auto-k; 0 disabled
     double      _woodbury_buffer_factor = 0.0;  // MP buffer for auto-k (default 1.5)
     int         _woodbury_k_max  = 0;           // SVD rank cap for auto-k (0 → min(n−1,2000))
+    bool        _woodbury_nystrom = false;       // true → single-pass Nyström instead of power-iter
     eigenMatrix _Uk;              // n×k leading eigenvectors of K
     eigenVector _dk;              // k eigenvalues (clamped ≥ 0)
     double      _lambda_tail = 0.0;  // average bulk eigenvalue
     double      _tail_d_var  = 0.0;  // var of tail eigenvalues: Σ(d_j−λ_tail)²/(n−k)
     double      _sigma2_eff  = 0.0;  // σ²_g·λ_tail + σ²_e (updated per iteration)
+    double      _sg2         = 0.0;  // σ²_g (genetic variance component, cached per calcu_Vi)
     eigenVector _ck;              // Woodbury correction: c_j = σ²_g(d_j−λ)/(σ²_eff+σ²_g(d_j−λ))
     eigenMatrix _Vi_X;        // cached V^{-1} X for implicit P matvecs
     eigenMatrix _Xt_Vi_X_i;   // cached (X' V^{-1} X)^{-1} for implicit P matvecs
+    eigenMatrix _Uk_Vi_X;     // cached U_k^T V^{-1} X  (k×c), set in calcu_P_impl
+    eigenMatrix _UkTX;        // cached U_k^T X  (k×c), constant across REML iterations
+    eigenVector _UkTy;        // cached U_k^T y  (k),   constant across REML iterations
     eigenMatrix _P;
     bool _reml_trace_approx = false;
     int  _reml_trace_approx_nprobes = 90;  // ~1% relative trace error
