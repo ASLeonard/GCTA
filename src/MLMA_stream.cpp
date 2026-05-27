@@ -16,6 +16,7 @@
 #include "Logger.h"
 #include "cpu.h"          // cblas_strmm
 #include "main/StatFunc.h"
+#include "mlma_woodbury.hpp"
 
 #include <Eigen/Dense>
 #include <fstream>
@@ -47,19 +48,12 @@ vector<string>       MLMA::processFunctions;
 // ---------------------------------------------------------------------------
 namespace {
 
-struct WBCache {
-    Eigen::MatrixXf Uk_f;
-    Eigen::VectorXf ck_f;
-    Eigen::VectorXf sqrt_ck_f;
-    float           sigma2_eff_f = 0.0f;
-};
-
 struct RemlState {
     int32_t n            = 0;
     int32_t x_c          = 0;
     bool    is_woodbury  = false;
     Eigen::MatrixXf Vi;   // GOBY: full n×n V^{-1}
-    WBCache         wb;   // TUNA: Woodbury low-rank factors
+    WoodburyMLMACache wb; // TUNA: Woodbury low-rank factors
     Eigen::VectorXf b;    // fixed-effect coefficients (x_c elements)
 };
 
@@ -313,11 +307,7 @@ void MLMA::processMain()
         Eigen::LLT<Eigen::MatrixXf> Vi_llt;
 
         if (state.is_woodbury) {
-            // Vi_y = (y - Uk*(ck ⊙ Uk^T y)) / sigma2_eff
-            // Uk_f is k×n (transposed); Uk_f*y = Uk^T y (k×1), no .transpose() needed.
-            Eigen::VectorXf tmp = state.wb.Uk_f * y_vec;
-            tmp.array() *= state.wb.ck_f.array();
-            Vi_y = (y_vec - state.wb.Uk_f.transpose() * tmp) / state.wb.sigma2_eff_f;
+            Vi_y = woodbury_apply_Vi_f(state.wb, y_vec);
         } else {
             Vi_y.noalias() = state.Vi * y_vec;
             Vi_llt = Eigen::LLT<Eigen::MatrixXf>(state.Vi);
@@ -345,7 +335,7 @@ void MLMA::processMain()
         int  snp_done = 0;
         int  last_pct = -1;
         const bool use_wb = state.is_woodbury;
-        const WBCache& wb = state.wb;
+        const WoodburyMLMACache& wb = state.wb;
 
         // Pre-allocate per-block buffers (reused across callbacks, avoids heap churn).
         // GenoBufItem: item.geno is resized to n on the first getGenoDouble call and
@@ -354,12 +344,7 @@ void MLMA::processMain()
         vector<uint8_t>     valid_v(BLOCK, 0);  // uint8_t avoids vector<bool> bit-packing
         vector<float>       af_v(BLOCK, 0.0f);
 
-        // Woodbury temp: k × BLOCK, allocated once, reused with leftCols(bs).
-        Eigen::MatrixXf UkX_buf;
-        if (use_wb) {
-            UkX_buf.resize(static_cast<int>(wb.Uk_f.rows()), BLOCK);  // k rows (k×n layout)
-        }
-
+        // Woodbury temp is allocated inside woodbury_xvx_diag_block; no pre-alloc needed.
         // Batch output buffer to reduce write() syscall overhead.
         std::vector<char> io_buf(4 << 20);  // 4 MiB
         size_t io_pos = 0;
@@ -392,15 +377,7 @@ void MLMA::processMain()
 
             // xvx_diag = diag(X^T Vi^{-1} X)
             if (use_wb) {
-                // Woodbury: (||x||^2 - ||sqrt_ck ⊙ Uk^T x||^2) / sigma2_eff
-                // UkX_buf is pre-allocated (k × BLOCK); use a view for this block.
-                auto UkX = UkX_buf.leftCols(bs);
-                UkX.noalias() = wb.Uk_f * X_block.leftCols(bs);  // k×n × n×bs (no .transpose())
-                UkX.array().colwise() *= wb.sqrt_ck_f.array();
-                xvx_diag.head(bs) =
-                    (X_block.leftCols(bs).colwise().squaredNorm() -
-                     UkX.colwise().squaredNorm()) / wb.sigma2_eff_f;
-                xvx_diag.head(bs) = xvx_diag.head(bs).cwiseMax(0.0f);
+                woodbury_xvx_diag_block(wb, X_block, bs, xvx_diag);
             } else {
                 // Dense: in-place STRMM, then ||L^T x||^2
                 cblas_strmm(CblasColMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
@@ -422,27 +399,23 @@ void MLMA::processMain()
 
                 char line[512];
                 int len;
-                if (!valid_v[i] || xvx_diag[i] <= 1.0e-30f) {
+                float beta_val, se_val;
+                double pval_val;
+                if (!valid_v[i] || !mlma_snp_stat(Xt_Vi_y[i], xvx_diag[i], log_pval,
+                                                   beta_val, se_val, pval_val)) {
                     len = std::snprintf(line, sizeof(line),
                                         "%s\t%s\t%u\t%s\t%s\tNA\tNA\tNA\tNA\n",
                                         chr.c_str(), name.c_str(), bp,
                                         a1.c_str(), a2.c_str());
                 } else {
-                    const float inv_xvx   = 1.0f / xvx_diag[i];
-                    const float sqrt_inv  = std::sqrt(inv_xvx);
-                    const float beta      = Xt_Vi_y[i] * inv_xvx;
-                    const float se        = sqrt_inv;
-                    const float chisq_val = Xt_Vi_y[i] * sqrt_inv;
-                    const double pval = StatFunc::pchisq(
-                        static_cast<double>(chisq_val * chisq_val), 1.0, log_pval);
                     len = std::snprintf(line, sizeof(line),
                                         "%s\t%s\t%u\t%s\t%s\t%.6g\t%.6g\t%.6g\t%.6g\n",
                                         chr.c_str(), name.c_str(), bp,
                                         a1.c_str(), a2.c_str(),
                                         static_cast<double>(af_v[i]),
-                                        static_cast<double>(beta),
-                                        static_cast<double>(se),
-                                        pval);
+                                        static_cast<double>(beta_val),
+                                        static_cast<double>(se_val),
+                                        pval_val);
                 }
                 if (static_cast<size_t>(len) + io_pos > io_buf.size()) flush_io();
                 std::memcpy(io_buf.data() + io_pos, line, static_cast<size_t>(len));

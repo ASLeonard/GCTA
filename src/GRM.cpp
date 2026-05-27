@@ -184,9 +184,20 @@ void GRM::subtract_grm(string mgrm_file, string out_file){
         readBytes(h_grm2, itemRead, buf2.data());
         readBytes(h_grmN1, itemRead, bufN1.data());
         readBytes(h_grmN2, itemRead, bufN2.data());
+        // On the first chunk, check that file[0] has at least as many markers as file[1].
+        // A negative N_diff means the files are in the wrong order (chr GRM listed first).
+        if(i == 0 && bufN1[0] < bufN2[0]){
+            LOGGER.e(0, "subtract_grm: the first GRM [" + files[0] + "] has fewer markers than "
+                        "the second [" + files[1] + "] in the first pair. "
+                        "The larger (all-chromosome) GRM must be listed first.");
+        }
         for(int j = 0; j < itemRead; j++){
             bufN[j] = bufN1[j] - bufN2[j];
-            buf[j] = (float)(((double)buf1[j] * bufN1[j] - (double)buf2[j] * bufN2[j]) / bufN[j]);
+            // Guard against zero denominator: a pair where all markers in the subtracted
+            // GRM are also missing in the full GRM (N_all == N_chr for that pair).
+            buf[j] = (bufN[j] > 0.0f)
+                ? (float)(((double)buf1[j] * bufN1[j] - (double)buf2[j] * bufN2[j]) / bufN[j])
+                : 0.0f;
         }
         if(fwrite(buf.data(), sizeof(float), itemRead, ho_grm) != itemRead){
             LOGGER.e(0, "can't write to [" + out_file + ".grm.bin].");
@@ -811,6 +822,9 @@ GRM::GRM(Pheno* pheno, Marker* marker) {
     }
     // grm/N == nullptr for bBLAS; posix_mem_free(nullptr) is a safe no-op.
 
+    // +64 pads sub_miss past the last valid index by one full cache line (64 × sizeof(uint32_t) = 256 bytes).
+    // This prevents OMP threads from writing to adjacent cache lines when two threads operate on
+    // neighbouring sample indices near the end of the array (false-sharing guard).
     sub_miss.assign(index_keep.size() + 64, 0);
 
     //calculate each index in pair thread;
@@ -2216,6 +2230,7 @@ void GRM::processMakeGRM(){
         // being processed.  Initialise them once here and let calculate_GRM_blas
         // populate them on the first tile; subsequent tiles reuse the values via
         // grm_skip_global_state so the expensive flip64+popcount work is done once.
+        // +64: false-sharing guard — see matching comment in the constructor (non-tiled path).
         sub_miss.assign(index_keep.size() + 64, 0);
         numValidMarkers = 0;
         finished_marker = 0;
@@ -2237,7 +2252,10 @@ void GRM::processMakeGRM(){
             memset(grm, 0, tile_elems * sizeof(double));
             memset(N,   0, tile_elems * sizeof(uint32_t));
 
-            // Rebuild thread pair ranges for this tile.
+            // Rebuild thread pair ranges for this tile's row range [tile_rs, tile_re).
+            // N_thread and the grm accumulation buffer are both sized for this tile, so the
+            // pairs must index into the tile's local coordinate space (global indices
+            // tile_rs .. tile_re-1), not the full part_keep_indices range.
             index_grm_pairs.clear();
             vector<uint32_t> tile_parts = divide_parts(tile_rs, tile_re - 1, num_thread);
             index_grm_pairs.push_back(std::make_pair(tile_rs, tile_parts[0]));

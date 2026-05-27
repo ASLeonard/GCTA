@@ -22,47 +22,13 @@
 
 gcta::WoodburyMLMACache gcta::build_woodbury_mlma_cache() const {
     WoodburyMLMACache wb;
-    wb.Uk_f         = _Uk.cast<float>();
+    wb.Uk_f         = _Uk.transpose().cast<float>();  // k×n layout
     wb.ck_f         = _ck.cast<float>();
     wb.sigma2_eff_f = static_cast<float>(_sigma2_eff);
     // _ck is clamped >= 0 in calcu_Vi, so sqrt is safe here.
     wb.sqrt_ck_f    = wb.ck_f.cwiseSqrt();
     return wb;
 }
-
-namespace {
-
-// Apply V^{-1} to a float vector using the Woodbury identity:
-//   V^{-1} v = (v − U_k·(c_k ⊙ (U_k^T v))) / σ²_eff
-Eigen::VectorXf woodbury_apply_Vi_f(const gcta::WoodburyMLMACache &wb,
-                                     const Eigen::VectorXf &v) {
-    Eigen::VectorXf Ukv = wb.Uk_f.transpose() * v;
-    Ukv.array() *= wb.ck_f.array();
-    return (v - wb.Uk_f * Ukv) / wb.sigma2_eff_f;
-}
-
-// Apply V^{-1} to each column of a float matrix using the Woodbury identity.
-Eigen::MatrixXf woodbury_apply_Vi_mat_f(const gcta::WoodburyMLMACache &wb,
-                                         const Eigen::MatrixXf &M) {
-    Eigen::MatrixXf UkM = wb.Uk_f.transpose() * M;
-    UkM.array().colwise() *= wb.ck_f.array();
-    return (M - wb.Uk_f * UkM) / wb.sigma2_eff_f;
-}
-
-// Compute diag(X^T V^{-1} X) for columns 0..bs-1 of X_block using Woodbury:
-//   x^T V^{-1} x = (||x||² − ||sqrt_ck ⊙ (U_k^T x)||²) / σ²_eff
-// Result is clamped to >= 0 to guard against floating-point cancellation.
-void woodbury_xvx_diag_block(const gcta::WoodburyMLMACache &wb,
-                               const Eigen::MatrixXf &X_block, Eigen::Index bs,
-                               Eigen::VectorXf &xvx_diag) {
-    Eigen::MatrixXf UkX = wb.Uk_f.transpose() * X_block.leftCols(bs);
-    UkX.array().colwise() *= wb.sqrt_ck_f.array();
-    xvx_diag.head(bs) = (X_block.leftCols(bs).colwise().squaredNorm()
-                         - UkX.colwise().squaredNorm()) / wb.sigma2_eff_f;
-    xvx_diag.head(bs) = xvx_diag.head(bs).cwiseMax(0.0f);
-}
-
-} // anonymous namespace
 
 void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_file, std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool within_family, bool inbred, bool no_adj_covar, std::string weight_file, std::string save_reml_file, std::string load_reml_file)
 {
@@ -482,18 +448,10 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
         }
 
         for(l = 0; l < bs; l++){
-            // xvx_diag[l] >= 0 for LLT/STRMM paths (exact sums of squares);
-            // for the Woodbury path it is clamped to 0 in woodbury_xvx_diag_block.
-            if(xvx_diag[l] > 1.0e-30f){
-                const float inv_xvx  = 1.0f / xvx_diag[l];
-                const float sqrt_inv = std::sqrt(inv_xvx);
-                beta[i + l] = Xt_Vi_y_block[l] * inv_xvx;
-                se[i + l]   = sqrt_inv;
-                // chisq = beta/se = (Xt_Vi_y * inv_xvx) / sqrt_inv
-                //                 = Xt_Vi_y * sqrt_inv  (one multiply, no reload)
-                const float chisq = Xt_Vi_y_block[l] * sqrt_inv;
-                pval[i + l] = StatFunc::pchisq(chisq * chisq, 1, _log_pval);
-            }
+            double pval_d;
+            if (mlma_snp_stat(Xt_Vi_y_block[l], xvx_diag[l], _log_pval,
+                              beta[i + l], se[i + l], pval_d))
+                pval[i + l] = static_cast<float>(pval_d);
         }
 
         i += bs;
@@ -658,13 +616,12 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
         }
 
         for(l = 0; l < bs; l++){
-            const float S = xvx_diag[l] - d_dot_e_diag[l];  // Schur complement = 1/Var(beta_snp)
-            beta[i+l] = (f_vec[l] - Dt_t_vec[l]) / S;
-            if(S > 1.0e-30f){
-                se[i+l] = std::sqrt(1.0f / S);
-                const float chisq = beta[i+l] / se[i+l];
-                pval[i+l] = StatFunc::pchisq(chisq * chisq, 1, _log_pval);
-            }
+            const float S         = xvx_diag[l] - d_dot_e_diag[l];  // Schur complement
+            const float numerator = f_vec[l] - Dt_t_vec[l];
+            double pval_d;
+            if (mlma_snp_stat(numerator, S, _log_pval,
+                              beta[i + l], se[i + l], pval_d))
+                pval[i + l] = static_cast<float>(pval_d);
         }
 
         i += bs;
@@ -1038,12 +995,13 @@ void gcta::load_reml_state(const std::string& filename, bool no_adj_covar)
         // lambda_tail (double)
         must_read(&_lambda_tail, sizeof(double));
 
-        // _Uk (n × k, float → eigenMatrix)
+        // _Uk: on-disk layout is k×n (transposed, matching save_reml_state).
+        // Read into k×n, then transpose to n×k for _Uk.
         {
-            Eigen::MatrixXf Uk_f(hdr.n, woodbury_k);
-            must_read(Uk_f.data(),
+            Eigen::MatrixXf Uk_kn(woodbury_k, hdr.n);
+            must_read(Uk_kn.data(),
                       static_cast<std::streamsize>(static_cast<size_t>(hdr.n) * woodbury_k * sizeof(float)));
-            _Uk = Uk_f.cast<eigenMatrix::Scalar>();
+            _Uk = Uk_kn.transpose().cast<eigenMatrix::Scalar>();
         }
 
         // _dk (k, float → eigenVector)

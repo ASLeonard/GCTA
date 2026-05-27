@@ -31,6 +31,7 @@
 #include <omp.h>
 #include "Logger.h"
 #include "Matrix.hpp"
+#include "mlma_woodbury.hpp"
 
 #ifdef SINGLE_PRECISION
 typedef Eigen::DiagonalMatrix<float, Eigen::Dynamic, Eigen::Dynamic> eigenDiagMat;
@@ -257,13 +258,8 @@ public:
     }
     void set_reml_woodbury_nystrom() { _woodbury_nystrom = true; }
 
-    // Float-precision cache shared between mlma_calcu_stat and mlma_calcu_stat_covar.
-    struct WoodburyMLMACache {
-        Eigen::MatrixXf Uk_f;
-        Eigen::VectorXf ck_f;
-        Eigen::VectorXf sqrt_ck_f;   // cwiseSqrt of ck_f; valid because _ck clamped >= 0
-        float sigma2_eff_f = 0.0f;
-    };
+    // WoodburyMLMACache is defined in mlma_woodbury.hpp (k×n Uk layout).
+    using WoodburyMLMACache = ::WoodburyMLMACache;
     WoodburyMLMACache build_woodbury_mlma_cache() const;
 
 private:
