@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28...4.3)
 
-project(GCTA2 LANGUAGES C CXX)
+project(GCTAg LANGUAGES C CXX)
 
 # Prevent CMake from finding stale configs in build-tree or user package registries.
 # This is especially important on HPC clusters where previous partial builds can
@@ -22,6 +22,49 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     message(STATUS "Compiling with GCC ${CMAKE_CXX_COMPILER_VERSION}")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13.0)
         message(FATAL_ERROR "GCTA requires GCC >= 13 for reliable C++23 support (found ${CMAKE_CXX_COMPILER_VERSION})")
+    endif()
+    # For GCC LTO builds, gcc-ar/gcc-ranlib use the LTO plugin to make archiving
+    # LTO-aware (enables cross-archive inlining).  CMake auto-sets
+    # CMAKE_CXX_COMPILER_AR for the gcta64 executable when IPO is ON, but static
+    # libraries (Pgenlib, sqlite3) use CMAKE_AR — so we need to set it here too.
+    # Probe next to the compiler binary so a non-default GCC install is handled
+    # correctly even if the system PATH points at a different gcc-ar.
+    if(LINUX)
+        get_filename_component(_gcc_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        find_program(_gcc_ar     NAMES gcc-ar     HINTS "${_gcc_bin}" NO_DEFAULT_PATH)
+        find_program(_gcc_ranlib NAMES gcc-ranlib HINTS "${_gcc_bin}" NO_DEFAULT_PATH)
+        find_program(_gcc_nm     NAMES gcc-nm     HINTS "${_gcc_bin}" NO_DEFAULT_PATH)
+        if(_gcc_ar)
+            set(CMAKE_AR                  "${_gcc_ar}" CACHE FILEPATH "Archiver" FORCE)
+            set(CMAKE_CXX_COMPILER_AR     "${_gcc_ar}" CACHE FILEPATH "" FORCE)
+            set(CMAKE_C_COMPILER_AR       "${_gcc_ar}" CACHE FILEPATH "" FORCE)
+            message(STATUS "GCC: using LTO-aware archiver ${_gcc_ar}")
+        else()
+            message(WARNING "GCC: gcc-ar not found next to ${CMAKE_CXX_COMPILER} — LTO may be suboptimal for static libs")
+        endif()
+        if(_gcc_ranlib)
+            set(CMAKE_RANLIB              "${_gcc_ranlib}" CACHE FILEPATH "Ranlib" FORCE)
+            set(CMAKE_CXX_COMPILER_RANLIB "${_gcc_ranlib}" CACHE FILEPATH "" FORCE)
+            set(CMAKE_C_COMPILER_RANLIB   "${_gcc_ranlib}" CACHE FILEPATH "" FORCE)
+        endif()
+        if(_gcc_nm)
+            set(CMAKE_NM                  "${_gcc_nm}" CACHE FILEPATH "NM" FORCE)
+            set(CMAKE_CXX_COMPILER_NM     "${_gcc_nm}" CACHE FILEPATH "" FORCE)
+            set(CMAKE_C_COMPILER_NM       "${_gcc_nm}" CACHE FILEPATH "" FORCE)
+        endif()
+        # Pin libgomp to this GCC's copy so HPC LD_LIBRARY_PATH doesn't shadow it.
+        # Uses the same -print-file-name probe as the AOCC libomp / toolchain logic.
+        execute_process(
+            COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=libgomp.so.1
+            OUTPUT_VARIABLE _gcc_gomp_path
+            OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(_gcc_gomp_path AND NOT _gcc_gomp_path STREQUAL "libgomp.so.1")
+            file(REAL_PATH "${_gcc_gomp_path}" _gcc_gomp_real)
+            get_filename_component(_gcc_gomp_dir "${_gcc_gomp_real}" DIRECTORY)
+            list(APPEND CMAKE_BUILD_RPATH   "${_gcc_gomp_dir}")
+            list(APPEND CMAKE_INSTALL_RPATH "${_gcc_gomp_dir}")
+            message(STATUS "GCC: libgomp.so.1 -> ${_gcc_gomp_real}")
+        endif()
     endif()
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(STATUS "Compiling with Clang ${CMAKE_CXX_COMPILER_VERSION}")
@@ -61,15 +104,50 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND LINUX)
         # causing "Error running link command: no such file or directory" at archive time.
         find_program(_aocc_ar     NAMES llvm-ar     HINTS "${GCTA_AOCC_ROOT}/bin" NO_DEFAULT_PATH)
         find_program(_aocc_ranlib NAMES llvm-ranlib HINTS "${GCTA_AOCC_ROOT}/bin" NO_DEFAULT_PATH)
+        find_program(_aocc_nm     NAMES llvm-nm     HINTS "${GCTA_AOCC_ROOT}/bin" NO_DEFAULT_PATH)
         if(_aocc_ar)
-            set(CMAKE_AR     "${_aocc_ar}"     CACHE FILEPATH "Archiver"          FORCE)
+            set(CMAKE_AR               "${_aocc_ar}" CACHE FILEPATH "Archiver" FORCE)
+            set(CMAKE_CXX_COMPILER_AR  "${_aocc_ar}" CACHE FILEPATH "" FORCE)
+            set(CMAKE_C_COMPILER_AR    "${_aocc_ar}" CACHE FILEPATH "" FORCE)
             message(STATUS "AOCC: using archiver ${_aocc_ar}")
         else()
             message(WARNING "AOCC: llvm-ar not found under ${GCTA_AOCC_ROOT}/bin — static library builds may fail")
         endif()
         if(_aocc_ranlib)
-            set(CMAKE_RANLIB "${_aocc_ranlib}" CACHE FILEPATH "Ranlib"            FORCE)
+            set(CMAKE_RANLIB               "${_aocc_ranlib}" CACHE FILEPATH "Ranlib" FORCE)
+            set(CMAKE_CXX_COMPILER_RANLIB  "${_aocc_ranlib}" CACHE FILEPATH "" FORCE)
+            set(CMAKE_C_COMPILER_RANLIB    "${_aocc_ranlib}" CACHE FILEPATH "" FORCE)
         endif()
+        if(_aocc_nm)
+            set(CMAKE_NM               "${_aocc_nm}" CACHE FILEPATH "NM" FORCE)
+            set(CMAKE_CXX_COMPILER_NM  "${_aocc_nm}" CACHE FILEPATH "" FORCE)
+            set(CMAKE_C_COMPILER_NM    "${_aocc_nm}" CACHE FILEPATH "" FORCE)
+        endif()
+    endif()
+endif()
+
+# For upstream Clang (not AOCC) on Linux, detect LLVM tooling next to the
+# compiler so ar/nm/ranlib come from the same LLVM install rather than PATH.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND LINUX AND NOT GCTA_COMPILER_IS_AOCC)
+    get_filename_component(_clang_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    find_program(_clang_ar     NAMES llvm-ar     HINTS "${_clang_bin}" NO_DEFAULT_PATH)
+    find_program(_clang_ranlib NAMES llvm-ranlib HINTS "${_clang_bin}" NO_DEFAULT_PATH)
+    find_program(_clang_nm     NAMES llvm-nm     HINTS "${_clang_bin}" NO_DEFAULT_PATH)
+    if(_clang_ar)
+        set(CMAKE_AR               "${_clang_ar}" CACHE FILEPATH "Archiver" FORCE)
+        set(CMAKE_CXX_COMPILER_AR  "${_clang_ar}" CACHE FILEPATH "" FORCE)
+        set(CMAKE_C_COMPILER_AR    "${_clang_ar}" CACHE FILEPATH "" FORCE)
+        message(STATUS "Clang: using archiver ${_clang_ar}")
+    endif()
+    if(_clang_ranlib)
+        set(CMAKE_RANLIB               "${_clang_ranlib}" CACHE FILEPATH "Ranlib" FORCE)
+        set(CMAKE_CXX_COMPILER_RANLIB  "${_clang_ranlib}" CACHE FILEPATH "" FORCE)
+        set(CMAKE_C_COMPILER_RANLIB    "${_clang_ranlib}" CACHE FILEPATH "" FORCE)
+    endif()
+    if(_clang_nm)
+        set(CMAKE_NM               "${_clang_nm}" CACHE FILEPATH "NM" FORCE)
+        set(CMAKE_CXX_COMPILER_NM  "${_clang_nm}" CACHE FILEPATH "" FORCE)
+        set(CMAKE_C_COMPILER_NM    "${_clang_nm}" CACHE FILEPATH "" FORCE)
     endif()
 endif()
 
@@ -89,25 +167,33 @@ if(GCTA_COMPILER_IS_AOCC AND GCTA_GCC_TOOLCHAIN)
     add_compile_options(--gcc-toolchain=${GCTA_GCC_TOOLCHAIN})
     add_link_options(--gcc-toolchain=${GCTA_GCC_TOOLCHAIN})
 
-    # Add the GCC toolchain's own lib dirs to the rpath so the binary finds
-    # the right libstdc++.so.6 at runtime instead of falling back to the system
-    # Ubuntu one, which is typically too old (GCC 11, GLIBCXX_3.4.30).
-    # We probe for the versioned lib dir (e.g. lib/gcc/x86_64-pc-linux-gnu/13.2.0)
-    # as well as the top-level lib64 that contains libstdc++.so itself.
-    file(GLOB _gcc_tc_versioned_lib
-        "${GCTA_GCC_TOOLCHAIN}/lib/gcc/*/*")
-    foreach(_d IN LISTS _gcc_tc_versioned_lib)
-        if(IS_DIRECTORY "${_d}")
-            list(APPEND CMAKE_BUILD_RPATH   "${_d}")
-            list(APPEND CMAKE_INSTALL_RPATH "${_d}")
-        endif()
-    endforeach()
-    foreach(_d IN ITEMS
-            "${GCTA_GCC_TOOLCHAIN}/lib64"
-            "${GCTA_GCC_TOOLCHAIN}/lib")
-        if(IS_DIRECTORY "${_d}")
-            list(APPEND CMAKE_BUILD_RPATH   "${_d}")
-            list(APPEND CMAKE_INSTALL_RPATH "${_d}")
+    # Use the compiler's own -print-file-name to locate libstdc++.so.6 and
+    # libgcc_s.so.1 within the toolchain.  This is more reliable than directory
+    # globs: the compiler applies the same search logic (multilib, sysroot,
+    # --gcc-toolchain) it uses at link time, so we get the exact file it will
+    # link against.  Spack and other toolchain managers emit paths with ../../../../
+    # traversals (e.g. lib/gcc/<triple>/<ver>/../../../../lib64/); file(REAL_PATH)
+    # normalises these to canonical absolute paths before adding to RPATH.
+    foreach(_tc_lib IN ITEMS libstdc++.so.6 libgcc_s.so.1)
+        execute_process(
+            COMMAND ${CMAKE_CXX_COMPILER}
+                    --gcc-toolchain=${GCTA_GCC_TOOLCHAIN}
+                    -print-file-name=${_tc_lib}
+            OUTPUT_VARIABLE _tc_lib_path
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        # The compiler echoes back the bare filename when it cannot find the file.
+        if(_tc_lib_path AND NOT _tc_lib_path STREQUAL "${_tc_lib}")
+            file(REAL_PATH "${_tc_lib_path}" _tc_lib_real)
+            get_filename_component(_tc_lib_dir "${_tc_lib_real}" DIRECTORY)
+            list(APPEND CMAKE_BUILD_RPATH   "${_tc_lib_dir}")
+            list(APPEND CMAKE_INSTALL_RPATH "${_tc_lib_dir}")
+            message(STATUS "AOCC: ${_tc_lib} -> ${_tc_lib_real}")
+        else()
+            message(WARNING
+                "AOCC: -print-file-name=${_tc_lib} did not resolve to a path "
+                "in ${GCTA_GCC_TOOLCHAIN} — runtime may load the system library. "
+                "Use -DGCTA_STATIC_STDCXX=ON to avoid the runtime dependency.")
         endif()
     endforeach()
     message(STATUS "AOCC: added GCC toolchain lib dirs to rpath")
@@ -146,6 +232,11 @@ option(GCTA_UNITY_BUILD "Enable unity builds for faster compilation" ON)
 option(GCTA_ENABLE_IPO "Enable IPO/LTO in Release builds" ON)
 option(GCTA_VERBOSE_BLAS "Print verbose BLAS detection information during configure" OFF)
 option(BGEN_SUPPORT "Enable BGEN file format support (requires SQLite)" OFF)
+option(GCTA_STATIC_STDCXX
+    "Statically link libstdc++ and libgcc into the binary (AOCC/Clang on Linux). \
+Avoids runtime dependency on the toolchain's shared libstdc++.so.6 / libgcc_s.so.1. \
+Recommended when deploying to nodes that do not have the build toolchain's GCC modules loaded."
+    OFF)
 
 # Initialize plink-ng submodule if needed
 if(EXISTS "${CMAKE_SOURCE_DIR}/.git" AND NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include/pgenlib_ffi_support.h")
@@ -170,6 +261,11 @@ endif()
 
 # Fetch 3rd parties
 include(FetchContent)
+# Once all tarballs are cached locally, skip re-checking download URLs on
+# every re-configure.  This is faster and works on HPC compute nodes that
+# have no outbound internet.  Override with -DFETCHCONTENT_UPDATES_DISCONNECTED=OFF.
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL
+    "Skip re-checking FetchContent URLs on re-configure (set OFF to force update check)")
 if(CMAKE_VERBOSE_MAKEFILE)
     set(FETCHCONTENT_QUIET OFF)
 else()
@@ -517,6 +613,33 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL" OR _GCTA_BLAS
         list(APPEND GCTA_BLAS_DEFINES GCTA_USE_AOCL EIGEN_USE_LAPACKE EIGEN_USE_BLAS EIGEN_USE_LAPACK)
         set(GCTA_BLAS_PROVIDER "AOCL" CACHE INTERNAL "")
 
+        # AOCL ships two separate library builds:
+        #   aocc/  — linked against libomp  (LLVM OpenMP, AOCC's runtime)
+        #   gcc/   — linked against libgomp (GCC's OpenMP runtime)
+        # Using the AOCC variant with GCC (or vice-versa) produces link errors:
+        #   "libomp.so not found" / "undefined reference to __kmpc_*"
+        # Detect the mismatch early via the presence of libomp.so in the lib dir.
+        get_filename_component(_aocl_lib_dir "${GCTA_BLAS_LIBRARY}" DIRECTORY)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND EXISTS "${_aocl_lib_dir}/libomp.so")
+            message(FATAL_ERROR
+                "AOCL compiler/variant mismatch: you are using GCC but the AOCL "
+                "library at\n  ${_aocl_lib_dir}\nwas built for AOCC (it contains "
+                "libomp.so, LLVM OpenMP).\n"
+                "Use the GCC-built AOCL variant instead, e.g.:\n"
+                "  -DGCTA_BLAS_LIBRARY=<aocl-root>/gcc/MT/lib/libblis-mt.so\n"
+                "  -DGCTA_LAPACKE_LIBRARY=<aocl-root>/gcc/MT/lib/libflame.so\n"
+                "  -DGCTA_BLAS_INCLUDE_DIR=<aocl-root>/gcc/MT/include")
+        endif()
+        if(GCTA_COMPILER_IS_AOCC AND NOT EXISTS "${_aocl_lib_dir}/libomp.so"
+                                 AND EXISTS "${_aocl_lib_dir}/libgomp.so")
+            message(WARNING
+                "AOCL compiler/variant mismatch: you are using AOCC but the AOCL "
+                "library at\n  ${_aocl_lib_dir}\nappears to be the GCC-built variant "
+                "(no libomp.so found).\nConsider using the AOCC-built variant for "
+                "best performance:\n"
+                "  -DGCTA_BLAS_LIBRARY=<aocl-root>/aocc/MT/lib/libblis-mt.so")
+        endif()
+
         # AOCL transitive dependencies: libflame needs libaoclutils and libblis-mt.
         # Skip any dep whose path is already in GCTA_BLAS_LIBS (e.g. libblis-mt
         # is the primary BLAS library and must not be linked a second time).
@@ -702,6 +825,30 @@ if(GCTA_IPO_ENABLED AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
     endif()
 endif()
 
+# Force DT_RPATH instead of DT_RUNPATH for all AOCC builds on Linux.
+# AOCC/lld defaults to --enable-new-dtags which writes DT_RUNPATH.  Unlike
+# DT_RPATH, DT_RUNPATH is searched *after* LD_LIBRARY_PATH — so if the HPC
+# module system has prepended system lib dirs to LD_LIBRARY_PATH (which is
+# very common), system libraries win even though the RPATH is correct.
+# This applies to all AOCC-embedded RPATH entries: libomp, libstdc++, BLAS, etc.
+# --disable-new-dtags reverts to DT_RPATH which is searched *before* LD_LIBRARY_PATH.
+if(GCTA_COMPILER_IS_AOCC AND LINUX)
+    target_link_options(gcta64 PRIVATE "LINKER:--disable-new-dtags")
+    message(STATUS "gcta64: using DT_RPATH (--disable-new-dtags) for HPC library pinning")
+endif()
+
+# Static C++ runtime: embed libstdc++ and libgcc into the binary so it does not
+# depend on the toolchain's shared .so files at runtime.  Useful on HPC clusters
+# where the GCC module used at build time may not be available on compute nodes.
+if(GCTA_STATIC_STDCXX AND LINUX)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_link_options(gcta64 PRIVATE -static-libstdc++ -static-libgcc)
+        message(STATUS "gcta64: linking libstdc++ and libgcc statically")
+    else()
+        message(WARNING "GCTA_STATIC_STDCXX=ON is only supported with GCC or Clang/AOCC on Linux")
+    endif()
+endif()
+
 add_library(Pgenlib
     third_party/Pgenlib/PgenReader.cpp
     third_party/plink-ng/2.0/include/pgenlib_ffi_support.cc
@@ -762,6 +909,11 @@ if(CMAKE_VERBOSE_MAKEFILE OR GCTA_LIST_TARGETS)
     endforeach()
 endif()
 
+# Remove any duplicate entries added by compiler probes, BLAS detection, and
+# toolchain logic (e.g. BLAS lib dir may match OpenMP dir on some installs).
+list(REMOVE_DUPLICATES CMAKE_BUILD_RPATH)
+list(REMOVE_DUPLICATES CMAKE_INSTALL_RPATH)
+
 # Installation
 if(LINUX)
     # PREPEND so $ORIGIN/../lib is first but BLAS-specific paths appended
@@ -813,11 +965,12 @@ else()
 endif()
 message(STATUS "")
 message(STATUS "==========================================")
-message(STATUS "GCTA2 Build Configuration Summary")
+message(STATUS "GCTAg Build Configuration Summary")
 message(STATUS "==========================================")
 message(STATUS "  Build type:        ${CMAKE_BUILD_TYPE}")
 message(STATUS "  BLAS/LAPACK:       ${GCTA_BLAS_PROVIDER}")
 message(STATUS "  Compiler:          ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}${GCTA_COMPILER_IS_AOCC_STR} (${CMAKE_CXX_COMPILER})")
+message(STATUS "  Archiver (AR):     ${CMAKE_AR}")
 if(GCTA_COMPILER_IS_AOCC)
     message(STATUS "  GCC toolchain:     ${GCTA_GCC_TOOLCHAIN} (--gcc-toolchain)")
 endif()
