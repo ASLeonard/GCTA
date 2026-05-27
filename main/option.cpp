@@ -158,6 +158,7 @@ void option(int option_num, char* option_str[])
     bool mlma_flag = false, mlma_loco_flag = false, mlma_no_adj_covar = false;
     bool save_reml_flag = false;
     std::string subtract_grm_file = "", save_reml_file = "", load_reml_file = "";
+    std::string grm_chr_prefix = "";  // prefix for per-chromosome GRM files (--grm-chr)
 
     // Fst
     bool fst_flag = false;
@@ -449,6 +450,9 @@ void option(int option_num, char* option_str[])
             grm_bin_flag = false;
             grm_file = argv[++i];
             LOGGER << "--mgrm-gz " << grm_file << std::endl;
+        } else if (flag == "--grm-chr") {
+            grm_chr_prefix = argv[++i];
+            LOGGER << "--grm-chr " << grm_chr_prefix << std::endl;
         } else if (flag == "--grm" || flag == "--grm-bin") {
             grm_flag = true;
             grm_file = argv[++i];
@@ -1570,7 +1574,7 @@ void option(int option_num, char* option_str[])
                 if (!grm_file.empty() && !m_grm_flag) {
                     // Memory-efficient path: G_loco_c = (G_all*m_all − G_chr_c*m_c)/(m_all−m_c).
                     // Peak RAM = O(3·n²) regardless of n_chr, vs O(n_chr·n²) for the legacy path.
-                    pter_gcta->mlma_loco_v2(grm_file, phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, make_grm_inbred_flag, mlma_no_adj_covar);
+                    pter_gcta->mlma_loco_v2(grm_file, grm_chr_prefix, phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, make_grm_inbred_flag, mlma_no_adj_covar);
                 } else {
                     if (!grm_file.empty() && m_grm_flag)
                         LOGGER.w(0, "--mlma-loco with --mgrm: multiple-GRM lists are not supported by the memory-efficient path. Falling back to legacy all-in-memory LOCO. Use --grm (single all-autosome GRM) to enable the efficient path.");

@@ -798,7 +798,7 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
 // from chromosome c are used as a warm start for chromosome c+1, reducing
 // power iterations from ~3 to ~1 and cutting total REML time by ~3×.
 // ---------------------------------------------------------------------------
-void gcta::mlma_loco_v2(std::string grm_file,
+void gcta::mlma_loco_v2(std::string grm_file, std::string grm_chr_prefix,
                          std::string phen_file, std::string qcovar_file,
                          std::string covar_file, int mphen, int MaxIter,
                          std::vector<double> reml_priors,
@@ -875,10 +875,16 @@ void gcta::mlma_loco_v2(std::string grm_file,
     }
     _grm.resize(0, 0);
     _grm_N.resize(0, 0);
-    LOGGER << "[LOCO] G_all subset to " << _n << "×" << _n << "  ("
-           << std::fixed << std::setprecision(2)
-           << (static_cast<double>(_n) * _n * 8.0 / 1e9)
-           << " GB). Peak LOCO memory ≈ 3× this." << std::endl;
+    {
+        const double gb_one  = static_cast<double>(_n) * _n * 8.0 / 1e9;
+        const double gb_peak = gb_one * 3.0;   // grm_all + grm_c_sym + _A[0]
+        LOGGER << "[LOCO] G_all subset to " << _n << "×" << _n << "  ("
+               << std::fixed << std::setprecision(2) << gb_one
+               << " GB). Peak LOCO RAM ≈" << std::setprecision(1) << gb_peak << " GB." << std::endl;
+        if (gb_peak > 10.0)
+            LOGGER << "[LOCO][WARNING] Peak RAM ~" << std::setprecision(1) << gb_peak
+                   << " GB.  Ensure sufficient system RAM before proceeding." << std::endl;
+    }
 
     // ---- 4. Identify autosomes and collect per-chromosome SNP lists ----
     std::vector<int> chrs, vi_buf(_chr);
@@ -903,13 +909,8 @@ void gcta::mlma_loco_v2(std::string grm_file,
     }
 
     // ---- 5. Phenotype vector, covariate matrix, REML bookkeeping ----
-    // grm_id_keep: IDs in the order make_grm produces its output (_keep order).
-    // StrFunc::match(uni_id, grm_id_keep, kp) gives the identity permutation
-    // when both are derived from the same _keep list in the same order.
-    std::vector<std::string> grm_id_keep;
-    grm_id_keep.reserve(_n);
-    for (i = 0; i < _keep.size(); i++)
-        grm_id_keep.push_back(_fid[_keep[i]] + ":" + _pid[_keep[i]]);
+    // uni_id and grm_id_keep are both derived from _keep in the same order,
+    // so kp would always be the identity permutation.  No need to construct it.
 
     _y.setZero(_n);
     for (i = 0; i < phen_ID.size(); i++) {
@@ -927,11 +928,8 @@ void gcta::mlma_loco_v2(std::string grm_file,
     _hsq_name.push_back("V(G)/Vp");
     _var_name.push_back("V(e)");
 
-    std::vector<int> kp;
-    StrFunc::match(uni_id, grm_id_keep, kp);  // typically identity
-
     _r_indx.resize(2);
-    _r_indx[0] = 0; _r_indx[1] = 1;
+    std::iota(_r_indx.begin(), _r_indx.end(), 0);
     _A.resize(2);
 
     // Disable any stale Woodbury state from a prior analysis so that reml()
@@ -956,24 +954,72 @@ void gcta::mlma_loco_v2(std::string grm_file,
 
     eigenVector y_buf = _y;
     std::vector<float> y(_n);
-    std::vector<std::vector<float>> beta_out(chrs.size()),
-                                    se_out(chrs.size()),
-                                    pval_out(chrs.size());
 
-    // ---- 6. Per-chromosome LOCO loop ----
+    // ---- 6a. Open output file for streaming (write per-chromosome as it completes) ----
+    const std::string filename = _out + ".loco.mlma";
+    LOGGER << "\nLOCO results will be streamed to [" << filename << "] ..." << std::endl;
+    std::ofstream ofile(filename);
+    if (!ofile) LOGGER.e(0, "cannot open [" + filename + "] to write.");
+    ofile << "Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\t"
+          << (_log_pval ? "log_p" : "p") << "\n";
+
+    // ---- 6b. Per-chromosome LOCO loop ----
     for (c1 = 0; c1 < chrs.size(); c1++) {
         LOGGER << "\n-----------------------------------\n#Chr " << chrs[c1] << ":" << std::endl;
         extract_chr(chrs[c1], chrs[c1]);
 
-        // Build G_chr_c via the existing (DSYRK) make_grm path.
-        // mlmassoc=true suppresses disk output and keeps _geno scaled; we free
-        // _geno immediately because mlma_calcu_stat reads from _snp_1/_snp_2,
-        // not _geno.  This avoids holding n×m_chr genotypes through the REML.
-        make_grm(false, false, inbred, /*output_bin=*/false, /*grm_mtd=*/0,
-                 /*mlmassoc=*/true);
-        _geno.resize(0, 0);   // free n×m_c float genotype matrix (~1.8 GB for n=15k, m_c=30k)
+        // Build or load G_chr_c for this chromosome.
+        double m_c;
+        if (grm_chr_prefix.empty()) {
+            // Build G_chr_c via DSYRK from genotypes.
+            // mlmassoc=true suppresses disk output and keeps _geno scaled; we free
+            // _geno immediately because mlma_calcu_stat reads from _snp_1/_snp_2,
+            // not _geno.  This avoids holding n×m_chr genotypes through the REML.
+            make_grm(false, false, inbred, /*output_bin=*/false, /*grm_mtd=*/0,
+                     /*mlmassoc=*/true);
+            _geno.resize(0, 0);   // free n×m_c float genotype matrix
+            m_c = static_cast<double>(_include.size());
+        } else {
+            // Read pre-built per-chr GRM from disk (fast: no genotype I/O or DSYRK).
+            const std::string grm_chr_file = grm_chr_prefix + std::to_string(chrs[c1]);
+            LOGGER << "  Reading per-chr GRM from [" << grm_chr_file << "] ..." << std::endl;
+            std::vector<std::string> grm_chr_ids;
+            read_grm(grm_chr_file, grm_chr_ids, /*out_id_log=*/false,
+                     /*read_id_only=*/false, /*dont_read_N=*/false);
+            if (_grm_N.size() == 0)
+                LOGGER.e(0, "--grm-chr: N file [" + grm_chr_file + ".grm.N.bin] missing or "
+                            "empty. Rebuild the per-chr GRM without --no-grm-N.");
+            m_c = static_cast<double>(_grm_N(0, 0));
+            // Match analysis individuals (uni_id) to the per-chr GRM IDs.
+            // Usually identity (same bfile for all GRM builds), but we handle the
+            // general case to be safe.
+            std::vector<int> kp_chr;
+            StrFunc::match(uni_id, grm_chr_ids, kp_chr);
+            for (size_t ii = 0; ii < _n; ii++) {
+                if (kp_chr[ii] < 0)
+                    LOGGER.e(0, "--grm-chr chr" + std::to_string(chrs[c1])
+                                + ": individual [" + uni_id[ii]
+                                + "] not found in per-chr GRM. Ensure the per-chr GRM was "
+                                  "built from the same sample as --grm.");
+            }
+            // Symmetrize _grm (lower-triangular) and subset to analysis individuals.
+            eigenMatrix grm_c_full(_grm.selfadjointView<Eigen::Lower>());
+            _grm.resize(0, 0);
+            _grm_N.resize(0, 0);
+            // Check whether kp_chr is the identity permutation (common case).
+            bool id_kp = true;
+            for (size_t ii = 0; ii < _n && id_kp; ii++)
+                if (kp_chr[ii] != static_cast<int>(ii)) id_kp = false;
+            // Store in _grm as a symmetric matrix (lower+upper) for the subtraction below.
+            if (id_kp) {
+                _grm = grm_c_full;
+            } else {
+                Eigen::Map<const Eigen::VectorXi> kp_chr_idx(kp_chr.data(),
+                                                              static_cast<Eigen::Index>(_n));
+                _grm = grm_c_full(kp_chr_idx, kp_chr_idx);
+            }
+        }
 
-        const double m_c    = static_cast<double>(_include.size());
         const double m_loco = m_all - m_c;
         if (m_loco <= 0.0)
             LOGGER.e(0, "Chr " + std::to_string(chrs[c1]) + " has " +
@@ -983,15 +1029,14 @@ void gcta::mlma_loco_v2(std::string grm_file,
                         "The --grm file must cover all autosomes.");
 
         // G_loco_c = (G_all·m_all − G_chr_c·m_c) / m_loco
-        // _grm from make_grm is full symmetric (both triangles set).
-        // Eigen evaluates the scalar-multiplied subtraction lazily (no large temp).
+        // For the make_grm path: _grm is lower-triangular; selfadjointView symmetrizes.
+        // For the --grm-chr path: _grm is already fully symmetric (stored above).
+        // Either way: free _grm before _A[0] to keep peak at 3×n²×8.
         {
-            Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(),
-                                                      static_cast<Eigen::Index>(_n));
             eigenMatrix grm_c_sym(_grm.selfadjointView<Eigen::Lower>());
-            _A[0] = (grm_all * m_all - grm_c_sym(kp_idx, kp_idx) * m_c) / m_loco;
+            _grm.resize(0, 0);   // free G_chr_c before _A[0] to cap peak at 3×n²×8
+            _A[0] = (grm_all * m_all - grm_c_sym * m_c) / m_loco;
         }
-        _grm.resize(0, 0);   // free G_chr_c (~n²·8 bytes)
 
         // Compute a fresh Woodbury basis for this chromosome's G_loco_c.
         // compute_woodbury_basis() consumes _A[0] (frees it internally) and
@@ -1021,35 +1066,28 @@ void gcta::mlma_loco_v2(std::string grm_file,
         auto [b, s, p] = no_adj_covar
             ? mlma_calcu_stat_covar(std::span<const float>(y), icld_chrs[c1].size())
             : mlma_calcu_stat(std::span<const float>(y), icld_chrs[c1].size());
-        beta_out[c1] = std::move(b);
-        se_out[c1]   = std::move(s);
-        pval_out[c1] = std::move(p);
+
+        // Stream this chromosome's results immediately so output is written
+        // progressively and peak RAM is not inflated by large result buffers.
+        for (i = 0; i < icld_chrs[c1].size(); i++) {
+            const int j = icld_chrs[c1][i];
+            ofile << _chr[j] << "\t" << _snp_name[j] << "\t" << _bp[j] << "\t"
+                  << _ref_A[j] << "\t" << _other_A[j] << "\t";
+            if (p[i] > 1.5)
+                ofile << "NA\tNA\tNA\tNA\n";
+            else
+                ofile << 0.5 * _mu[j] << "\t" << b[i] << "\t"
+                      << s[i] << "\t" << p[i] << "\n";
+        }
 
         _include      = include_o;
         _snp_name_map = snp_name_map_o;
         LOGGER << "-----------------------------------" << std::endl;
     }
 
-    // ---- 7. Write results ----
-    const std::string filename = _out + ".loco.mlma";
-    LOGGER << "\nSaving LOCO MLMA results to [" << filename << "] ..." << std::endl;
-    std::ofstream ofile(filename);
-    if (!ofile) LOGGER.e(0, "cannot open [" + filename + "] to write.");
-    ofile << "Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\t"
-          << (_log_pval ? "log_p" : "p") << "\n";
-    for (c1 = 0; c1 < chrs.size(); c1++) {
-        for (i = 0; i < icld_chrs[c1].size(); i++) {
-            const int j = icld_chrs[c1][i];
-            ofile << _chr[j] << "\t" << _snp_name[j] << "\t" << _bp[j] << "\t"
-                  << _ref_A[j] << "\t" << _other_A[j] << "\t";
-            if (pval_out[c1][i] > 1.5)
-                ofile << "NA\tNA\tNA\tNA\n";
-            else
-                ofile << 0.5 * _mu[j] << "\t" << beta_out[c1][i] << "\t"
-                      << se_out[c1][i] << "\t" << pval_out[c1][i] << "\n";
-        }
-    }
+    // ---- 7. Finalise output ----
     ofile.close();
+    LOGGER << "\n[LOCO] Results saved to [" << filename << "]" << std::endl;
     _make_XMat_no_compact = false;   // restore for any subsequent analyses
     LOGGER << "[LOCO] Done." << std::endl;
 }

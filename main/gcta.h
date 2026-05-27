@@ -196,7 +196,7 @@ public:
     void mlma_loco(std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool inbred, bool no_adj_covar);
     // Memory-efficient LOCO: requires pre-built all-autosome GRM via --grm.
     // Peak RAM = O(2·n²) instead of O(n_chr·n²) for the legacy path above.
-    void mlma_loco_v2(std::string grm_file, std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool inbred, bool no_adj_covar);
+    void mlma_loco_v2(std::string grm_file, std::string grm_chr_prefix, std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool inbred, bool no_adj_covar);
     void save_reml_state(const std::string& filename, bool no_adj_covar);
     void load_reml_state(const std::string& filename, bool no_adj_covar);
 
