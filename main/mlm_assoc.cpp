@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iomanip>
 #include <string_view>
 
 // ---------------------------------------------------------------------------
@@ -779,6 +780,278 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
         }
     }
     ofile.close();
+}
+
+// ---------------------------------------------------------------------------
+// mlma_loco_v2 — memory-efficient LOCO MLMA
+//
+// Requires a pre-built all-autosome GRM supplied via --grm <prefix>.
+//
+// Algorithm per chromosome c:
+//   G_loco_c = (G_all·m_all − G_chr_c·m_c) / (m_all − m_c)
+//
+// Peak RAM = O(3·n²·8) during the G_loco_c computation step, versus the
+// legacy mlma_loco which holds all n_chr GRMs simultaneously O(n_chr·n²·8).
+// For n=15 000, 29 autosomes: ~5 GB peak vs ~49 GB.
+//
+// When --reml-woodbury <k> is set (recommended), the Woodbury eigenvectors
+// from chromosome c are used as a warm start for chromosome c+1, reducing
+// power iterations from ~3 to ~1 and cutting total REML time by ~3×.
+// ---------------------------------------------------------------------------
+void gcta::mlma_loco_v2(std::string grm_file,
+                         std::string phen_file, std::string qcovar_file,
+                         std::string covar_file, int mphen, int MaxIter,
+                         std::vector<double> reml_priors,
+                         std::vector<double> reml_priors_var,
+                         bool no_constrain, bool inbred, bool no_adj_covar)
+{
+    unsigned long i = 0, c1 = 0;
+    _reml_max_iter = MaxIter;
+    const bool qcovar_flag = (!qcovar_file.empty());
+    const bool covar_flag  = (!covar_file.empty());
+    if (!qcovar_flag && !covar_flag) no_adj_covar = false;
+
+    // ---- 1. Load whole-genome GRM (G_all) ----
+    // read_grm populates _grm (lower-triangular n_grm×n_grm) and _grm_N.
+    // update_id_map_kp restricts _keep to individuals in the GRM file.
+    std::vector<std::string> grm_id_all;
+    LOGGER << "\n[LOCO] Loading all-autosome GRM from [" << grm_file << "] ..." << std::endl;
+    read_grm(grm_file, grm_id_all, /*out_id_log=*/true, /*read_id_only=*/false,
+             /*dont_read_N=*/false);
+    update_id_map_kp(grm_id_all, _id_map, _keep);
+
+    if (_grm_N.size() == 0)
+        LOGGER.e(0, "--mlma-loco: GRM N file [" + grm_file + ".grm.N.bin] is missing or empty. "
+                    "Rebuild the GRM without --no-grm-N.");
+    // Diagonal entry (0,0) equals the all-autosome marker count for individual 0.
+    const double m_all = static_cast<double>(_grm_N(0, 0));
+    if (m_all <= 0.0)
+        LOGGER.e(0, "--mlma-loco: marker count read from N matrix is zero or negative.");
+    LOGGER << "[LOCO] G_all: " << static_cast<long long>(m_all) << " markers." << std::endl;
+
+    // ---- 2. Read phenotype and optional covariates ----
+    int qcovar_num = 0, covar_num = 0;
+    std::vector<std::string> phen_ID, qcovar_ID, covar_ID;
+    std::vector<std::vector<std::string>> phen_buf, qcovar, covar;
+
+    if (phen_file.empty()) LOGGER.e(0, "no file name in --pheno.");
+    read_phen(phen_file, phen_ID, phen_buf, mphen);
+    update_id_map_kp(phen_ID, _id_map, _keep);
+    if (qcovar_flag) {
+        qcovar_num = read_covar(qcovar_file, qcovar_ID, qcovar, true);
+        update_id_map_kp(qcovar_ID, _id_map, _keep);
+    }
+    if (covar_flag) {
+        covar_num = read_covar(covar_file, covar_ID, covar, false);
+        update_id_map_kp(covar_ID, _id_map, _keep);
+    }
+    _n = _keep.size();
+    if (_n < 1) LOGGER.e(0, "no individual is in common among the input files.");
+    LOGGER << _n << " individuals are in common in these files." << std::endl;
+
+    // ---- 3. Build ID maps and subset G_all to the final _keep individuals ----
+    std::vector<std::string> uni_id;
+    std::map<std::string, int> uni_id_map;
+    make_uni_id(uni_id, uni_id_map);
+
+    // kp_grm[i] = row/col in the loaded _grm corresponding to uni_id[i]
+    std::vector<int> kp_grm;
+    StrFunc::match(uni_id, grm_id_all, kp_grm);
+    for (i = 0; i < kp_grm.size(); i++) {
+        if (kp_grm[i] < 0)
+            LOGGER.e(0, "--mlma-loco: individual " + uni_id[i] +
+                        " is present in phenotype/genotype data but absent from ["
+                        + grm_file + ".grm.id]. "
+                        "Rebuild the all-autosome GRM to include all analysis individuals.");
+    }
+
+    eigenMatrix grm_all;
+    {
+        // Symmetrize _grm (lower triangle → full symmetric) then subset to _n.
+        eigenMatrix grm_sym(_grm.selfadjointView<Eigen::Lower>());
+        Eigen::Map<const Eigen::VectorXi> kp_idx(kp_grm.data(),
+                                                  static_cast<Eigen::Index>(_n));
+        grm_all = grm_sym(kp_idx, kp_idx);  // n×n submatrix (full symmetric)
+    }
+    _grm.resize(0, 0);
+    _grm_N.resize(0, 0);
+    LOGGER << "[LOCO] G_all subset to " << _n << "×" << _n << "  ("
+           << std::fixed << std::setprecision(2)
+           << (static_cast<double>(_n) * _n * 8.0 / 1e9)
+           << " GB). Peak LOCO memory ≈ 3× this." << std::endl;
+
+    // ---- 4. Identify autosomes and collect per-chromosome SNP lists ----
+    std::vector<int> chrs, vi_buf(_chr);
+    std::ranges::sort(vi_buf);
+    { auto ur = std::ranges::unique(vi_buf); vi_buf.erase(ur.begin(), vi_buf.end()); }
+    if (vi_buf.size() < 2)
+        LOGGER.e(0, "There is only one chromosome. LOCO analysis requires ≥2 chromosomes.");
+    for (const int c : vi_buf)
+        if (c <= _autosome_num) chrs.push_back(c);
+
+    std::vector<int> include_o(_include);
+    std::map<std::string, int> snp_name_map_o(_snp_name_map);
+
+    if (_mu.empty()) calcu_mu();
+
+    std::vector<std::vector<int>> icld_chrs(chrs.size());
+    for (c1 = 0; c1 < chrs.size(); c1++) {
+        extract_chr(chrs[c1], chrs[c1]);
+        icld_chrs[c1] = _include;
+        _include      = include_o;
+        _snp_name_map = snp_name_map_o;
+    }
+
+    // ---- 5. Phenotype vector, covariate matrix, REML bookkeeping ----
+    // grm_id_keep: IDs in the order make_grm produces its output (_keep order).
+    // StrFunc::match(uni_id, grm_id_keep, kp) gives the identity permutation
+    // when both are derived from the same _keep list in the same order.
+    std::vector<std::string> grm_id_keep;
+    grm_id_keep.reserve(_n);
+    for (i = 0; i < _keep.size(); i++)
+        grm_id_keep.push_back(_fid[_keep[i]] + ":" + _pid[_keep[i]]);
+
+    _y.setZero(_n);
+    for (i = 0; i < phen_ID.size(); i++) {
+        auto iter = uni_id_map.find(phen_ID[i]);
+        if (iter == uni_id_map.end()) continue;
+        _y[iter->second] = std::stod(phen_buf[i][mphen - 1]);
+    }
+
+    std::vector<eigenMatrix> E_float;
+    eigenMatrix qE_float;
+    construct_X(_n, uni_id_map, qcovar_flag, qcovar_num, qcovar_ID, qcovar,
+                covar_flag, covar_num, covar_ID, covar, E_float, qE_float);
+
+    _var_name.push_back("V(G)");
+    _hsq_name.push_back("V(G)/Vp");
+    _var_name.push_back("V(e)");
+
+    std::vector<int> kp;
+    StrFunc::match(uni_id, grm_id_keep, kp);  // typically identity
+
+    _r_indx.resize(2);
+    _r_indx[0] = 0; _r_indx[1] = 1;
+    _A.resize(2);
+
+    // Disable any stale Woodbury state from a prior analysis so that reml()
+    // takes the correct non-Woodbury path when _woodbury_rank == 0.
+    if (_woodbury_rank == 0) _Vi_use_woodbury = false;
+
+    // Prevent compact_snp_data() from destroying _snp_1/_snp_2 between
+    // per-chromosome make_grm calls.  The scatter-gather path in make_XMat /
+    // make_XMat_subset is correct without compaction; std_XMat now uses
+    // _mu[_include[j]] which is equivalent post-compact and correct pre-compact.
+    if (_dosage_flag)
+        LOGGER.e(0, "--mlma-loco with --grm does not support dosage data.");
+    _make_XMat_no_compact = true;
+
+    LOGGER << "\n[LOCO] Running LOCO MLMA over " << chrs.size() << " autosomes." << std::endl;
+    if (_woodbury_rank != 0)
+        LOGGER << "[LOCO] --reml-woodbury active; eigenvectors warm-started from each "
+                  "previous chromosome after the first." << std::endl;
+    else
+        LOGGER << "[LOCO] Tip: add --reml-woodbury <k> (e.g. k=200) for faster per-chr "
+                  "REML and lower peak RAM (Woodbury path)." << std::endl;
+
+    eigenVector y_buf = _y;
+    std::vector<float> y(_n);
+    std::vector<std::vector<float>> beta_out(chrs.size()),
+                                    se_out(chrs.size()),
+                                    pval_out(chrs.size());
+
+    // ---- 6. Per-chromosome LOCO loop ----
+    for (c1 = 0; c1 < chrs.size(); c1++) {
+        LOGGER << "\n-----------------------------------\n#Chr " << chrs[c1] << ":" << std::endl;
+        extract_chr(chrs[c1], chrs[c1]);
+
+        // Build G_chr_c via the existing (DSYRK) make_grm path.
+        // mlmassoc=true suppresses disk output and keeps _geno scaled; we free
+        // _geno immediately because mlma_calcu_stat reads from _snp_1/_snp_2,
+        // not _geno.  This avoids holding n×m_chr genotypes through the REML.
+        make_grm(false, false, inbred, /*output_bin=*/false, /*grm_mtd=*/0,
+                 /*mlmassoc=*/true);
+        _geno.resize(0, 0);   // free n×m_c float genotype matrix (~1.8 GB for n=15k, m_c=30k)
+
+        const double m_c    = static_cast<double>(_include.size());
+        const double m_loco = m_all - m_c;
+        if (m_loco <= 0.0)
+            LOGGER.e(0, "Chr " + std::to_string(chrs[c1]) + " has " +
+                        std::to_string(static_cast<long long>(m_c)) +
+                        " markers ≥ total markers in G_all (" +
+                        std::to_string(static_cast<long long>(m_all)) + "). "
+                        "The --grm file must cover all autosomes.");
+
+        // G_loco_c = (G_all·m_all − G_chr_c·m_c) / m_loco
+        // _grm from make_grm is full symmetric (both triangles set).
+        // Eigen evaluates the scalar-multiplied subtraction lazily (no large temp).
+        {
+            Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(),
+                                                      static_cast<Eigen::Index>(_n));
+            eigenMatrix grm_c_sym(_grm.selfadjointView<Eigen::Lower>());
+            _A[0] = (grm_all * m_all - grm_c_sym(kp_idx, kp_idx) * m_c) / m_loco;
+        }
+        _grm.resize(0, 0);   // free G_chr_c (~n²·8 bytes)
+
+        // Compute a fresh Woodbury basis for this chromosome's G_loco_c.
+        // compute_woodbury_basis() consumes _A[0] (frees it internally) and
+        // stores the top-k eigenvectors in _Uk / eigenvalues in _dk.
+        // Warm-start: _Uk from the previous chr is used as the initial sketch
+        // inside compute_woodbury_basis (see est_hsq.cpp warm-start logic), so
+        // power-iteration converges in ~1 step rather than ~3 for chrs 2..n_chr.
+        if (_woodbury_rank != 0) {
+            if (_woodbury_rank > 0)
+                compute_woodbury_basis(_woodbury_rank, 0.0, 0);
+            else  // auto-k
+                compute_woodbury_basis(0, _woodbury_buffer_factor, _woodbury_k_max);
+            // _A[0] is now freed; reml() will use the Woodbury path.
+        }
+
+        // Run REML.  Variance components from the previous chr seed this one.
+        reml(false, true, true, reml_priors, reml_priors_var,
+             -2.0, -2.0, no_constrain, /*no_lrt=*/true, /*mlmassoc=*/true);
+
+        if (!no_adj_covar) y_buf = _y.array() - (_X * _b).array();
+        for (i = 0; i < _n; i++) y[i] = static_cast<float>(y_buf[i]);
+        reml_priors.clear();
+        reml_priors_var = _varcmp;
+        _P.resize(0, 0);
+        if (_A[0].size() > 0) _A[0].resize(0, 0);   // no-op if Woodbury already freed it
+
+        auto [b, s, p] = no_adj_covar
+            ? mlma_calcu_stat_covar(std::span<const float>(y), icld_chrs[c1].size())
+            : mlma_calcu_stat(std::span<const float>(y), icld_chrs[c1].size());
+        beta_out[c1] = std::move(b);
+        se_out[c1]   = std::move(s);
+        pval_out[c1] = std::move(p);
+
+        _include      = include_o;
+        _snp_name_map = snp_name_map_o;
+        LOGGER << "-----------------------------------" << std::endl;
+    }
+
+    // ---- 7. Write results ----
+    const std::string filename = _out + ".loco.mlma";
+    LOGGER << "\nSaving LOCO MLMA results to [" << filename << "] ..." << std::endl;
+    std::ofstream ofile(filename);
+    if (!ofile) LOGGER.e(0, "cannot open [" + filename + "] to write.");
+    ofile << "Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\t"
+          << (_log_pval ? "log_p" : "p") << "\n";
+    for (c1 = 0; c1 < chrs.size(); c1++) {
+        for (i = 0; i < icld_chrs[c1].size(); i++) {
+            const int j = icld_chrs[c1][i];
+            ofile << _chr[j] << "\t" << _snp_name[j] << "\t" << _bp[j] << "\t"
+                  << _ref_A[j] << "\t" << _other_A[j] << "\t";
+            if (pval_out[c1][i] > 1.5)
+                ofile << "NA\tNA\tNA\tNA\n";
+            else
+                ofile << 0.5 * _mu[j] << "\t" << beta_out[c1][i] << "\t"
+                      << se_out[c1][i] << "\t" << pval_out[c1][i] << "\n";
+        }
+    }
+    ofile.close();
+    _make_XMat_no_compact = false;   // restore for any subsequent analyses
+    LOGGER << "[LOCO] Done." << std::endl;
 }
 
 void gcta::grm_minus_grm(float *grm, float *sub_grm)

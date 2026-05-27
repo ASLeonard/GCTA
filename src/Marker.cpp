@@ -1493,6 +1493,11 @@ int Marker::registerOption(map<string, std::vector<string>>& options_in){
             LOGGER.e(0, "the value specified for --chr is out of the accepted range.");
         }
         filterChrFlag = true;
+        // Populate allowed_chrs so that read_bim/read_pvar filter to these chromosomes
+        allowed_chrs.clear();
+        for(int c = options_i["start_chr"]; c <= options_i["end_chr"]; c++){
+            allowed_chrs.insert(std::to_string(c));
+        }
     }
 
     if(options_in.find("--chrx") != options_in.end()){

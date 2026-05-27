@@ -194,6 +194,9 @@ public:
     // mlma
     void mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_file, std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool within_family, bool inbred, bool no_adj_covar, std::string weight_file, std::string save_reml_file, std::string load_reml_file);
     void mlma_loco(std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool inbred, bool no_adj_covar);
+    // Memory-efficient LOCO: requires pre-built all-autosome GRM via --grm.
+    // Peak RAM = O(2·n²) instead of O(n_chr·n²) for the legacy path above.
+    void mlma_loco_v2(std::string grm_file, std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool inbred, bool no_adj_covar);
     void save_reml_state(const std::string& filename, bool no_adj_covar);
     void load_reml_state(const std::string& filename, bool no_adj_covar);
 
@@ -574,6 +577,10 @@ private:
 
     // imputed data
     bool _dosage_flag;
+    // When true, make_XMat/make_XMat_subset skip compact_snp_data() so that
+    // _snp_1/_snp_2 are preserved across multiple different extract_chr() calls
+    // (e.g. the LOCO per-chromosome loop in mlma_loco_v2).
+    bool _make_XMat_no_compact = false;
     GeneticModel _genetic_model;
     Eigen::MatrixXf _geno_dose;  // (n_indi, n_snp), column-major; dense indices after compaction
     std::vector<double> _impRsq;

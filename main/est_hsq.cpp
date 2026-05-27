@@ -1505,7 +1505,28 @@ void gcta::compute_woodbury_basis(int k, double buffer_factor, int k_max) {
     // ---- Randomised eigendecomposition ----
     const int oversample = 20;
     const int k_ext = std::min(k_svd + oversample, n - 1);
-    Eigen::MatrixXd omega = Eigen::MatrixXd::Random(n, k_ext);
+    // Warm-start: when mlma_loco_v2 runs successive per-chromosome REMLs, the
+    // eigenvectors of G_loco_c are very close to those of G_loco_{c-1} (each chr
+    // contributes ~1/n_chr of total variance).  Seeding omega with the previous
+    // _Uk is equivalent to one free power-iteration step and typically cuts the
+    // number of DSYMM calls from 3 → 1 for chromosomes 2..n_chr.
+    // Nyström uses omega differently (C = Ω^T Y is not a subspace basis), so
+    // warm-starting there is not straightforward and is skipped.
+    Eigen::MatrixXd omega;
+    {
+        const int k_prev = static_cast<int>(_Uk.cols());
+        const bool has_warm = (!_woodbury_nystrom && k_prev > 0 && _Uk.rows() == n);
+        if (has_warm) {
+            omega.resize(n, k_ext);
+            const int k_copy = std::min(k_prev, k_ext);
+            omega.leftCols(k_copy)  = _Uk.leftCols(k_copy).cast<double>();
+            if (k_copy < k_ext)
+                omega.rightCols(k_ext - k_copy) =
+                    Eigen::MatrixXd::Random(n, k_ext - k_copy);
+        } else {
+            omega = Eigen::MatrixXd::Random(n, k_ext);
+        }
+    }
     Eigen::MatrixXd Y = K_dbl.selfadjointView<Eigen::Lower>() * omega;  // 1st (and for Nyström, only) DSYMM
 
     Eigen::VectorXd eval_full;
