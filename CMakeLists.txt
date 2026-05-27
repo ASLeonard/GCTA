@@ -55,6 +55,75 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND LINUX)
         get_filename_component(_aocc_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
         get_filename_component(GCTA_AOCC_ROOT "${_aocc_bin}" DIRECTORY CACHE)
         message(STATUS "Detected AOCC compiler (root: ${GCTA_AOCC_ROOT})")
+
+        # AOCC requires its own llvm-ar / llvm-ranlib for static library creation.
+        # The system 'ar' cannot handle LLVM bitcode objects produced by AOCC,
+        # causing "Error running link command: no such file or directory" at archive time.
+        find_program(_aocc_ar     NAMES llvm-ar     HINTS "${GCTA_AOCC_ROOT}/bin" NO_DEFAULT_PATH)
+        find_program(_aocc_ranlib NAMES llvm-ranlib HINTS "${GCTA_AOCC_ROOT}/bin" NO_DEFAULT_PATH)
+        if(_aocc_ar)
+            set(CMAKE_AR     "${_aocc_ar}"     CACHE FILEPATH "Archiver"          FORCE)
+            message(STATUS "AOCC: using archiver ${_aocc_ar}")
+        else()
+            message(WARNING "AOCC: llvm-ar not found under ${GCTA_AOCC_ROOT}/bin — static library builds may fail")
+        endif()
+        if(_aocc_ranlib)
+            set(CMAKE_RANLIB "${_aocc_ranlib}" CACHE FILEPATH "Ranlib"            FORCE)
+        endif()
+    endif()
+endif()
+
+# AOCC is LLVM 17 and cannot parse headers from GCC 15+. If your default GCC is
+# too new (check: gcc --version), point AOCC at an older GCC toolchain:
+#   -DGCTA_GCC_TOOLCHAIN=/path/to/gcc-13-or-14-root
+# The path should be the GCC prefix — the directory containing bin/gcc.
+set(GCTA_GCC_TOOLCHAIN "" CACHE PATH
+    "GCC installation root for AOCC to use as its C++ header/sysroot provider. \
+Required when the system GCC is >= 15 (AOCC/Clang 17 cannot parse GCC 15+ libstdc++ headers). \
+Example: /opt/gcc-13  (must contain bin/gcc)")
+if(GCTA_COMPILER_IS_AOCC AND GCTA_GCC_TOOLCHAIN)
+    if(NOT IS_DIRECTORY "${GCTA_GCC_TOOLCHAIN}")
+        message(FATAL_ERROR "GCTA_GCC_TOOLCHAIN does not exist: ${GCTA_GCC_TOOLCHAIN}")
+    endif()
+    message(STATUS "AOCC: using GCC toolchain at ${GCTA_GCC_TOOLCHAIN}")
+    add_compile_options(--gcc-toolchain=${GCTA_GCC_TOOLCHAIN})
+    add_link_options(--gcc-toolchain=${GCTA_GCC_TOOLCHAIN})
+
+    # Add the GCC toolchain's own lib dirs to the rpath so the binary finds
+    # the right libstdc++.so.6 at runtime instead of falling back to the system
+    # Ubuntu one, which is typically too old (GCC 11, GLIBCXX_3.4.30).
+    # We probe for the versioned lib dir (e.g. lib/gcc/x86_64-pc-linux-gnu/13.2.0)
+    # as well as the top-level lib64 that contains libstdc++.so itself.
+    file(GLOB _gcc_tc_versioned_lib
+        "${GCTA_GCC_TOOLCHAIN}/lib/gcc/*/*")
+    foreach(_d IN LISTS _gcc_tc_versioned_lib)
+        if(IS_DIRECTORY "${_d}")
+            list(APPEND CMAKE_BUILD_RPATH   "${_d}")
+            list(APPEND CMAKE_INSTALL_RPATH "${_d}")
+        endif()
+    endforeach()
+    foreach(_d IN ITEMS
+            "${GCTA_GCC_TOOLCHAIN}/lib64"
+            "${GCTA_GCC_TOOLCHAIN}/lib")
+        if(IS_DIRECTORY "${_d}")
+            list(APPEND CMAKE_BUILD_RPATH   "${_d}")
+            list(APPEND CMAKE_INSTALL_RPATH "${_d}")
+        endif()
+    endforeach()
+    message(STATUS "AOCC: added GCC toolchain lib dirs to rpath")
+elseif(GCTA_COMPILER_IS_AOCC AND NOT GCTA_GCC_TOOLCHAIN)
+    # Warn if the detected system GCC is too new for AOCC to handle.
+    execute_process(
+        COMMAND gcc --version
+        OUTPUT_VARIABLE _gcc_ver_str
+        ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(_gcc_ver_str MATCHES "([0-9]+)\\.[0-9]+\\.[0-9]+")
+        if(CMAKE_MATCH_1 GREATER_EQUAL 15)
+            message(WARNING
+                "AOCC detected but system GCC ${CMAKE_MATCH_1} is too new — "
+                "AOCC (Clang 17) cannot parse GCC 15+ libstdc++ headers.\n"
+                "Set -DGCTA_GCC_TOOLCHAIN=/path/to/gcc-13-or-14 to fix compile errors.")
+        endif()
     endif()
 endif()
 
@@ -111,8 +180,7 @@ FetchContent_Declare(
     zlib
     URL https://github.com/madler/zlib/archive/refs/tags/v1.3.2.tar.gz
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    EXCLUDE_FROM_ALL
-    FIND_PACKAGE_ARGS NAMES ZLIB)
+    EXCLUDE_FROM_ALL)
 FetchContent_Declare(
     eigen
     URL https://github.com/eigen-mirror/eigen/archive/refs/tags/5.0.1.tar.gz
@@ -206,8 +274,8 @@ if(Boost_DIR)
 endif()
 
 # Ensure a consistent ZLIB::ZLIB target exists for downstream linking.
-# - System zlib: find_package (via FIND_PACKAGE_ARGS) already created ZLIB::ZLIB
-# - Fetched zlib: alias the real build target so the library is built before use
+# zlib is always built from source by FetchContent; alias whichever static
+# target its CMakeLists creates ('zlibstatic' on all platforms, or 'zlib' on UNIX).
 if(zlib_POPULATED)
     set(GCTA_ZLIB_INCLUDE_DIRS "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
     if(NOT TARGET ZLIB::ZLIB)
@@ -618,13 +686,15 @@ endforeach()
 # Explicit LTO flags per compiler (supplements INTERPROCEDURAL_OPTIMIZATION)
 if(GCTA_IPO_ENABLED AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        # Thin LTO: most of the benefit of full LTO at a fraction of link time.
-        # AOCC uses lld by default and supports ThinLTO without extra flags.
-        # On cluster shared filesystems the ThinLTO cache defaults to the build
-        # dir, which is fine; override with -DCMAKE_EXE_LINKER_FLAGS="-Wl,--thinlto-cache-dir=..."
-        # if needed.
-        target_compile_options(gcta64 PRIVATE -flto=thin)
-        target_link_options(gcta64 PRIVATE -flto=thin)
+        # AOCC only supports full LTO; upstream Clang/clang++ supports ThinLTO
+        # which gives most of the benefit at a fraction of the link time.
+        if(GCTA_COMPILER_IS_AOCC)
+            target_compile_options(gcta64 PRIVATE -flto=full)
+            target_link_options(gcta64    PRIVATE -flto=full)
+        else()
+            target_compile_options(gcta64 PRIVATE -flto=thin)
+            target_link_options(gcta64    PRIVATE -flto=thin)
+        endif()
     elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         # -flto=auto uses the same job count as make, no need to query core count
         target_compile_options(gcta64 PRIVATE -flto=auto)
@@ -748,6 +818,9 @@ message(STATUS "==========================================")
 message(STATUS "  Build type:        ${CMAKE_BUILD_TYPE}")
 message(STATUS "  BLAS/LAPACK:       ${GCTA_BLAS_PROVIDER}")
 message(STATUS "  Compiler:          ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}${GCTA_COMPILER_IS_AOCC_STR} (${CMAKE_CXX_COMPILER})")
+if(GCTA_COMPILER_IS_AOCC)
+    message(STATUS "  GCC toolchain:     ${GCTA_GCC_TOOLCHAIN} (--gcc-toolchain)")
+endif()
 message(STATUS "  IPO/LTO:           ${GCTA_IPO_ENABLED}")
 message(STATUS "  Install prefix:    ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "  OpenMP:            ${OpenMP_CXX_VERSION}")
