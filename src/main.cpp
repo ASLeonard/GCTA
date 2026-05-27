@@ -35,6 +35,7 @@
 #include "utils.hpp" 
 #include <omp.h>
 #include "MLMA.h"
+#include "MLMA_loco.h"
 #include <cstdlib>
 #include "mem.hpp"
 #include "config.h"
@@ -105,6 +106,7 @@ int main(int argc, char *argv[]){
         "--GRM-tile-size",
         "--mlma-stream", "--load-reml", "--mlma-no-preadj-covar", "--log-pval",
         "--reml-trace-approx",
+        "--mlma-loco-stream", "--loco-manifest", "--reml-woodbury", "--reml-maxit",
     };
     map<string, vector<string>> options;
     vector<string> keys;
@@ -257,7 +259,7 @@ int main(int argc, char *argv[]){
 
     //start register the options
     // Please take care of the order, C++ has few reflation feature, I did in a ugly way.
-    vector<string> module_names = {"phenotype", "marker", "genotype", "covar", "GRM", "fastFAM", "LD", "mlma"};
+    vector<string> module_names = {"phenotype", "marker", "genotype", "covar", "GRM", "fastFAM", "LD", "mlma", "mlma_loco"};
     vector<int (*)(map<string, vector<string>>&)> registers = {
             Pheno::registerOption,
             Marker::registerOption,
@@ -266,7 +268,8 @@ int main(int argc, char *argv[]){
             GRM::registerOption,
             FastFAM::registerOption,
             LD::registerOption,
-            MLMA::registerOption
+            MLMA::registerOption,
+            MLMALoco::registerOption
     };
     vector<void (*)()> processMains = {
             Pheno::processMain,
@@ -276,7 +279,8 @@ int main(int argc, char *argv[]){
             GRM::processMain,
             FastFAM::processMain,
             LD::processMain,
-            MLMA::processMain
+            MLMA::processMain,
+            MLMALoco::processMain
     };
 
     vector<int> mains;

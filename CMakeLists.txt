@@ -689,6 +689,8 @@ set(SRCS
     ${CMAKE_SOURCE_DIR}/src/Covar.cpp
     ${CMAKE_SOURCE_DIR}/src/FastFAM.cpp
     ${CMAKE_SOURCE_DIR}/src/MLMA_stream.cpp
+    ${CMAKE_SOURCE_DIR}/src/MLMA_loco.cpp
+    ${CMAKE_SOURCE_DIR}/src/RemlEngine.cpp
     ${CMAKE_SOURCE_DIR}/src/GRM.cpp
     ${CMAKE_SOURCE_DIR}/src/Geno.cpp
     ${CMAKE_SOURCE_DIR}/src/BedBackend.cpp
