@@ -1,5 +1,20 @@
 cmake_minimum_required(VERSION 3.28...4.3)
 
+if(GCTA_GCC_TOOLCHAIN AND DEFINED CMAKE_CXX_COMPILER)
+    execute_process(
+        COMMAND "${CMAKE_CXX_COMPILER}" --version
+        OUTPUT_VARIABLE _pre_cxx_ver ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(_pre_cxx_ver MATCHES "AOCC")
+        foreach(_v IN ITEMS CMAKE_CXX_FLAGS CMAKE_C_FLAGS CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS)
+            if(NOT "${${_v}}" MATCHES "--gcc-toolchain")
+                string(APPEND ${_v} " --gcc-toolchain=${GCTA_GCC_TOOLCHAIN}")
+                set(${_v} "${${_v}}" CACHE STRING "" FORCE)
+            endif()
+        endforeach()
+        message(STATUS "Pre-project: injected --gcc-toolchain=${GCTA_GCC_TOOLCHAIN} for AOCC compiler test")
+    endif()
+endif()
+
 project(GCTAg LANGUAGES C CXX)
 
 # Prevent CMake from finding stale configs in build-tree or user package registries.
@@ -18,6 +33,42 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+function(gcta_configure_binutils_from_dir _bin_dir _tool_kind _label _warn_if_missing)
+    if(_tool_kind STREQUAL "GNU")
+        set(_ar_name gcc-ar)
+        set(_ranlib_name gcc-ranlib)
+        set(_nm_name gcc-nm)
+    elseif(_tool_kind STREQUAL "LLVM")
+        set(_ar_name llvm-ar)
+        set(_ranlib_name llvm-ranlib)
+        set(_nm_name llvm-nm)
+    else()
+        message(FATAL_ERROR "Unknown binutils tool kind: ${_tool_kind}")
+    endif()
+
+    find_program(_tool_ar     NAMES ${_ar_name}     HINTS "${_bin_dir}" NO_DEFAULT_PATH)
+    find_program(_tool_ranlib NAMES ${_ranlib_name} HINTS "${_bin_dir}" NO_DEFAULT_PATH)
+    find_program(_tool_nm     NAMES ${_nm_name}     HINTS "${_bin_dir}" NO_DEFAULT_PATH)
+
+    if(_tool_ar)
+        set(CMAKE_AR "${_tool_ar}" PARENT_SCOPE)
+        set(CMAKE_AR "${_tool_ar}" CACHE FILEPATH "Archiver" FORCE)
+        message(STATUS "${_label}: using archiver ${_tool_ar}")
+    elseif(_warn_if_missing)
+        message(WARNING "${_label}: ${_ar_name} not found next to ${CMAKE_CXX_COMPILER} — LTO may be suboptimal for static libs")
+    endif()
+
+    if(_tool_ranlib)
+        set(CMAKE_RANLIB "${_tool_ranlib}" PARENT_SCOPE)
+        set(CMAKE_RANLIB "${_tool_ranlib}" CACHE FILEPATH "Ranlib" FORCE)
+    endif()
+
+    if(_tool_nm)
+        set(CMAKE_NM "${_tool_nm}" PARENT_SCOPE)
+        set(CMAKE_NM "${_tool_nm}" CACHE FILEPATH "NM" FORCE)
+    endif()
+endfunction()
+
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     message(STATUS "Compiling with GCC ${CMAKE_CXX_COMPILER_VERSION}")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13.0)
@@ -29,29 +80,9 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     # libraries (Pgenlib, sqlite3) use CMAKE_AR — so we need to set it here too.
     # Probe next to the compiler binary so a non-default GCC install is handled
     # correctly even if the system PATH points at a different gcc-ar.
+    get_filename_component(_gcc_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    gcta_configure_binutils_from_dir("${_gcc_bin}" "GNU" "GCC" TRUE)
     if(LINUX)
-        get_filename_component(_gcc_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
-        find_program(_gcc_ar     NAMES gcc-ar     HINTS "${_gcc_bin}" NO_DEFAULT_PATH)
-        find_program(_gcc_ranlib NAMES gcc-ranlib HINTS "${_gcc_bin}" NO_DEFAULT_PATH)
-        find_program(_gcc_nm     NAMES gcc-nm     HINTS "${_gcc_bin}" NO_DEFAULT_PATH)
-        if(_gcc_ar)
-            set(CMAKE_AR                  "${_gcc_ar}" CACHE FILEPATH "Archiver" FORCE)
-            set(CMAKE_CXX_COMPILER_AR     "${_gcc_ar}" CACHE FILEPATH "" FORCE)
-            set(CMAKE_C_COMPILER_AR       "${_gcc_ar}" CACHE FILEPATH "" FORCE)
-            message(STATUS "GCC: using LTO-aware archiver ${_gcc_ar}")
-        else()
-            message(WARNING "GCC: gcc-ar not found next to ${CMAKE_CXX_COMPILER} — LTO may be suboptimal for static libs")
-        endif()
-        if(_gcc_ranlib)
-            set(CMAKE_RANLIB              "${_gcc_ranlib}" CACHE FILEPATH "Ranlib" FORCE)
-            set(CMAKE_CXX_COMPILER_RANLIB "${_gcc_ranlib}" CACHE FILEPATH "" FORCE)
-            set(CMAKE_C_COMPILER_RANLIB   "${_gcc_ranlib}" CACHE FILEPATH "" FORCE)
-        endif()
-        if(_gcc_nm)
-            set(CMAKE_NM                  "${_gcc_nm}" CACHE FILEPATH "NM" FORCE)
-            set(CMAKE_CXX_COMPILER_NM     "${_gcc_nm}" CACHE FILEPATH "" FORCE)
-            set(CMAKE_C_COMPILER_NM       "${_gcc_nm}" CACHE FILEPATH "" FORCE)
-        endif()
         # Pin libgomp to this GCC's copy so HPC LD_LIBRARY_PATH doesn't shadow it.
         # Uses the same -print-file-name probe as the AOCC libomp / toolchain logic.
         execute_process(
@@ -71,13 +102,21 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 17.0)
         message(FATAL_ERROR "GCTA requires Clang >= 17 for reliable C++23 support (found ${CMAKE_CXX_COMPILER_VERSION})")
     endif()
-    if(APPLE AND CMAKE_CXX_COMPILER MATCHES "/opt/homebrew/opt/llvm")
-        set(_llvm_prefix "/opt/homebrew/opt/llvm")
-        string(APPEND CMAKE_CXX_FLAGS " -stdlib=libc++")
-        string(APPEND CMAKE_EXE_LINKER_FLAGS " -L${_llvm_prefix}/lib/c++")
-        link_directories("${_llvm_prefix}/lib/c++")
-        list(APPEND CMAKE_BUILD_RPATH "${_llvm_prefix}/lib/c++")
-        message(STATUS "Using Homebrew LLVM libc++ from ${_llvm_prefix}/lib/c++")
+    if(APPLE AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        # Derive LLVM prefix from the selected compiler path (.../bin/clang++ -> ...).
+        get_filename_component(_llvm_bin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        get_filename_component(_llvm_prefix "${_llvm_bin_dir}" DIRECTORY)
+        if(EXISTS "${_llvm_prefix}/lib/c++")
+            if(NOT CMAKE_CXX_FLAGS MATCHES "(^| )-stdlib=libc\\+\\+($| )")
+                string(APPEND CMAKE_CXX_FLAGS " -stdlib=libc++")
+            endif()
+            if(NOT CMAKE_EXE_LINKER_FLAGS MATCHES "(^| )-L${_llvm_prefix}/lib/c\\+\\+($| )")
+                string(APPEND CMAKE_EXE_LINKER_FLAGS " -L${_llvm_prefix}/lib/c++")
+            endif()
+            link_directories("${_llvm_prefix}/lib/c++")
+            list(APPEND CMAKE_BUILD_RPATH "${_llvm_prefix}/lib/c++")
+            message(STATUS "Using LLVM libc++ from ${_llvm_prefix}/lib/c++")
+        endif()
     endif()
 else()
     message(FATAL_ERROR "GCTA can only compile with GCC or Clang")
@@ -102,57 +141,23 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND LINUX)
         # AOCC requires its own llvm-ar / llvm-ranlib for static library creation.
         # The system 'ar' cannot handle LLVM bitcode objects produced by AOCC,
         # causing "Error running link command: no such file or directory" at archive time.
-        find_program(_aocc_ar     NAMES llvm-ar     HINTS "${GCTA_AOCC_ROOT}/bin" NO_DEFAULT_PATH)
-        find_program(_aocc_ranlib NAMES llvm-ranlib HINTS "${GCTA_AOCC_ROOT}/bin" NO_DEFAULT_PATH)
-        find_program(_aocc_nm     NAMES llvm-nm     HINTS "${GCTA_AOCC_ROOT}/bin" NO_DEFAULT_PATH)
-        if(_aocc_ar)
-            set(CMAKE_AR               "${_aocc_ar}" CACHE FILEPATH "Archiver" FORCE)
-            set(CMAKE_CXX_COMPILER_AR  "${_aocc_ar}" CACHE FILEPATH "" FORCE)
-            set(CMAKE_C_COMPILER_AR    "${_aocc_ar}" CACHE FILEPATH "" FORCE)
-            message(STATUS "AOCC: using archiver ${_aocc_ar}")
-        else()
+        find_program(_aocc_ar NAMES llvm-ar HINTS "${GCTA_AOCC_ROOT}/bin" NO_DEFAULT_PATH)
+        if(NOT _aocc_ar)
             message(WARNING "AOCC: llvm-ar not found under ${GCTA_AOCC_ROOT}/bin — static library builds may fail")
         endif()
-        if(_aocc_ranlib)
-            set(CMAKE_RANLIB               "${_aocc_ranlib}" CACHE FILEPATH "Ranlib" FORCE)
-            set(CMAKE_CXX_COMPILER_RANLIB  "${_aocc_ranlib}" CACHE FILEPATH "" FORCE)
-            set(CMAKE_C_COMPILER_RANLIB    "${_aocc_ranlib}" CACHE FILEPATH "" FORCE)
-        endif()
-        if(_aocc_nm)
-            set(CMAKE_NM               "${_aocc_nm}" CACHE FILEPATH "NM" FORCE)
-            set(CMAKE_CXX_COMPILER_NM  "${_aocc_nm}" CACHE FILEPATH "" FORCE)
-            set(CMAKE_C_COMPILER_NM    "${_aocc_nm}" CACHE FILEPATH "" FORCE)
-        endif()
+        gcta_configure_binutils_from_dir("${GCTA_AOCC_ROOT}/bin" "LLVM" "AOCC" FALSE)
     endif()
 endif()
 
-# For upstream Clang (not AOCC) on Linux, detect LLVM tooling next to the
-# compiler so ar/nm/ranlib come from the same LLVM install rather than PATH.
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND LINUX AND NOT GCTA_COMPILER_IS_AOCC)
+# For upstream Clang (not AOCC), detect LLVM tooling next to the compiler so
+# ar/nm/ranlib come from the same LLVM install rather than PATH.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT GCTA_COMPILER_IS_AOCC)
     get_filename_component(_clang_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
-    find_program(_clang_ar     NAMES llvm-ar     HINTS "${_clang_bin}" NO_DEFAULT_PATH)
-    find_program(_clang_ranlib NAMES llvm-ranlib HINTS "${_clang_bin}" NO_DEFAULT_PATH)
-    find_program(_clang_nm     NAMES llvm-nm     HINTS "${_clang_bin}" NO_DEFAULT_PATH)
-    if(_clang_ar)
-        set(CMAKE_AR               "${_clang_ar}" CACHE FILEPATH "Archiver" FORCE)
-        set(CMAKE_CXX_COMPILER_AR  "${_clang_ar}" CACHE FILEPATH "" FORCE)
-        set(CMAKE_C_COMPILER_AR    "${_clang_ar}" CACHE FILEPATH "" FORCE)
-        message(STATUS "Clang: using archiver ${_clang_ar}")
-    endif()
-    if(_clang_ranlib)
-        set(CMAKE_RANLIB               "${_clang_ranlib}" CACHE FILEPATH "Ranlib" FORCE)
-        set(CMAKE_CXX_COMPILER_RANLIB  "${_clang_ranlib}" CACHE FILEPATH "" FORCE)
-        set(CMAKE_C_COMPILER_RANLIB    "${_clang_ranlib}" CACHE FILEPATH "" FORCE)
-    endif()
-    if(_clang_nm)
-        set(CMAKE_NM               "${_clang_nm}" CACHE FILEPATH "NM" FORCE)
-        set(CMAKE_CXX_COMPILER_NM  "${_clang_nm}" CACHE FILEPATH "" FORCE)
-        set(CMAKE_C_COMPILER_NM    "${_clang_nm}" CACHE FILEPATH "" FORCE)
-    endif()
+    gcta_configure_binutils_from_dir("${_clang_bin}" "LLVM" "Clang" FALSE)
 endif()
 
 # AOCC is LLVM 17 and cannot parse headers from GCC 15+. If your default GCC is
-# too new (check: gcc --version), point AOCC at an older GCC toolchain:
+# too new, point AOCC at an older GCC toolchain:
 #   -DGCTA_GCC_TOOLCHAIN=/path/to/gcc-13-or-14-root
 # The path should be the GCC prefix — the directory containing bin/gcc.
 set(GCTA_GCC_TOOLCHAIN "" CACHE PATH
@@ -198,15 +203,23 @@ if(GCTA_COMPILER_IS_AOCC AND GCTA_GCC_TOOLCHAIN)
     endforeach()
     message(STATUS "AOCC: added GCC toolchain lib dirs to rpath")
 elseif(GCTA_COMPILER_IS_AOCC AND NOT GCTA_GCC_TOOLCHAIN)
-    # Warn if the detected system GCC is too new for AOCC to handle.
+    # Warn if the GCC associated with this toolchain is too new for AOCC.
+    set(_gcc_probe_cmd "gcc")
     execute_process(
-        COMMAND gcc --version
+        COMMAND ${CMAKE_CXX_COMPILER} -print-prog-name=gcc
+        OUTPUT_VARIABLE _gcc_probe_path
+        ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(_gcc_probe_path AND NOT _gcc_probe_path STREQUAL "gcc" AND EXISTS "${_gcc_probe_path}")
+        set(_gcc_probe_cmd "${_gcc_probe_path}")
+    endif()
+    execute_process(
+        COMMAND ${_gcc_probe_cmd} --version
         OUTPUT_VARIABLE _gcc_ver_str
         ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
     if(_gcc_ver_str MATCHES "([0-9]+)\\.[0-9]+\\.[0-9]+")
         if(CMAKE_MATCH_1 GREATER_EQUAL 15)
             message(WARNING
-                "AOCC detected but system GCC ${CMAKE_MATCH_1} is too new — "
+                "AOCC detected but GCC ${CMAKE_MATCH_1} (${_gcc_probe_cmd}) is too new — "
                 "AOCC (Clang 17) cannot parse GCC 15+ libstdc++ headers.\n"
                 "Set -DGCTA_GCC_TOOLCHAIN=/path/to/gcc-13-or-14 to fix compile errors.")
         endif()
@@ -221,8 +234,8 @@ endif()
 # Release-build arch flags are applied per-target on gcta64 below,
 # after add_executable, so they don't bleed into FetchContent dependencies.
 
-set(GCTA_BLAS_BACKEND "Auto" CACHE STRING "BLAS/LAPACK backend: Auto, OpenBLAS, MKL, Accelerate, or AOCL")
-set_property(CACHE GCTA_BLAS_BACKEND PROPERTY STRINGS Auto OpenBLAS MKL Accelerate AOCL)
+set(GCTA_BLAS_BACKEND "" CACHE STRING "BLAS/LAPACK backend (required): OpenBLAS, MKL, Accelerate, or AOCL")
+set_property(CACHE GCTA_BLAS_BACKEND PROPERTY STRINGS OpenBLAS MKL Accelerate AOCL)
 set(GCTA_BLAS_LIBRARY "" CACHE FILEPATH "Primary BLAS library (OpenBLAS/MKL only). E.g. /usr/lib/x86_64-linux-gnu/libopenblas.so or /opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so")
 set(GCTA_LAPACKE_LIBRARY "" CACHE FILEPATH "Separate LAPACKE library, if needed (e.g. /usr/lib/x86_64-linux-gnu/liblapacke.so for apt OpenBLAS). Leave empty if your BLAS library bundles LAPACKE (MKL, conda OpenBLAS).")
 set(GCTA_BLAS_INCLUDE_DIR "" CACHE PATH "Directory containing BLAS/LAPACK headers (OpenBLAS/MKL only). E.g. /usr/include/x86_64-linux-gnu/openblas or /opt/intel/oneapi/mkl/latest/include")
@@ -429,18 +442,67 @@ find_package(Threads REQUIRED)
 
 # Find OpenMP
 if(APPLE)
-    # Use manual flags for OpenMP with Apple Clang
-    set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp")
-    set(OpenMP_CXX_LIB_NAMES "omp")
-    set(OpenMP_CXX_INCLUDE_DIR "/opt/homebrew/opt/libomp/include")
-    set(OpenMP_omp_LIBRARY "/opt/homebrew/opt/libomp/lib/libomp.dylib")
+    # Derive OpenMP from the selected compiler prefix when possible.
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        get_filename_component(_omp_bin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        get_filename_component(_omp_prefix "${_omp_bin_dir}" DIRECTORY)
+        find_path(OpenMP_CXX_INCLUDE_DIR
+            NAMES omp.h
+            HINTS "${_omp_prefix}/include"
+            NO_DEFAULT_PATH)
+        find_library(OpenMP_omp_LIBRARY
+            NAMES omp libomp
+            HINTS "${_omp_prefix}/lib"
+            NO_DEFAULT_PATH)
+    endif()
+
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        if(NOT OpenMP_CXX_LIB_NAMES)
+            set(OpenMP_CXX_LIB_NAMES "gomp")
+        endif()
+        if(NOT OpenMP_CXX_FLAGS)
+            set(OpenMP_CXX_FLAGS "-fopenmp")
+        endif()
+    else()
+        if(NOT OpenMP_CXX_LIB_NAMES)
+            set(OpenMP_CXX_LIB_NAMES "omp")
+        endif()
+        if(NOT OpenMP_CXX_FLAGS)
+            if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+                set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp")
+            else()
+                set(OpenMP_CXX_FLAGS "-fopenmp")
+            endif()
+        endif()
+    endif()
+
+    if(NOT OpenMP_CXX_INCLUDE_DIR)
+        find_path(OpenMP_CXX_INCLUDE_DIR NAMES omp.h)
+    endif()
+    if(NOT OpenMP_omp_LIBRARY)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            find_library(OpenMP_omp_LIBRARY NAMES gomp)
+        else()
+            find_library(OpenMP_omp_LIBRARY NAMES omp libomp)
+        endif()
+    endif()
 endif()
 
 if(WIN32)
-    set(OpenMP_omp_LIBRARY "${LLVM_ROOT}/lib/libomp.lib")
-    set(OpenMP_CXX_FLAGS "-fopenmp")
-    set(OpenMP_CXX_LIB_NAMES "omp")
-    set(OpenMP_CXX_INCLUDE_DIR "${LLVM_ROOT}/lib/clang/20/include")
+    if(NOT OpenMP_CXX_FLAGS)
+        set(OpenMP_CXX_FLAGS "-fopenmp")
+    endif()
+    if(NOT OpenMP_CXX_LIB_NAMES)
+        set(OpenMP_CXX_LIB_NAMES "omp")
+    endif()
+    if(DEFINED LLVM_ROOT)
+        if(NOT OpenMP_omp_LIBRARY)
+            set(OpenMP_omp_LIBRARY "${LLVM_ROOT}/lib/libomp.lib")
+        endif()
+        if(NOT OpenMP_CXX_INCLUDE_DIR)
+            set(OpenMP_CXX_INCLUDE_DIR "${LLVM_ROOT}/include")
+        endif()
+    endif()
 endif()
 
 # AOCC ships its own libomp — steer CMake to it before it finds a system libgomp.
@@ -474,34 +536,24 @@ set(GCTA_BLAS_LIBS "")
 set(GCTA_BLAS_INCLUDE_DIRS "")
 set(GCTA_BLAS_DEFINES "")
 
-# Resolve "Auto" backend.
-# On Linux/Windows the user must supply explicit paths — CMake's FindBLAS linker
-# probes are too fragile across distros and package managers to be reliable.
-if(GCTA_BLAS_BACKEND STREQUAL "Auto")
-    if(APPLE)
-        set(_GCTA_BLAS "Accelerate")
-    else()
-        message(FATAL_ERROR
-            "GCTA_BLAS_BACKEND=Auto is not supported on Linux/Windows.\n"
-            "Set -DGCTA_BLAS_BACKEND=OpenBLAS or -DGCTA_BLAS_BACKEND=MKL and supply:\n"
-            "  -DGCTA_BLAS_LIBRARY=<full path to .so/.a>\n"
-            "  -DGCTA_BLAS_INCLUDE_DIR=<directory containing cblas.h / mkl.h>\n"
-            "  -DGCTA_LAPACKE_LIBRARY=<separate lapacke .so if needed, else omit>\n"
-            "OpenBLAS example (Ubuntu x86-64):\n"
-            "  -DGCTA_BLAS_LIBRARY=/usr/lib/x86_64-linux-gnu/libopenblas.so\n"
-            "  -DGCTA_LAPACKE_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapacke.so\n"
-            "  -DGCTA_BLAS_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/openblas\n"
-            "MKL example (set MKL_THREADING_LAYER=GNU with GCC, or MKL_THREADING_LAYER=IOMP5 with AOCC):\n"
-            "  -DGCTA_BLAS_LIBRARY=/opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so\n"
-            "  -DGCTA_BLAS_INCLUDE_DIR=/opt/intel/oneapi/mkl/latest/include")
-    endif()
-else()
-    set(_GCTA_BLAS "${GCTA_BLAS_BACKEND}")
+if(NOT GCTA_BLAS_BACKEND)
+    message(FATAL_ERROR
+        "GCTA_BLAS_BACKEND is required. Set one of: OpenBLAS, MKL, Accelerate, AOCL.\n"
+        "Examples:\n"
+        "  macOS (Apple Silicon): -DGCTA_BLAS_BACKEND=Accelerate\n"
+        "  Linux OpenBLAS:        -DGCTA_BLAS_BACKEND=OpenBLAS -DGCTA_BLAS_LIBRARY=<...> -DGCTA_BLAS_INCLUDE_DIR=<...> [-DGCTA_LAPACKE_LIBRARY=<...>]\n"
+        "  Linux MKL:             -DGCTA_BLAS_BACKEND=MKL -DGCTA_BLAS_LIBRARY=<...> -DGCTA_BLAS_INCLUDE_DIR=<...>")
 endif()
+if(GCTA_BLAS_BACKEND STREQUAL "Auto")
+    message(FATAL_ERROR "GCTA_BLAS_BACKEND=Auto is no longer supported; choose OpenBLAS, MKL, Accelerate, or AOCL explicitly.")
+endif()
+set(_GCTA_BLAS "${GCTA_BLAS_BACKEND}")
 
 # Validate platform constraints
 if(APPLE AND NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-    message(FATAL_ERROR "GCTA macOS support is arm64 only.")
+    message(WARNING
+        "Non-arm64 macOS is not officially supported and may fail to build or run.\n"
+        "Continuing in best-effort mode.")
 endif()
 if(APPLE AND _GCTA_BLAS STREQUAL "MKL")
     message(FATAL_ERROR "MKL is not supported on macOS. Use Accelerate or OpenBLAS.")
@@ -661,7 +713,7 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL" OR _GCTA_BLAS
     endif()
 
 else()
-    message(FATAL_ERROR "Unknown GCTA_BLAS_BACKEND: '${GCTA_BLAS_BACKEND}'. Use Auto, OpenBLAS, MKL, Accelerate, or AOCL.")
+    message(FATAL_ERROR "Unknown GCTA_BLAS_BACKEND: '${GCTA_BLAS_BACKEND}'. Use OpenBLAS, MKL, Accelerate, or AOCL.")
 endif()
 
 message(STATUS "BLAS/LAPACK provider: ${GCTA_BLAS_PROVIDER}")
@@ -973,6 +1025,8 @@ message(STATUS "  Build type:        ${CMAKE_BUILD_TYPE}")
 message(STATUS "  BLAS/LAPACK:       ${GCTA_BLAS_PROVIDER}")
 message(STATUS "  Compiler:          ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}${GCTA_COMPILER_IS_AOCC_STR} (${CMAKE_CXX_COMPILER})")
 message(STATUS "  Archiver (AR):     ${CMAKE_AR}")
+message(STATUS "  Ranlib:            ${CMAKE_RANLIB}")
+message(STATUS "  NM:                ${CMAKE_NM}")
 if(GCTA_COMPILER_IS_AOCC)
     message(STATUS "  GCC toolchain:     ${GCTA_GCC_TOOLCHAIN} (--gcc-toolchain)")
 endif()
