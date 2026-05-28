@@ -94,4 +94,78 @@ inline int gcta_dgetri(gcta_blas_int n, double* a, gcta_blas_int lda, gcta_blas_
 #endif
 }
 
+// ---- gcta_dsyevd -------------------------------------------------------
+// Full symmetric eigensolver (divide-and-conquer), column-major, upper triangle.
+// a[n×n] is overwritten with eigenvectors; w receives eigenvalues ascending.
+// Returns 0 on success, non-zero LAPACK info otherwise.
+inline int gcta_dsyevd(gcta_blas_int n, double* a, gcta_blas_int lda, double* w)
+{
+#if defined(GCTA_USE_ACCELERATE)
+    const char    jobz = 'V', uplo = 'U';
+    gcta_blas_int info = 0;
+    // Workspace query: pass lwork = liwork = -1 to obtain optimal sizes.
+    gcta_blas_int lwork_q = -1, liwork_q = -1;
+    double        work_sz;
+    gcta_blas_int iwork_sz;
+    dsyevd_(&jobz, &uplo, &n, a, &lda, w,
+            &work_sz, &lwork_q, &iwork_sz, &liwork_q, &info);
+    if (info != 0) return static_cast<int>(info);
+    gcta_blas_int lwork  = static_cast<gcta_blas_int>(work_sz);
+    gcta_blas_int liwork = iwork_sz;
+    std::vector<double>        work(lwork);
+    std::vector<gcta_blas_int> iwork(liwork);
+    dsyevd_(&jobz, &uplo, &n, a, &lda, w,
+            work.data(), &lwork, iwork.data(), &liwork, &info);
+    return static_cast<int>(info);
+#else
+    return static_cast<int>(
+        LAPACKE_dsyevd(LAPACK_COL_MAJOR, 'V', 'U', n, a, lda, w));
+#endif
+}
+
+// ---- gcta_dsyevr -------------------------------------------------------
+// Partial symmetric eigensolver (MRRR), index range [il, iu] (1-based, ascending).
+// a[n×n]: input matrix (upper triangle, column-major); overwritten on return.
+// il, iu: indices of smallest/largest desired eigenvalue (1 ≤ il ≤ iu ≤ n).
+// m_found: receives count actually returned.
+// w:      eigenvalues (size ≥ iu-il+1), ascending.
+// z:      eigenvectors (n × (iu-il+1), column-major); ldz ≥ n.
+// isuppz: support array (size ≥ 2*(iu-il+1)).
+// Returns 0 on success, non-zero LAPACK info otherwise.
+inline int gcta_dsyevr(gcta_blas_int n, double* a, gcta_blas_int lda,
+                       gcta_blas_int il, gcta_blas_int iu,
+                       gcta_blas_int* m_found,
+                       double* w, double* z, gcta_blas_int ldz,
+                       gcta_blas_int* isuppz)
+{
+#if defined(GCTA_USE_ACCELERATE)
+    const char   jobz = 'V', range = 'I', uplo = 'U';
+    const double vl = 0.0, vu = 0.0, abstol = 0.0;
+    gcta_blas_int info = 0;
+    // Workspace query.
+    gcta_blas_int lwork_q = -1, liwork_q = -1;
+    double        work_sz;
+    gcta_blas_int iwork_sz;
+    dsyevr_(&jobz, &range, &uplo, &n, a, &lda,
+            &vl, &vu, &il, &iu, &abstol,
+            m_found, w, z, &ldz, isuppz,
+            &work_sz, &lwork_q, &iwork_sz, &liwork_q, &info);
+    if (info != 0) return static_cast<int>(info);
+    gcta_blas_int lwork  = static_cast<gcta_blas_int>(work_sz);
+    gcta_blas_int liwork = iwork_sz;
+    std::vector<double>        work(lwork);
+    std::vector<gcta_blas_int> iwork(liwork);
+    dsyevr_(&jobz, &range, &uplo, &n, a, &lda,
+            &vl, &vu, &il, &iu, &abstol,
+            m_found, w, z, &ldz, isuppz,
+            work.data(), &lwork, iwork.data(), &liwork, &info);
+    return static_cast<int>(info);
+#else
+    return static_cast<int>(
+        LAPACKE_dsyevr(LAPACK_COL_MAJOR, 'V', 'I', 'U', n, a, lda,
+                       0.0, 0.0, il, iu, 0.0,
+                       m_found, w, z, ldz, isuppz));
+#endif
+}
+
 #endif  //END GCTA_CPU_H

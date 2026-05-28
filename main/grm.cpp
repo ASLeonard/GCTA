@@ -23,6 +23,7 @@
 #include <boost/iostreams/filtering_stream.hpp>
 #include <Spectra/SymEigsSolver.h>
 #include <Spectra/MatOp/DenseSymMatProd.h>
+#include <cpu.h>   // gcta_dsyevd / gcta_dsyevr wrappers
 
 void gcta::enable_grm_bin_flag() {
     _grm_bin_flag = true;
@@ -1054,17 +1055,68 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
             LOGGER.e(0, "--pca-approx: unrecognised method '" + pca_approx + "'. Use 'Lanczos' or 'SVD'.");
         }
     } else {
-        if (n >= 32766)
-            LOGGER << "Warning: n = " << n << " likely exceeds LAPACKE's strict internal limit for workspace. Consider using --pca-approx for large GRMs." << std::endl;
-        if (out_pc_num != n)
-            LOGGER << "Warning: computing all " << n << " eigenvalues/vectors for PCA, but only " << out_pc_num << " will be output. Consider using --pca-approx for large GRMs." << std::endl;
-        LOGGER << "Using full eigenvalue decomposition (--pca-approx not set)." << std::endl;
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigs(grm_dbl);
-        if (eigs.info() != Eigen::Success)
-            LOGGER.e(0, "eigenvalue decomposition failed.");
-        // SelfAdjointEigenSolver returns eigenvalues in ascending order; reverse to get largest first.
-        eval = eigs.eigenvalues().reverse().head(out_pc_num);
-        evec = eigs.eigenvectors().rowwise().reverse().leftCols(out_pc_num);
+        if (out_pc_num == n && n >= 32766)
+            LOGGER << "Warning: n = " << n << " may exceed dsyevd's safe workspace limit "
+                      "(n >= 32766). Consider using --pca-approx for large GRMs." << std::endl;
+
+        // Pass the GRM storage directly to LAPACK (it is overwritten in-place).
+        // grm_dbl is a const-ref to _grm (or grm_dbl_storage), both genuinely
+        // non-const; we accept the destruction because PCA no longer needs the GRM.
+        double* grm_ptr = const_cast<double*>(grm_dbl.data());
+
+        if (out_pc_num == n) {
+            // Full spectrum: dsyevd writes eigenvectors directly into the GRM storage,
+            // so no extra n×n allocation is needed.  Write immediately with descending
+            // column indices — no reversed evec copy required either.
+            LOGGER << "Using dsyevd (all " << n << " eigenvalues)." << std::endl;
+            Eigen::VectorXd w(n);
+            int info = gcta_dsyevd((gcta_blas_int)n, grm_ptr, (gcta_blas_int)n, w.data());
+            if (info != 0)
+                LOGGER.e(0, "dsyevd failed (info=" + std::to_string(info) +
+                             "). For n > 32766, try --pca-approx.");
+
+            Eigen::Map<const Eigen::MatrixXd> eigvec(grm_ptr, n, n);
+            std::string eval_file = _out + ".eigenval";
+            std::ofstream o_eval(eval_file.c_str());
+            if (!o_eval) LOGGER.e(0, "cannot open the file [" + eval_file + "] to read.");
+            for (int i = n - 1; i >= 0; i--) o_eval << w(i) << std::endl;
+            o_eval.close();
+            LOGGER << "Eigenvalues of " << n << " individuals have been saved in [" + eval_file + "]." << std::endl;
+
+            std::string evec_file = _out + ".eigenvec";
+            std::ofstream o_evec(evec_file.c_str());
+            if (!o_evec) LOGGER.e(0, "cannot open the file [" + evec_file + "] to read.");
+            for (int i = 0; i < n; i++) {
+                o_evec << _fid[_keep[i]] << " " << _pid[_keep[i]];
+                for (int j = n - 1; j >= 0; j--) o_evec << " " << eigvec(i, j);
+                o_evec << std::endl;
+            }
+            o_evec.close();
+            LOGGER << "The first " << n << " eigenvectors of " << n << " individuals have been saved in [" + evec_file + "]." << std::endl;
+            return;
+        } else {
+            // Partial spectrum: dsyevr overwrites the GRM in-place but writes the
+            // requested eigenvectors to the separate Z buffer (n × out_pc_num),
+            // which is much smaller than n×n.
+            LOGGER << "Using dsyevr (top " << out_pc_num << " of " << n << " eigenvalues)." << std::endl;
+            Eigen::VectorXd            w(out_pc_num);
+            Eigen::MatrixXd            Z(n, out_pc_num);
+            gcta_blas_int              m_found = 0;
+            std::vector<gcta_blas_int> isuppz(2 * out_pc_num);
+            gcta_blas_int il = (gcta_blas_int)(n - out_pc_num + 1);
+            gcta_blas_int iu = (gcta_blas_int)n;
+            int info = gcta_dsyevr((gcta_blas_int)n, grm_ptr, (gcta_blas_int)n,
+                                   il, iu, &m_found,
+                                   w.data(), Z.data(), (gcta_blas_int)n,
+                                   isuppz.data());
+            if (info != 0)
+                LOGGER.e(0, "dsyevr failed (info=" + std::to_string(info) + ").");
+            if (m_found != (gcta_blas_int)out_pc_num)
+                LOGGER.e(0, "dsyevr returned " + std::to_string(m_found) +
+                             " eigenvalues, expected " + std::to_string(out_pc_num) + ".");
+            eval = w.reverse();
+            evec = Z.rowwise().reverse();
+        }
     }
 
     std::string eval_file = _out + ".eigenval";
