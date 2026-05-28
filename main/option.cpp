@@ -557,11 +557,11 @@ void option(int option_num, char* option_str[])
             if (i + 1 < argc && std::string_view{argv[i+1]}.substr(0, 2) != "--") {
                 out_pc_num = std::atoi(argv[++i]);
                 if (out_pc_num < 0) LOGGER.e(0, "\n the value to be specified after --pca should be positive.\n");
+                LOGGER << "--pca " << out_pc_num << std::endl;
             }
             else {
-                LOGGER << "\n  No number specified after --pca, default to output all PCs." << std::endl;
+                LOGGER << "--pca (\"all by default\")" << std::endl;
             }
-            LOGGER << "--pca " << out_pc_num << std::endl;
         } else if (flag == "--pca-approx") {
             i++;
             if (i >= argc || std::string_view{argv[i]}.substr(0, 2) == "--") {

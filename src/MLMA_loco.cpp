@@ -22,6 +22,7 @@
 #include "RemlCtx.hpp"
 #include "RemlEngine.hpp"
 #include "RemlState.hpp"
+#include "grm_binary_io.hpp"
 #include "mlma_woodbury.hpp"
 #include "Logger.h"
 #include "cpu.h"
@@ -55,6 +56,7 @@ using std::function;
 // ---------------------------------------------------------------------------
 map<string, string>  MLMALoco::options;
 map<string, double>  MLMALoco::options_d;
+map<string, vector<double>> MLMALoco::options_vd;
 vector<string>       MLMALoco::processFunctions;
 
 // ---------------------------------------------------------------------------
@@ -62,69 +64,9 @@ vector<string>       MLMALoco::processFunctions;
 // ---------------------------------------------------------------------------
 namespace {
 
-// Read a GCTA GRM binary file set (prefix.grm.id, prefix.grm.bin, prefix.grm.N.bin).
-// Returns:
-//   ids      — "FID\tIID" strings in GRM file order
-//   G        — full symmetric n×n matrix (double precision)
-//   m_snps   — SNP count from diagonal (0,0) of .grm.N.bin; 0 if N file missing
-void read_grm_binary(const string& prefix,
-                     vector<string>& ids,
-                     Eigen::MatrixXd& G,
-                     double& m_snps)
-{
-    // Read IDs
-    ids = Pheno::read_sublist(prefix + ".grm.id");
-    const int n = static_cast<int>(ids.size());
-    if (n == 0) LOGGER.e(0, "GRM id file [" + prefix + ".grm.id] is empty.");
-
-    const size_t tri = static_cast<size_t>(n) * (n + 1) / 2;
-
-    // Read GRM matrix (.grm.bin — float32, lower triangle row-by-row)
-    {
-        std::ifstream f(prefix + ".grm.bin", std::ios::binary);
-        if (!f.is_open()) LOGGER.e(0, "cannot open [" + prefix + ".grm.bin].");
-        vector<float> buf(tri);
-        f.read(reinterpret_cast<char*>(buf.data()),
-               static_cast<std::streamsize>(tri * sizeof(float)));
-        if (static_cast<size_t>(f.gcount()) != tri * sizeof(float))
-            LOGGER.e(0, "unexpected EOF in [" + prefix + ".grm.bin]. "
-                        "Expected " + to_string(tri) + " float32 entries for n=" + to_string(n) + ".");
-        G.resize(n, n);
-        size_t idx = 0;
-        for (int i = 0; i < n; ++i)
-            for (int j = 0; j <= i; ++j, ++idx) {
-                G(i, j) = static_cast<double>(buf[idx]);
-                G(j, i) = static_cast<double>(buf[idx]);
-            }
-    }
-
-    // Read SNP count matrix (.grm.N.bin — float32, same layout)
-    m_snps = 0.0;
-    {
-        std::ifstream fn(prefix + ".grm.N.bin", std::ios::binary);
-        if (fn.is_open()) {
-            float v0 = 0.0f;
-            fn.read(reinterpret_cast<char*>(&v0), sizeof(float));
-            if (fn.gcount() == sizeof(float)) m_snps = static_cast<double>(v0);
-        }
-    }
-}
-
-// Build a mapping from a reference ID list (ref_ids) to indices in grm_ids.
-// Returns kp[i] = index in grm_ids matching ref_ids[i], or -1 if not found.
-vector<int> match_ids_to_grm(const vector<string>& ref_ids,
-                              const vector<string>& grm_ids)
-{
-    map<string, int> grm_map;
-    for (int i = 0; i < (int)grm_ids.size(); ++i)
-        grm_map[grm_ids[i]] = i;
-    vector<int> kp(ref_ids.size(), -1);
-    for (int i = 0; i < (int)ref_ids.size(); ++i) {
-        auto it = grm_map.find(ref_ids[i]);
-        if (it != grm_map.end()) kp[i] = it->second;
-    }
-    return kp;
-}
+// Shared I/O helpers live in include/grm_binary_io.hpp as inline functions.
+using gcta_grm_io::read_grm_binary;
+using gcta_grm_io::match_ids_to_grm;
 
 // Manifest row
 struct ManifestRow {
@@ -172,6 +114,39 @@ int MLMALoco::registerOption(map<string, vector<string>>& options_in)
 
     const bool has_flag = (options_in.find("--mlma-loco-stream") != options_in.end());
     if (!has_flag) return 0;
+
+    if (options_in.find("--reml-alg") != options_in.end()
+            && !options_in["--reml-alg"].empty()) {
+        options_d["reml_alg"] = std::stod(options_in["--reml-alg"][0]);
+        options_in.erase("--reml-alg");
+    }
+    if (options_in.find("--reml-no-constrain") != options_in.end()) {
+        options["no_constrain"] = "1";
+        options_in.erase("--reml-no-constrain");
+    }
+    if (options_in.find("--reml-diagV-adj") != options_in.end()
+            && !options_in["--reml-diagV-adj"].empty()) {
+        options_d["reml_diagV_adj"] = std::stod(options_in["--reml-diagV-adj"][0]);
+        options_in.erase("--reml-diagV-adj");
+    }
+
+    if (options_in.find("--reml-priors-var") != options_in.end()) {
+        options["reml_priors_var"] = "1";
+        const auto& vals = options_in["--reml-priors-var"];
+        for (const auto& s : vals) {
+            if (!s.empty())
+                options_vd["reml_priors_var"].push_back(std::stod(s));
+        }
+        options_in.erase("--reml-priors-var");
+    }
+    if (options_in.find("--reml-priors") != options_in.end()) {
+        const auto& vals = options_in["--reml-priors"];
+        for (const auto& s : vals) {
+            if (!s.empty())
+                options_vd["reml_priors"].push_back(std::stod(s));
+        }
+        options_in.erase("--reml-priors");
+    }
 
     // --loco-manifest (mandatory)
     if (options_in.find("--loco-manifest") == options_in.end()
@@ -246,6 +221,23 @@ void MLMALoco::processMain()
             ? static_cast<int>(options_d.at("trace_approx_nprobes")) : 90;
         const int    reml_maxit = (options_d.count("reml_maxit") > 0)
             ? static_cast<int>(options_d.at("reml_maxit")) : 100;
+        const int    reml_alg = (options_d.count("reml_alg") > 0)
+            ? static_cast<int>(options_d.at("reml_alg")) : 0;
+        const int    reml_diagV_adj = (options_d.count("reml_diagV_adj") > 0)
+            ? static_cast<int>(options_d.at("reml_diagV_adj")) : 0;
+        const bool   no_constrain = options.count("no_constrain") > 0;
+
+        if (reml_alg < 0 || reml_alg > 2)
+            LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
+        if (reml_diagV_adj < 0 || reml_diagV_adj > 2)
+            LOGGER.e(0, "--reml-diagV-adj should be 0, 1, or 2.");
+        if (woodbury_rank != 0 && reml_alg == 1)
+            LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML (--reml-alg 1). Use AI-REML (default) or EM-REML (--reml-alg 2).");
+
+        const vector<double> priors =
+            options_vd.count("reml_priors") ? options_vd.at("reml_priors") : vector<double>{};
+        const vector<double> priors_var_global =
+            options_vd.count("reml_priors_var") ? options_vd.at("reml_priors_var") : vector<double>{};
 
         // ---- 1. Read manifest ----
         vector<ManifestRow> manifest = read_manifest(manifest_file);
@@ -412,6 +404,7 @@ void MLMALoco::processMain()
         // Woodbury basis for warm-starting across chromosomes
         Eigen::MatrixXd Uk_warmstart;
         Eigen::VectorXd dk_warmstart;
+        std::vector<double> varcmp_warmstart;
 
         // I/O batch buffer to reduce write() syscall overhead
         std::vector<char> io_buf(4 << 20);  // 4 MiB
@@ -423,13 +416,29 @@ void MLMALoco::processMain()
             }
         };
 
+        // Reuse large work buffers across chromosome iterations to reduce heap churn.
+        constexpr int BLOCK = 10000;
+        Eigen::MatrixXf X_block(n, BLOCK);
+        Eigen::VectorXf Xt_Vi_y(BLOCK);
+        Eigen::VectorXf xvx_diag(BLOCK);
+        vector<GenoBufItem> gbuf_items(BLOCK);
+        vector<uint8_t>     valid_v(BLOCK, 0);
+        vector<float>       af_v(BLOCK, 0.0f);
+
+        // Cache ID mapping when per-chr GRM ID ordering is identical across chromosomes.
+        vector<string> cached_grm_chr_ids;
+        vector<int>    kp_chr_cached;
+        bool           has_kp_chr_cache = false;
+
+        // Reused GRM read buffer to avoid repeated vector/matrix allocations.
+        vector<string> grm_chr_ids;
+        Eigen::MatrixXd G_chr_raw;
+
         for (size_t ci = 0; ci < manifest.size(); ++ci) {
             const ManifestRow& row = manifest[ci];
             LOGGER << "\n-----------------------------------\n#Chr " << row.chrom << ":" << std::endl;
 
             // ---- 7a. Load G_chr ----
-            vector<string> grm_chr_ids;
-            Eigen::MatrixXd G_chr_raw;
             double m_chr = 0.0;
             LOGGER << "  Reading per-chr GRM from [" << row.grm_chr << "] ..." << std::endl;
             read_grm_binary(row.grm_chr, grm_chr_ids, G_chr_raw, m_chr);
@@ -439,7 +448,22 @@ void MLMALoco::processMain()
                           + ".grm.N.bin]. Rebuild per-chr GRM without --no-grm-N.");
 
             // Match analysis_ids to chr GRM IDs
-            vector<int> kp_chr = match_ids_to_grm(analysis_ids, grm_chr_ids);
+            vector<int> kp_chr;
+            if (has_kp_chr_cache && grm_chr_ids == cached_grm_chr_ids) {
+                kp_chr = kp_chr_cached;
+            } else if (grm_chr_ids.size() == analysis_ids.size()
+                       && std::equal(grm_chr_ids.begin(), grm_chr_ids.end(), analysis_ids.begin())) {
+                kp_chr.resize(n);
+                std::iota(kp_chr.begin(), kp_chr.end(), 0);
+                cached_grm_chr_ids = grm_chr_ids;
+                kp_chr_cached = kp_chr;
+                has_kp_chr_cache = true;
+            } else {
+                kp_chr = match_ids_to_grm(analysis_ids, grm_chr_ids);
+                cached_grm_chr_ids = grm_chr_ids;
+                kp_chr_cached = kp_chr;
+                has_kp_chr_cache = true;
+            }
             for (int i = 0; i < n; ++i)
                 if (kp_chr[i] < 0)
                     LOGGER.e(0, "[LOCO] Chr " + to_string(row.chrom)
@@ -496,9 +520,10 @@ void MLMALoco::processMain()
             ctx.out = out_prefix + ".chr" + to_string(row.chrom);
 
             // REML config
-            ctx.reml_mtd       = 0;  // AI-REML
+            ctx.reml_mtd       = reml_alg;
             ctx.reml_max_iter  = reml_maxit;
             ctx.reml_inv_mtd   = 0;  // LLT
+            ctx.reml_diagV_adj = reml_diagV_adj;
             ctx.woodbury_rank  = woodbury_rank;
             ctx.woodbury_buffer_factor = 1.5;
             ctx.reml_trace_approx = trace_approx;
@@ -511,13 +536,21 @@ void MLMALoco::processMain()
             }
 
             // ---- 7d. Run REML ----
-            reml::compute(ctx, /*priors=*/{}, /*priors_var=*/{}, /*no_constrain=*/false);
+            // Warm-start variance components from previous chromosome.
+            // LOCO GRMs differ by one chromosome only, so V(G)/V(e) is typically close.
+            std::vector<double> priors_var =
+                (varcmp_warmstart.size() == ctx.r_indx.size()) ? varcmp_warmstart
+                                                                : std::vector<double>{};
+            if (priors_var.empty())
+                priors_var = priors_var_global;
+            reml::compute(ctx, priors, priors_var, no_constrain);
 
             // Save eigenvectors for warm-start in next chromosome
             if (ctx.Vi_use_woodbury && ctx.Uk.rows() > 0) {
                 Uk_warmstart = ctx.Uk;
                 dk_warmstart = ctx.dk;
             }
+            varcmp_warmstart = ctx.varcmp;
 
             LOGGER << "[LOCO] Chr " << row.chrom << " variance components: ";
             for (double vc : ctx.varcmp) LOGGER << vc << " ";
@@ -566,14 +599,6 @@ void MLMALoco::processMain()
 
             const uint32_t total_m = marker_chr->count_extract();
             LOGGER << "[LOCO] Chr " << row.chrom << ": " << total_m << " SNPs to test." << std::endl;
-
-            constexpr int BLOCK = 10000;
-            Eigen::MatrixXf X_block(n, BLOCK);
-            Eigen::VectorXf Xt_Vi_y(BLOCK);
-            Eigen::VectorXf xvx_diag(BLOCK);
-            vector<GenoBufItem> gbuf_items(BLOCK);
-            vector<uint8_t>     valid_v(BLOCK, 0);
-            vector<float>       af_v(BLOCK, 0.0f);
 
             int snp_done = 0;
             int last_pct = -1;

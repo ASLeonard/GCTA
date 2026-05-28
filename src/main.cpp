@@ -105,8 +105,9 @@ int main(int argc, char *argv[]){
         "--envir", "--optimal-rho", "--noSandwich", "--grid-size",
         "--GRM-tile-size",
         "--mlma-stream", "--load-reml", "--mlma-no-preadj-covar", "--log-pval",
-        "--reml-trace-approx",
-        "--mlma-loco-stream", "--loco-manifest", "--reml-woodbury", "--reml-maxit",
+        "--reml-trace-approx", "--reml-maxit", "--reml-woodbury", "--reml-alg",
+        "--reml-no-constrain", "--reml-priors", "--reml-priors-var", "--reml-diagV-adj",
+        "--mlma-loco-stream", "--loco-manifest",
     };
     map<string, vector<string>> options;
     vector<string> keys;
@@ -259,28 +260,30 @@ int main(int argc, char *argv[]){
 
     //start register the options
     // Please take care of the order, C++ has few reflation feature, I did in a ugly way.
-    vector<string> module_names = {"phenotype", "marker", "genotype", "covar", "GRM", "fastFAM", "LD", "mlma", "mlma_loco"};
+    // Note: "mlma" and "mlma_loco" must appear before "GRM" so that --grm is captured
+    // by the MLMA modules before GRM::registerOption unconditionally erases it.
+    vector<string> module_names = {"phenotype", "marker", "genotype", "covar", "mlma", "mlma_loco", "GRM", "fastFAM", "LD"};
     vector<int (*)(map<string, vector<string>>&)> registers = {
             Pheno::registerOption,
             Marker::registerOption,
             Geno::registerOption,
             Covar::registerOption,
+            MLMA::registerOption,
+            MLMALoco::registerOption,
             GRM::registerOption,
             FastFAM::registerOption,
-            LD::registerOption,
-            MLMA::registerOption,
-            MLMALoco::registerOption
+            LD::registerOption
     };
     vector<void (*)()> processMains = {
             Pheno::processMain,
             Marker::processMain,
             Geno::processMain,
             Covar::processMain,
+            MLMA::processMain,
+            MLMALoco::processMain,
             GRM::processMain,
             FastFAM::processMain,
-            LD::processMain,
-            MLMA::processMain,
-            MLMALoco::processMain
+            LD::processMain
     };
 
     vector<int> mains;

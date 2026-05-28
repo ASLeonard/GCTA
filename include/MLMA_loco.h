@@ -26,5 +26,6 @@ public:
 private:
     static std::map<std::string, std::string> options;
     static std::map<std::string, double>      options_d;
+    static std::map<std::string, std::vector<double>> options_vd;
     static std::vector<std::string>           processFunctions;
 };
