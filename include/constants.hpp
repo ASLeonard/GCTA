@@ -17,14 +17,11 @@
 #define CONSTANTS_H
 
 namespace Constants{
-    const int NUM_FAM_COL = 6;
-    const int NUM_BIM_COL = 6;
-    const int DEFAULT_AUTOSOME_NUM = 22;
+    constexpr int NUM_FAM_COL = 6;
+    constexpr int NUM_BIM_COL = 6;
+    constexpr int NUM_MARKER_READ = 120;
 
-    const int NUM_MARKER_READ = 120;
-
-    const double SMALL_EPSILON = 0.00000000000005684341886080801486968994140625; //2^(-44)
-    
+    constexpr double SMALL_EPSILON = 0x1p-44; // 2^-44
 }
 
 #endif

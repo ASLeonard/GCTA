@@ -71,9 +71,9 @@ public:
     void keep_extracted_index(const std::vector<uint32_t>& keep_index);
     void matchSNPListFile(string filename, int num_min_fields, const std::vector<int>& field_return, std::vector<string> &fields, std::vector<bool>& a_rev, bool update_a_rev = false);
     void save_marker(string filename);
-    std::vector<uint32_t> getNextWindowIndex(uint32_t cur_marker_index, uint32_t window, bool& chr_ends, bool& isX, bool retRaw = true);
-    std::vector<uint32_t> getNextSizeIndex(uint32_t cur_marker_index, uint32_t num, bool& chr_ends, bool& isX, bool retRaw = false);
-    uint32_t getNextSize(const std::vector<uint32_t> &rawRef, uint32_t curExtractIndex, uint32_t num, int &fileIndex, bool &chr_ends, uint8_t &isSexXY);
+    std::vector<uint32_t> getNextWindowIndex(uint32_t cur_marker_index, uint32_t window, bool& chr_ends, bool& isHomogameticChrom, bool retRaw = true);
+    std::vector<uint32_t> getNextSizeIndex(uint32_t cur_marker_index, uint32_t num, bool& chr_ends, bool& isHomogameticChrom, bool retRaw = false);
+    uint32_t getNextSize(const std::vector<uint32_t> &rawRef, uint32_t curExtractIndex, uint32_t num, int &fileIndex, bool &chr_ends, uint8_t &sexChromType);
     uint32_t getNextWindowSize(uint32_t cur_marker_index, uint32_t window);
 
     MarkerParam getMarkerParams(int part_num);

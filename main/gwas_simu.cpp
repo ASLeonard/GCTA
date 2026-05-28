@@ -496,6 +496,10 @@ void gcta::save_bimfile()
  */
 void gcta::genet_dst(std::string bfile, std::string hapmap_genet_map)
 {
+    if (!autosomeBoundSpecified()) {
+        LOGGER.e(0, "--hapmap-genet-dst requires --autosome-num to specify how many chromosome map files to load.");
+    }
+
     // Read bim file
     read_bimfile(bfile + ".bim");
     int snp_num = _snp_name.size();
@@ -531,21 +535,26 @@ void gcta::genet_dst(std::string bfile, std::string hapmap_genet_map)
             dst[i] = 0.0;
             continue;
         }
-        auto iter1 = upper_bound(hap_genet[_chr[i] - 1][0].begin(), hap_genet[_chr[i] - 1][0].end(), _bp[i - 1]);
-        auto iter2 = upper_bound(hap_genet[_chr[i] - 1][0].begin(), hap_genet[_chr[i] - 1][0].end(), _bp[i]);
-        if (iter1 == hap_genet[_chr[i] - 1][0].end() || iter2 == hap_genet[_chr[i] - 1][0].end()) {
+        if (_chr[i] < 1 || _chr[i] > _autosome_num) {
+            LOGGER.e(0, "--hapmap-genet-dst encountered chromosome " + std::to_string(_chr[i]) +
+                        " in the BIM, but expected autosomal IDs in [1, " + std::to_string(_autosome_num) + "]");
+        }
+        const int chr_index = _chr[i] - 1;
+        auto iter1 = upper_bound(hap_genet[chr_index][0].begin(), hap_genet[chr_index][0].end(), _bp[i - 1]);
+        auto iter2 = upper_bound(hap_genet[chr_index][0].begin(), hap_genet[chr_index][0].end(), _bp[i]);
+        if (iter1 == hap_genet[chr_index][0].end() || iter2 == hap_genet[chr_index][0].end()) {
             dst[i] = _bp[i] - _bp[i - 1];
             continue;
         }
-        pos1 = iter1 - hap_genet[_chr[i] - 1][0].begin();
-        pos2 = iter2 - hap_genet[_chr[i] - 1][0].begin();
+        pos1 = iter1 - hap_genet[chr_index][0].begin();
+        pos2 = iter2 - hap_genet[chr_index][0].begin();
         prev_bp = _bp[i - 1];
         while (pos1 < pos2) {
-            dst[i] += (hap_genet[_chr[i] - 1][0][pos1] - prev_bp) * hap_genet[_chr[i] - 1][1][pos1 - 1];
-            prev_bp = hap_genet[_chr[i] - 1][0][pos1];
+            dst[i] += (hap_genet[chr_index][0][pos1] - prev_bp) * hap_genet[chr_index][1][pos1 - 1];
+            prev_bp = hap_genet[chr_index][0][pos1];
             pos1++;
         }
-        dst[i] += (_bp[i] - prev_bp) * hap_genet[_chr[i] - 1][1][pos1 - 1];
+        dst[i] += (_bp[i] - prev_bp) * hap_genet[chr_index][1][pos1 - 1];
     }
 
     // Output fam file

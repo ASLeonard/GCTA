@@ -25,6 +25,9 @@
 #include <set>
 #include <algorithm>
 #include <fstream>
+#include <filesystem>
+#include <cctype>
+#include <system_error>
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
 
@@ -36,6 +39,50 @@ bool file_exists(std::string filestr) {
         return true;
     }
     else return false;
+}
+
+static std::vector<int> get_ld_chr_indices(const std::string& ld_dir, int autosome_num, const std::vector<std::string>& suffixes) {
+    if (autosome_num > 0) {
+        std::vector<int> chr_indices(autosome_num);
+        std::iota(chr_indices.begin(), chr_indices.end(), 1);
+        return chr_indices;
+    }
+
+    namespace fs = std::filesystem;
+    std::set<int> chr_idx_set;
+    std::error_code ec;
+    const fs::path dir_path(ld_dir.empty() ? "." : ld_dir);
+    if (!fs::exists(dir_path, ec) || !fs::is_directory(dir_path, ec)) {
+        LOGGER.e(0, "LD score directory does not exist or is not a directory: [" + dir_path.string() + "]");
+    }
+
+    for (const auto& entry : fs::directory_iterator(dir_path, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file()) continue;
+        const std::string filename = entry.path().filename().string();
+
+        for (const auto& suffix : suffixes) {
+            if (filename.size() <= suffix.size()) continue;
+            if (!filename.ends_with(suffix)) continue;
+
+            const std::string prefix = filename.substr(0, filename.size() - suffix.size());
+            if (prefix.empty()) continue;
+            const bool all_digits = std::all_of(prefix.begin(), prefix.end(),
+                                                [](unsigned char c){ return std::isdigit(c) != 0; });
+            if (!all_digits) continue;
+
+            chr_idx_set.insert(std::stoi(prefix));
+        }
+    }
+
+    if (ec) {
+        LOGGER.e(0, "failed to enumerate LD score files under [" + dir_path.string() + "]");
+    }
+    if (chr_idx_set.empty()) {
+        LOGGER.e(0, "no chromosome-indexed LD score files were found under [" + dir_path.string() + "]");
+    }
+
+    return std::vector<int>(chr_idx_set.begin(), chr_idx_set.end());
 }
 
 std::vector<std::vector<int>> split_extract(std::vector<int> extract) {
@@ -1703,10 +1750,10 @@ std::vector<double> gcta::gsmr_meta(std::vector<std::string> &snp_instru, eigenV
 int read_ld_marker(std::string ref_ld_dirt, int autosome_num) {
     // Read the number of markers
     int i = 0, i_buf = 0, ttl_mk_num = 0;
-    int chr_num = (autosome_num > 0) ? autosome_num : Constants::DEFAULT_AUTOSOME_NUM;
     std::string filestr = "", strbuf = "";
-    for(i=0; i<chr_num; i++) {
-        filestr = ref_ld_dirt + std::to_string(i+1)+ ".l2.M_5_50";
+    const auto chr_indices = get_ld_chr_indices(ref_ld_dirt, autosome_num, {".l2.M_5_50"});
+    for (int chr_id : chr_indices) {
+        filestr = ref_ld_dirt + std::to_string(chr_id) + ".l2.M_5_50";
         std::ifstream ref_marker(filestr.c_str());
         if (!ref_marker) LOGGER.e(0, "cannot open the file [" + filestr + "] to read.");
         std::getline(ref_marker, strbuf);
@@ -1805,15 +1852,15 @@ std::vector<std::string> read_ld_score(std::string ld_dirt, std::map<std::string
 
     // Read the reference / weighted LD score
     int i = 0;
-    int chr_num = (autosome_num > 0) ? autosome_num : Constants::DEFAULT_AUTOSOME_NUM;
     std::string filestr_t1 = "", filestr_t2 = "";
     std::vector<std::string> ld_score_snps, snpbuf;
+    const auto chr_indices = get_ld_chr_indices(ld_dirt, autosome_num, {".l2.ldscore", ".l2.ldscore.gz"});
     
     ld_score.clear(); ld_score.resize(nsnp);
     for(i=0; i<nsnp; i++) ld_score[i] = -9.0;
-    for(i=0; i<chr_num; i++) {
-        filestr_t1 = ld_dirt  + std::to_string(i+1)+ ".l2.ldscore";
-        filestr_t2 = ld_dirt  + std::to_string(i+1)+ ".l2.ldscore.gz";
+    for (int chr_id : chr_indices) {
+        filestr_t1 = ld_dirt  + std::to_string(chr_id) + ".l2.ldscore";
+        filestr_t2 = ld_dirt  + std::to_string(chr_id) + ".l2.ldscore.gz";
         if(file_exists(filestr_t1)) {
             snpbuf = read_ld_score_txt(filestr_t1, snplist_map, ld_score);
             ld_score_snps.insert(ld_score_snps.end(), snpbuf.begin(), snpbuf.end());

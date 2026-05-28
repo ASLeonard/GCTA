@@ -96,6 +96,8 @@ private:
     void read_sample(string sample_file);
     void read_psam(string psam_file);
     void read_checkMPSample(string m_file);
+    static int8_t normalizeSexCode(int raw_code);
+    static void loadSexCodeMappingFromFile(const string& file_path);
     void update_pheno(vector<string>& indi_marks, vector<double>& phenos);
     void update_sex(vector<string>& indi_marks, vector<double>& sex);
     void init_mask_block();
@@ -107,6 +109,8 @@ private:
     vector<uint64_t> mask_add_items;
  
     static map<string, string> options;
+    static int8_t heterogametic_sex_code;
+    static int8_t homogametic_sex_code;
     friend class Geno;
 
 };

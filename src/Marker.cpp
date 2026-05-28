@@ -103,6 +103,8 @@ void Marker::loadSexChromosomeFile(const std::string& file_path) {
 
     std::set<std::string> file_homog;
     std::set<std::string> file_hetero;
+    bool found_homog = false;
+    bool found_heterog = false;
 
     std::string line;
     while (std::getline(fin, line)) {
@@ -113,26 +115,48 @@ void Marker::loadSexChromosomeFile(const std::string& file_path) {
         std::vector<std::string> toks;
         boost::split(toks, line, boost::is_any_of("\t "), boost::token_compress_on);
         if (toks.empty()) continue;
+        if (toks.size() < 3) {
+            LOGGER.e(0, "invalid --sex-chr-file format. Require at least 3 columns per non-comment line: <HOMOGAMETIC|HETEROGAMETIC> <PLINK sex code 1|2> <chromosome labels...>.");
+        }
 
         const std::string key = normalizeChrLabel(toks[0]);
+        int plink_sex_code = -1;
+        try {
+            plink_sex_code = std::stoi(toks[1]);
+        } catch (std::invalid_argument&) {
+            LOGGER.e(0, "invalid PLINK sex code [" + toks[1] + "] in --sex-chr-file. Expected 1 or 2.");
+        } catch (std::out_of_range&) {
+            LOGGER.e(0, "PLINK sex code [" + toks[1] + "] is out of range in --sex-chr-file.");
+        }
+        if (plink_sex_code != 1 && plink_sex_code != 2) {
+            LOGGER.e(0, "invalid PLINK sex code [" + toks[1] + "] in --sex-chr-file. Expected 1 or 2.");
+        }
+
         if (key == "HOMOGAMETIC" || key == "HOMO" || key == "XX") {
-            for (size_t i = 1; i < toks.size(); ++i) {
+            if (plink_sex_code != 2) {
+                LOGGER.e(0, "invalid --sex-chr-file mapping for HOMOGAMETIC. Fixed PLINK coding requires HOMOGAMETIC=2.");
+            }
+            found_homog = true;
+            for (size_t i = 2; i < toks.size(); ++i) {
                 const std::string v = normalizeChrLabel(toks[i]);
                 if (!v.empty()) file_homog.insert(v);
             }
         } else if (key == "HETEROGAMETIC" || key == "HETERO" || key == "XY") {
-            for (size_t i = 1; i < toks.size(); ++i) {
+            if (plink_sex_code != 1) {
+                LOGGER.e(0, "invalid --sex-chr-file mapping for HETEROGAMETIC. Fixed PLINK coding requires HETEROGAMETIC=1.");
+            }
+            found_heterog = true;
+            for (size_t i = 2; i < toks.size(); ++i) {
                 const std::string v = normalizeChrLabel(toks[i]);
                 if (!v.empty()) file_hetero.insert(v);
             }
-        } else if (toks.size() >= 2) {
-            file_homog.insert(normalizeChrLabel(toks[0]));
-            file_hetero.insert(normalizeChrLabel(toks[1]));
+        } else {
+            LOGGER.e(0, "invalid --sex-chr-file line prefix [" + toks[0] + "]. Use HOMOGAMETIC/HETEROGAMETIC.");
         }
     }
 
-    if (file_homog.empty() || file_hetero.empty()) {
-        LOGGER.e(0, "invalid --sex-chr-file format. Provide either 'HOMOGAMETIC <labels>' and 'HETEROGAMETIC <labels>' lines, or paired labels per line (e.g. 'XX XY').");
+    if (!found_homog || !found_heterog || file_homog.empty() || file_hetero.empty()) {
+        LOGGER.e(0, "invalid --sex-chr-file format. Provide both 'HOMOGAMETIC <PLINK sex code 1|2> <labels...>' and 'HETEROGAMETIC <PLINK sex code 1|2> <labels...>' lines.");
     }
 
     for (const auto& v : file_homog) {
@@ -392,7 +416,7 @@ void Marker::read_mbgen(string mbgen_file){
 
 
 //cur_marker_index:  is the index point to position of index_extract
-std::vector<uint32_t> Marker::getNextWindowIndex(uint32_t cur_marker_index, uint32_t window, bool& chr_ends, bool& isX, bool retRaw){
+std::vector<uint32_t> Marker::getNextWindowIndex(uint32_t cur_marker_index, uint32_t window, bool& chr_ends, bool& isHomogameticChrom, bool retRaw){
     std::vector<uint32_t> indices;
     if(cur_marker_index >= index_extract.size()){
         chr_ends = true;
@@ -405,7 +429,7 @@ std::vector<uint32_t> Marker::getNextWindowIndex(uint32_t cur_marker_index, uint
     uint32_t final_pd = window + cur_pd;
 
     chr_ends = false;
-    isX = isHomogameticChr(cur_chr);
+    isHomogameticChrom = isHomogameticChr(cur_chr);
 
     for(uint32_t marker_index = cur_marker_index; marker_index < index_extract.size(); marker_index++){
         uint32_t temp_index = index_extract[marker_index];
@@ -422,7 +446,7 @@ std::vector<uint32_t> Marker::getNextWindowIndex(uint32_t cur_marker_index, uint
     return indices;
 }
 
-uint32_t Marker::getNextSize(const std::vector<uint32_t> &rawRef, uint32_t curExtractIndex, uint32_t num, int &fileIndex, bool &chr_ends, uint8_t &isSexXY){
+uint32_t Marker::getNextSize(const std::vector<uint32_t> &rawRef, uint32_t curExtractIndex, uint32_t num, int &fileIndex, bool &chr_ends, uint8_t &sexChromType){
     if(curExtractIndex >= rawRef.size()){
         chr_ends = true;
         return 0;
@@ -434,11 +458,11 @@ uint32_t Marker::getNextSize(const std::vector<uint32_t> &rawRef, uint32_t curEx
     chr_ends = false;
     
     if(isHomogameticChr(cur_chr)){
-        isSexXY = 1;
+        sexChromType = 1;
     }else if(isHeterogameticChr(cur_chr)){
-        isSexXY = 2;
+        sexChromType = 2;
     }else{
-        isSexXY = 0;
+        sexChromType = 0;
     }
 
     fileIndex = getMIndex(cur_index);
@@ -465,7 +489,7 @@ uint32_t Marker::getNextSize(const std::vector<uint32_t> &rawRef, uint32_t curEx
 
 
 
-std::vector<uint32_t> Marker::getNextSizeIndex(uint32_t cur_marker_index, uint32_t num, bool& chr_ends, bool& isX, bool retRaw){
+std::vector<uint32_t> Marker::getNextSizeIndex(uint32_t cur_marker_index, uint32_t num, bool& chr_ends, bool& isHomogameticChrom, bool retRaw){
     std::vector<uint32_t> indices;
     indices.reserve(num);
     if(cur_marker_index >= index_extract.size()){
@@ -476,7 +500,7 @@ std::vector<uint32_t> Marker::getNextSizeIndex(uint32_t cur_marker_index, uint32
     std::string cur_chr = chr[cur_index];
 
     chr_ends = false;
-    isX = isHomogameticChr(cur_chr);
+    isHomogameticChrom = isHomogameticChr(cur_chr);
 
     for(uint32_t marker_index = cur_marker_index; marker_index < cur_marker_index + num; marker_index++){
         if(marker_index >= index_extract.size()){
@@ -1596,25 +1620,22 @@ int Marker::registerOption(map<string, std::vector<string>>& options_in){
         // Keep autosome bound unspecified unless --autosome-num is provided.
         options_i["last_chr_autosome"] = 0;
     }
-    options_i["last_chr"] = (options_i["autosome_num_explicit"] == 1)
-                          ? (options_i["last_chr_autosome"] + 4)
-                          : (std::numeric_limits<int>::max() - 4);
     if(options_i.find("start_chr") == options_i.end()){
         options_i["start_chr"] = 0;
-        options_i["end_chr"] = options_i["last_chr"];
+        options_i["end_chr"] = 0;
     }
 
     bool filterChrFlag = false;
     static bool specifiedChrFlag = false;
 
     if(options_in.find("--autosome") != options_in.end()){
-        if(specifiedChrFlag){
+        if(specifiedChrFlag && options_i["autosome_num_explicit"] == 1){
             if(options_i["start_chr"] < 1 || options_i["end_chr"] > options_i["last_chr_autosome"]){
-                LOGGER.e(0, "the chromosome number specified for --chr is not within the range for the autosomes (i.e., 1 to --autosome-num)");
+                LOGGER.e(0, "the numeric chromosome value specified for --chr is out of the autosome range defined by --autosome-num.");
             }
         }
         options_i["start_chr"] = 1;
-        options_i["end_chr"] = options_i["last_chr_autosome"];
+        options_i["end_chr"] = (options_i["autosome_num_explicit"] == 1) ? options_i["last_chr_autosome"] : 0;
         allowed_chrs.clear();
         if(options_i["autosome_num_explicit"] == 1){
             for(int c = options_i["start_chr"]; c <= options_i["end_chr"]; c++){
@@ -1632,13 +1653,13 @@ int Marker::registerOption(map<string, std::vector<string>>& options_in){
         if(filterChrFlag){
             LOGGER.w(0, "One of the chromosome filtering criteria has been applied, which has been overridden by --autosome-sex");
         }
-        if(specifiedChrFlag){
+        if(specifiedChrFlag && options_i["autosome_num_explicit"] == 1){
             if(options_i["start_chr"] < 1 || options_i["end_chr"] > options_i["last_chr_autosome"] + 2){
-                LOGGER.e(0, "The chromosome number specified for --chr is not within the range for the autosomes plus sex chromosomes.");
+                LOGGER.e(0, "the numeric chromosome value specified for --chr is out of range for the autosome-plus-sex set defined by --autosome-num.");
             }
         }
         options_i["start_chr"] = 1;
-        options_i["end_chr"] = options_i["last_chr_autosome"] + 2;
+        options_i["end_chr"] = (options_i["autosome_num_explicit"] == 1) ? (options_i["last_chr_autosome"] + 2) : 0;
         allowed_chrs.clear();
         if(options_i["autosome_num_explicit"] == 1){
             for(int c = 1; c <= options_i["last_chr_autosome"]; c++){
@@ -1667,8 +1688,8 @@ int Marker::registerOption(map<string, std::vector<string>>& options_in){
             try{
                 options_i["start_chr"] = std::stoi(chr_args[0]);
                 options_i["end_chr"] = options_i["start_chr"];
-                if(options_i["start_chr"] < 0 || options_i["end_chr"] > options_i["last_chr"]){
-                    LOGGER.e(0, "the value specified for --chr is out of the accepted numeric range.");
+                if(options_i["start_chr"] < 1){
+                    LOGGER.e(0, "the value specified for --chr must be >= 1.");
                 }
                 allowed_chrs.insert(std::to_string(options_i["start_chr"]));
             }catch(std::invalid_argument&){
@@ -1688,8 +1709,8 @@ int Marker::registerOption(map<string, std::vector<string>>& options_in){
             if(both_numeric){
                 options_i["start_chr"] = chr_start;
                 options_i["end_chr"] = chr_end;
-                if(options_i["start_chr"] < 0 || options_i["end_chr"] > options_i["last_chr"]){
-                    LOGGER.e(0, "the value specified for --chr is out of the accepted numeric range.");
+                if(options_i["start_chr"] < 1 || options_i["end_chr"] < 1){
+                    LOGGER.e(0, "the numeric value(s) specified for --chr must be >= 1.");
                 }
                 if(options_i["start_chr"] > options_i["end_chr"]){
                     LOGGER.e(0, "--chr numeric range is invalid: start is larger than end.");
@@ -1713,13 +1734,8 @@ int Marker::registerOption(map<string, std::vector<string>>& options_in){
         if(filterChrFlag){
             LOGGER.w(0, "One of the CHR filtering criteria has been applied, which has been overridden by --chr-homogametic");
         }
-        if(options_i["autosome_num_explicit"] == 1){
-            options_i["start_chr"] = options_i["last_chr_autosome"] + 1;
-            options_i["end_chr"] = options_i["start_chr"];
-        }else{
-            options_i["start_chr"] = 0;
-            options_i["end_chr"] = 0;
-        }
+        options_i["start_chr"] = 0;
+        options_i["end_chr"] = 0;
         options_i["chr_filter_mode"] = 0;
         allowed_chrs = homogametic_chrs;
         filterChrFlag = true;

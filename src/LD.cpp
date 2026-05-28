@@ -191,9 +191,9 @@ void LD::processMain(){
 
             while(cur_index_marker < total_num_marker){
                 cur_buffer = !cur_buffer;
-                bool isX;
+                bool isHomogameticChrom;
                 // retRaw=false: returns extract-list positions, which is what loopDouble expects
-                vector<uint32_t> indices1 = marker.getNextWindowIndex(cur_index_marker, window, chr_ends, isX, false);
+                vector<uint32_t> indices1 = marker.getNextWindowIndex(cur_index_marker, window, chr_ends, isHomogameticChrom, false);
                 geno_buffer[cur_buffer].reset(new double[indices1.size() * num_indi]);
                 cur_buffer_offset[cur_buffer] = 0;
                 geno.loopDouble(indices1, static_cast<int>(indices1.size()), true, true, true, false, callBacks, false);

@@ -104,18 +104,18 @@ try {
     int        preFileIndex   = -1;
     int        fileIndex      = 0;
     bool       chr_ends       = false;
-    uint8_t    isSexXY        = 0;
+    uint8_t    sexChromType        = 0;
     PgenReader reader;
 
     while (finishedMarker < numMarker) {
         uint32_t nextSize = g_.marker->getNextSize(
             rawIndices, finishedMarker, markerBlock,
-            fileIndex, chr_ends, isSexXY);
+            fileIndex, chr_ends, sexChromType);
         if (nextSize == 0) break;
 
         GenoBlock block;
         block.numMarkers = nextSize;
-        block.isSexXY   = isSexXY;
+        block.sexChromType   = sexChromType;
         block.fileIndex  = fileIndex;
         block.buf.resize(static_cast<std::size_t>(stride) * nextSize);
         block.extractIndex.assign(

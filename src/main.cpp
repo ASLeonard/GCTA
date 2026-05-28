@@ -96,7 +96,7 @@ int main(int argc, char *argv[]){
         "--grm-cutoff", "--grm-singleton", "--cutoff-detail", "--make-bK-sparse", "--make-bK", "--pheno",
         "--mpheno", "--ge", "--fastGWA", "--fastGWA-mlm", "--fastGWA-mlm-exact", "--fastGWA-lr", "--save-fastGWA-mlm-residual", "--grm-sparse", "--qcovar", "--covar", "--rcovar", "--covar-maxlevel", "--make-grm-d", "--make-grm-d-part",
         "--cg", "--ldlt", "--llt", "--pardiso", "--tcg", "--lscg", "--save-inv", "--load-inv",
-        "--update-ref-allele", "--update-freq", "--update-sex", "--mbfile", "--freqx", "--make-grm-xchr", "--make-grm-xchr-part", "--dc", "--make-grm-alg",
+        "--update-ref-allele", "--update-freq", "--update-sex", "--mbfile", "--freqx", "--make-grm-homogametic", "--make-grm-homogametic-part", "--dc", "--make-grm-alg",
         "--make-bed", "--recodet", "--sum-geno-x", "--sample", "--bgen", "--mbgen", "--hard-call-thresh", "--dosage-call", "--dosage", "--mgrm", "--unify-grm", "--rel-only", 
         "--ld-matrix", "--r", "--ld-wind", "--r2", "--subtract-grm", "--save-pheno", "--save-bin", "--no-marker", "--joint-covar", "--sparse-cutoff", "--noblas", "--fastGWA-gram",
         "--inv-t1", "--est-vg", "--force-gwa", "--reml-detail", "--h2-limit", "--gwa-no-constrain", "--verbose", "--c-inf", "--c-inf-no-filter", "--geno", "--info", "--nofilter",

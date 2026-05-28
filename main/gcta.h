@@ -117,8 +117,8 @@ public:
     void read_indi_blup(std::string blup_indi_file);
     void save_XMat(bool miss_with_mu, bool std);
 
-    void make_grm(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool output_bin, int grm_mtd, bool mlmassoc, bool diag_f3_flag = false, std::string subpopu_file = "");
-    //void make_grm_pca(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool output_bin, int grm_mtd, double wind_size, bool mlmassoc);
+    void make_grm(bool grm_d_flag, bool grm_homogametic_flag, bool inbred, bool output_bin, int grm_mtd, bool mlmassoc, bool diag_f3_flag = false, std::string subpopu_file = "");
+    //void make_grm_pca(bool grm_d_flag, bool grm_homogametic_flag, bool inbred, bool output_bin, int grm_mtd, double wind_size, bool mlmassoc);
     void save_grm(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, std::string sex_file, double grm_cutoff, double adj_grm_fac, int dosage_compen, bool merge_grm_flag, bool output_grm_bin);
     void align_grm(std::string m_grm_file);
     void pca(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num, std::string pca_approx = "");
@@ -187,7 +187,7 @@ public:
 
     // LD pruning
     void LD_pruning(double rsq_cutoff, int wind_size);
-    //void make_grm_wt_mkl(string i_ld_file, int wind_m, double wt_ld_cut, bool grm_xchr_flag, bool inbred, bool output_bin, int grm_mtd=0, int wt_mtd=0, bool mlmassoc=false, bool impData_flag=false, int ttl_snp_num=-1);
+    //void make_grm_wt_mkl(string i_ld_file, int wind_m, double wt_ld_cut, bool grm_homogametic_flag, bool inbred, bool output_bin, int grm_mtd=0, int wt_mtd=0, bool mlmassoc=false, bool impData_flag=false, int ttl_snp_num=-1);
 
     void make_uni_id(std::vector<std::string> &uni_id, std::map<std::string, int> &uni_id_map);
 
@@ -291,10 +291,10 @@ private:
     bool make_XMat(Eigen::MatrixXf &X);
     bool make_XMat_d(Eigen::MatrixXf &X);
     //void make_XMat_SNPs(vector< vector<float> > &X, bool miss_with_mu);
-    void std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std);
-    void std_XMat_subpopu(std::string subpopu_file, Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std);
+    void std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_homogametic_flag, bool miss_with_mu, bool divid_by_std);
+    void std_XMat_subpopu(std::string subpopu_file, Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_homogametic_flag, bool miss_with_mu, bool divid_by_std);
     void std_XMat_d(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu, bool divid_by_std);
-    //void std_XMat(vector< vector<float> > &X, vector<double> &sd_SNP, bool grm_xchr_flag, bool divid_by_std = true);
+    //void std_XMat(vector< vector<float> > &X, vector<double> &sd_SNP, bool grm_homogametic_flag, bool divid_by_std = true);
     void makex_eigenVector(int j, eigenVector &x, bool resize = true, bool minus_2p = false);
     void makex_eigenVector_std(int j, eigenVector &x, bool resize = true, double snp_std = 1.0);
     //void make_XMat_eigenMatrix(MatrixXf &X);
@@ -306,7 +306,7 @@ private:
     void calcu_maf();
     void mu_func(int j, std::vector<double> &fac);
     void check_autosome();
-    void check_chrX();
+    void check_homogametic_chromosomes();
     void check_sex();
 
     // grm
@@ -538,6 +538,9 @@ private:
     }
     
 private:
+    bool autosomeBoundSpecified() const { return _autosome_num > 0; }
+    bool isAutosomalChr(int chr) const { return chr > 0 && (!autosomeBoundSpecified() || chr <= _autosome_num); }
+
     // read in plink files
     // bim file
     int _autosome_num;
@@ -581,6 +584,9 @@ private:
     // _snp_1/_snp_2 are preserved across multiple different extract_chr() calls
     // (e.g. the LOCO per-chromosome loop in mlma_loco_v2).
     bool _make_XMat_no_compact = false;
+    // Legacy path: selected homogametic chromosome ID for sex-aware scaling.
+    // 0 means not set (treat all markers as autosomal in calcu_mu).
+    int _legacy_homogametic_chr = 0;
     GeneticModel _genetic_model;
     Eigen::MatrixXf _geno_dose;  // (n_indi, n_snp), column-major; dense indices after compaction
     std::vector<double> _impRsq;
