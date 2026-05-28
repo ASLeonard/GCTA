@@ -783,6 +783,9 @@ void gcta::reml(bool pred_rand_eff, bool est_fix_eff, bool est_fix_eff_var, std:
     double lgL_rdu_mdl = 0.0, LRT = 0.0;
     if (!no_lrt) {
         lgL_rdu_mdl = lgL_reduce_mdl(no_constrain);
+        if (lgL_rdu_mdl > lgL + 1e-6) {
+            LOGGER.w(0, "reduced-model logL is greater than full-model logL; possible numerical instability.");
+        }
         LRT = 2.0 * (lgL - lgL_rdu_mdl);
         if (LRT < 0.0) LRT = 0.0;
     }
@@ -1288,7 +1291,12 @@ double gcta::reml_iteration(eigenMatrix &Vi_X, eigenMatrix &Xt_Vi_X_i, eigenMatr
 
         // convergence
         dlogL = lgL - prev_lgL;
-        if ((varcmp - prev_varcmp).squaredNorm() / varcmp.squaredNorm() < 1e-8 && (fabs(dlogL) < 1e-4 || (fabs(dlogL) < 1e-2 && dlogL < 0))) {
+        const double lgL_scale = std::max(1.0, fabs(lgL));
+        const double dlogL_rel = fabs(dlogL) / lgL_scale;
+        const double vc_rel = (varcmp - prev_varcmp).squaredNorm() / std::max(1.0, varcmp.squaredNorm());
+        const bool like_small = (fabs(dlogL) < 1e-4)
+            || (dlogL_rel < 1e-6);
+        if (vc_rel < 1e-8 && like_small) {
             converged_flag = true;
             if (_reml_mtd == 2) {
                 if (_P.size() == 0) calcu_P(_Vi, Vi_X, Xt_Vi_X_i, _P);
@@ -1713,6 +1721,7 @@ bool gcta::calcu_Vi(eigenMatrix &Vi, eigenVector &prev_varcmp, double &logdet, i
         Vi.swap(_Vi_L);
     Vi.resize(_n, _n);
     if (_r_indx.size() == 1) {
+        Vi.triangularView<Eigen::Lower>().setZero();
         Vi.diagonal() = eigenVector::Constant(_n, 1.0 / prev_varcmp[0]);
         logdet = _n * log(prev_varcmp[0]);
     } 
@@ -2316,7 +2325,6 @@ void gcta::em_reml(eigenMatrix &P, eigenVector &Py, eigenVector &prev_varcmp, ei
         }
         varcmp(i) = prev_varcmp(i) - prev_varcmp(i) * prev_varcmp(i) * (tr_PA(i) - R(i)) / _n;
     }
-
 
     // Calculate variance component
     //for (i = 0; i < _r_indx.size(); i++) varcmp(i) = (prev_varcmp(i) * _n - prev_varcmp(i) * prev_varcmp(i) * tr_PA(i) + prev_varcmp(i) * prev_varcmp(i) * R(i)) / _n;

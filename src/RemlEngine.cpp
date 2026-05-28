@@ -238,6 +238,7 @@ bool calcu_Vi(RemlCtx& ctx, RemlVec& prev_varcmp, double& logdet, int& iter, boo
     ctx.Vi.resize(ctx.n, ctx.n);
 
     if (ctx.r_indx.size() == 1) {
+        ctx.Vi.triangularView<Eigen::Lower>().setZero();
         ctx.Vi.diagonal() = RemlVec::Constant(ctx.n, 1.0 / prev_varcmp[0]);
         logdet = ctx.n * std::log(prev_varcmp[0]);
     } else {
@@ -665,6 +666,7 @@ void em_reml(RemlCtx& ctx, RemlMat& P, RemlVec& Py,
         }
         varcmp(i) = prev_varcmp(i) - prev_varcmp(i) * prev_varcmp(i) * (tr_PA(i) - R(i)) / ctx.n;
     }
+
 }
 
 double reml_iteration(RemlCtx& ctx,
@@ -774,8 +776,12 @@ double reml_iteration(RemlCtx& ctx,
         }
 
         dlogL = lgL - prev_lgL;
-        if ((varcmp - prev_varcmp).squaredNorm() / varcmp.squaredNorm() < 1e-8
-                && (std::fabs(dlogL) < 1e-4 || (std::fabs(dlogL) < 1e-2 && dlogL < 0))) {
+        const double lgL_scale = std::max(1.0, std::fabs(lgL));
+        const double dlogL_rel = std::fabs(dlogL) / lgL_scale;
+        const double vc_rel = (varcmp - prev_varcmp).squaredNorm() / std::max(1.0, varcmp.squaredNorm());
+        const bool like_small = (std::fabs(dlogL) < 1e-4)
+            || (dlogL_rel < 1e-6);
+        if (vc_rel < 1e-8 && like_small) {
             converged_flag = true;
             if (ctx.reml_mtd == 2) {
                 RemlMat P_tmp;
