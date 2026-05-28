@@ -377,14 +377,6 @@ void MLMALoco::processMain()
         vector<string> analysis_ids(n);
         for (int i = 0; i < n; ++i) analysis_ids[i] = pheno_ids[final_keep[i]];
 
-        // Filter pheno to exactly these individuals (needed by Geno::loopDouble)
-        {
-            // Rebuild keep indices inside Pheno to match analysis_ids order
-            // The simplest way: get the raw keep indices from Pheno and re-filter
-            // We create a new Pheno object per chromosome bfile anyway, so this
-            // Pheno object is only needed for reference — no further filtering needed.
-        }
-
         // ---- 6. Open output file ----
         const string out_file = out_prefix + ".loco.mlma";
         LOGGER << "\n[LOCO] LOCO results will be streamed to [" << out_file << "] ..." << std::endl;
@@ -593,9 +585,36 @@ void MLMALoco::processMain()
             }
 
             // ---- 7h. Stream SNPs via Geno::loopDouble ----
+            Marker::setLocoBfilePrefix(row.bfile);
+            Geno::setLocoBfilePrefix(row.bfile);
+
             Pheno*  pheno_chr  = new Pheno();
             Marker* marker_chr = new Marker();
             Geno*   geno_chr   = new Geno(pheno_chr, marker_chr);
+
+            // Per-chromosome bfiles must match analysis sample identity and order exactly.
+            const int n_chr = static_cast<int>(pheno_chr->count_keep());
+            if (n_chr != n) {
+                LOGGER.e(0, "[LOCO] Chr " + to_string(row.chrom)
+                          + ": bfile [" + row.bfile + "] has " + to_string(n_chr)
+                          + " kept individuals, but LOCO analysis expects " + to_string(n) + ".");
+            }
+            if (n_chr > 0) {
+                const vector<string> chr_ids = pheno_chr->get_id(0, n_chr - 1, "\t");
+                if (static_cast<int>(chr_ids.size()) != n) {
+                    LOGGER.e(0, "[LOCO] Chr " + to_string(row.chrom)
+                              + ": unable to read consistent sample IDs from bfile ["
+                              + row.bfile + "].");
+                }
+                for (int i = 0; i < n; ++i) {
+                    if (chr_ids[i] != analysis_ids[i]) {
+                        LOGGER.e(0, "[LOCO] Chr " + to_string(row.chrom)
+                                  + ": sample order mismatch at index " + to_string(i)
+                                  + ". Expected [" + analysis_ids[i] + "] but bfile has ["
+                                  + chr_ids[i] + "] in [" + row.bfile + "].");
+                    }
+                }
+            }
 
             const uint32_t total_m = marker_chr->count_extract();
             LOGGER << "[LOCO] Chr " << row.chrom << ": " << total_m << " SNPs to test." << std::endl;

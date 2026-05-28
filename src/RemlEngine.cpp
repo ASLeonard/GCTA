@@ -836,9 +836,9 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     if (ctx.A[ctx.r_indx[0]].size() == 0)
         LOGGER.e(0, "--reml-woodbury: GRM component is identity; cannot compute basis.");
 
-    const bool auto_k = (ctx.woodbury_buffer_factor > 0.0);
+    const bool auto_k = (ctx.woodbury_rank < 0);
     const int  n      = ctx.n;
-    int k = ctx.woodbury_rank;  // fixed-k or starting point; overridden in auto-k
+    int k = ctx.woodbury_rank;
 
     int k_svd;
     if (auto_k) {
@@ -846,6 +846,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         LOGGER << "\nComputing Woodbury basis (auto-k, k_max=" << k_svd
                << ", buffer=" << ctx.woodbury_buffer_factor << ") ..." << std::endl;
     } else {
+        if (k <= 0)
+            LOGGER.e(0, "--reml-woodbury rank must be positive for fixed-k mode.");
         k_svd = k;
         LOGGER << "\nComputing Woodbury low-rank basis (k=" << k << ") ..." << std::endl;
     }
@@ -993,13 +995,8 @@ void compute(RemlCtx& ctx,
            << ctx.r_indx.size() << " variance component(s) (including residual)." << std::endl;
 
     // Woodbury basis (must be done before init_varcomp for HE warm-start)
-    if (ctx.woodbury_rank > 0)
+    if (ctx.woodbury_rank != 0)
         compute_woodbury_basis(ctx);
-    else if (ctx.woodbury_rank < 0) {
-        // auto-k: temporarily set rank to 0, let compute_woodbury_basis use buffer_factor
-        ctx.woodbury_rank = 0; // auto-k triggered by buffer_factor > 0
-        compute_woodbury_basis(ctx);
-    }
 
     RemlMat Vi_X_out(ctx.n, ctx.X_c), Xt_Vi_X_i_out(ctx.X_c, ctx.X_c);
     RemlMat Hi(ctx.r_indx.size(), ctx.r_indx.size());

@@ -91,6 +91,8 @@ class Geno {
 public:
     Geno(Pheno* pheno, Marker* marker);
     ~Geno();
+    // LOCO helper: override active genotype source to a single PLINK prefix.
+    static void setLocoBfilePrefix(const std::string& bfile_prefix);
     // Used internally by bgen2bed for BED output
     void save_bed(uint64_t *buf, int num_marker);
     void closeOut();

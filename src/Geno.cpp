@@ -241,6 +241,24 @@ Geno::Geno(Pheno* pheno, Marker* marker) {
 Geno::~Geno(){
 }
 
+void Geno::setLocoBfilePrefix(const std::string& bfile_prefix) {
+    if (bfile_prefix.empty()) {
+        LOGGER.e(0, "[LOCO] empty bfile prefix in manifest.");
+    }
+
+    options["geno_file"] = bfile_prefix + ".bed";
+    options.erase("m_file");
+    options.erase("pgen_file");
+    options.erase("mpgen_file");
+    options.erase("bgen_file");
+    options.erase("mbgen_file");
+
+    std::ifstream f(options["geno_file"].c_str());
+    if (!f.good()) {
+        LOGGER.e(0, "[LOCO] manifest bfile not found: [" + options["geno_file"] + "]");
+    }
+}
+
 uint32_t Geno::getTotalMarker(){
     return total_markers;
 }
