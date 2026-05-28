@@ -545,6 +545,30 @@ void calcu_Hi(RemlCtx& ctx, RemlMat& P, RemlMat& Hi) {
     }
 }
 
+// Fisher-scoring REML update (legacy reml_equation equivalent).
+// Requires explicit P materialisation; reml_iteration enforces that for mtd==1.
+void reml_equation(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py, RemlVec& varcmp) {
+    calcu_Hi(ctx, P, Hi);
+    if (ctx.reml_AI_not_invertible) return;
+
+    Py.noalias() = P.selfadjointView<Eigen::Lower>() * ctx.y;
+
+    const int m = static_cast<int>(ctx.r_indx.size());
+    RemlVec R(m);
+    RemlVec tmp(ctx.n);
+    for (int i = 0; i < m; i++) {
+        if (ctx.A[ctx.r_indx[i]].size() == 0) {
+            R(i) = Py.squaredNorm();
+        } else {
+            tmp.noalias() = ctx.A[ctx.r_indx[i]].selfadjointView<Eigen::Lower>() * Py;
+            R(i) = Py.dot(tmp);
+        }
+    }
+
+    varcmp = Hi * R;
+    Hi = 2 * Hi;  // keep same SE convention as legacy path
+}
+
 void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
              RemlVec& prev_varcmp, RemlVec& varcmp, double dlogL) {
     const bool use_approx     = ctx.reml_trace_approx;
@@ -707,10 +731,12 @@ double reml_iteration(RemlCtx& ctx,
 
         if (ctx.reml_mtd == 0)
             ai_reml(ctx, ctx.P, Hi, Py, prev_varcmp, varcmp, dlogL);
+        else if (ctx.reml_mtd == 1)
+            reml_equation(ctx, ctx.P, Hi, Py, varcmp);
         else if (ctx.reml_mtd == 2)
             em_reml(ctx, ctx.P, Py, prev_varcmp, varcmp, dlogL);
-        // mtd 1 (Fisher scoring) requires full P — not supported in skip_P path
-        // but skip_P_this_iter is false for mtd 1, so this is safe.
+        // mtd 1 (Fisher scoring) requires full P. skip_P_this_iter is false for
+        // mtd 1, so ctx.P is always materialised before reml_equation().
 
         lgL = -0.5 * (logdet_Xt_Vi_X + logdet + (ctx.y.transpose() * Py)(0, 0));
 
