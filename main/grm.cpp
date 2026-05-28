@@ -990,6 +990,8 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
     }();
     Eigen::VectorXd eval;
     Eigen::MatrixXd evec;
+    bool used_dsyevd = false;
+    const double* raw_evec = nullptr;
 
     if (out_pc_num == n && !pca_approx.empty()) {
         LOGGER << "Warning: --pca-approx is set, but all PCs requested. Falling back to full eigenvalue decomposition." << std::endl;
@@ -1065,40 +1067,20 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
         double* grm_ptr = const_cast<double*>(grm_dbl.data());
 
         if (out_pc_num == n) {
-            // Full spectrum: dsyevd writes eigenvectors directly into the GRM storage,
-            // so no extra n×n allocation is needed.  Write immediately with descending
-            // column indices — no reversed evec copy required either.
-            LOGGER << "Using dsyevd (all " << n << " eigenvalues)." << std::endl;
+            // Full spectrum via dsyevd: overwrites GRM in-place; eigenvectors are read
+            // back via raw_evec (no extra n×n copy). Eigenvalues stored ascending → reversed.
             Eigen::VectorXd w(n);
             int info = gcta_dsyevd((gcta_blas_int)n, grm_ptr, (gcta_blas_int)n, w.data());
             if (info != 0)
                 LOGGER.e(0, "dsyevd failed (info=" + std::to_string(info) +
                              "). For n > 32766, try --pca-approx.");
-
-            Eigen::Map<const Eigen::MatrixXd> eigvec(grm_ptr, n, n);
-            std::string eval_file = _out + ".eigenval";
-            std::ofstream o_eval(eval_file.c_str());
-            if (!o_eval) LOGGER.e(0, "cannot open the file [" + eval_file + "] to read.");
-            for (int i = n - 1; i >= 0; i--) o_eval << w(i) << std::endl;
-            o_eval.close();
-            LOGGER << "Eigenvalues of " << n << " individuals have been saved in [" + eval_file + "]." << std::endl;
-
-            std::string evec_file = _out + ".eigenvec";
-            std::ofstream o_evec(evec_file.c_str());
-            if (!o_evec) LOGGER.e(0, "cannot open the file [" + evec_file + "] to read.");
-            for (int i = 0; i < n; i++) {
-                o_evec << _fid[_keep[i]] << " " << _pid[_keep[i]];
-                for (int j = n - 1; j >= 0; j--) o_evec << " " << eigvec(i, j);
-                o_evec << std::endl;
-            }
-            o_evec.close();
-            LOGGER << "The first " << n << " eigenvectors of " << n << " individuals have been saved in [" + evec_file + "]." << std::endl;
-            return;
+            eval = w.reverse();
+            used_dsyevd = true;
+            raw_evec = grm_ptr;
         } else {
             // Partial spectrum: dsyevr overwrites the GRM in-place but writes the
             // requested eigenvectors to the separate Z buffer (n × out_pc_num),
             // which is much smaller than n×n.
-            LOGGER << "Using dsyevr (top " << out_pc_num << " of " << n << " eigenvalues)." << std::endl;
             Eigen::VectorXd            w(out_pc_num);
             Eigen::MatrixXd            Z(n, out_pc_num);
             gcta_blas_int              m_found = 0;
@@ -1130,7 +1112,12 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
     if (!o_evec) LOGGER.e(0, "cannot open the file [" + evec_file + "] to read.");
     for (int i = 0; i < n; i++) {
         o_evec << _fid[_keep[i]] << " " << _pid[_keep[i]];
-        for (int j = 0; j < out_pc_num; j++) o_evec << " " << evec(i, j);
+        if (used_dsyevd)
+            for (int j = 0; j < out_pc_num; j++)
+                o_evec << " " << raw_evec[(size_t)(out_pc_num - 1 - j) * n + i];
+        else
+            for (int j = 0; j < out_pc_num; j++)
+                o_evec << " " << evec(i, j);
         o_evec << std::endl;
     }
     o_evec.close();
@@ -1177,8 +1164,13 @@ void gcta::snp_pc_loading(std::string pc_file)
     LOGGER << _n << " individuals in common between the input files are included in the analysis."<<std::endl;
     
     eigenMatrix eigenvec(eigenvec_num, _n);
-    for (const auto& [id, evec_row] : std::views::zip(eigenvec_ID, eigenvec_str)) {
-        if (auto it = uni_id_map.find(id); it != uni_id_map.end()) {
+    //GCC13 has a bug preventing the more optimal structured binding approach here, so we use a traditional indexed loop instead.
+    // for (const auto& [id, evec_row] : std::views::zip(eigenvec_ID, eigenvec_str)) {
+    //   if (auto it = uni_id_map.find(id); it != uni_id_map.end()) {
+    for (size_t _i = 0; _i < eigenvec_ID.size(); ++_i) {
+      const auto& id      = eigenvec_ID[_i];
+      const auto& evec_row = eigenvec_str[_i];
+      if (auto it = uni_id_map.find(id); it != uni_id_map.end()) {
             for (j = 0; j < eigenvec_num; j++)
                 eigenvec(j, it->second) = std::stod(evec_row[j]);
         }
