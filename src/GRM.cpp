@@ -60,7 +60,11 @@ GRM::GRM(){
         if(!file){
             LOGGER.e(0, "can't open " + grm_file + ".grm.bin");
         }
-        if(num_grm * 4 != getFileByteSize(file)){
+        const auto grm_file_size = getFileByteSize(file);
+        if(!grm_file_size){
+            LOGGER.e(0, "Failed to read GRM binary size for [" + grm_file + "]: " + std::string(getUtilsErrorMessage(grm_file_size.error())));
+        }
+        if(num_grm * 4 != grm_file_size.value()){
             LOGGER.e(0, "The IDs in GRM and the IDs in the GRM binary file do not match [" + grm_file + "]");
         }
         fclose(file);
@@ -291,11 +295,26 @@ void GRM::unify_grm(string mgrm_file, string out_file){
     //produce output file names
     vector<string> output_fileNames;
     string out_string = options["out"];
-    string basename_out = getFileName(out_string);
-    string path_out = getPathName(out_string);
+    const auto basename_out_result = getFileName(out_string);
+    if(!basename_out_result){
+        LOGGER.e(0, "Invalid output path [" + out_string + "]: " + std::string(getUtilsErrorMessage(basename_out_result.error())));
+    }
+    const auto path_out_result = getPathName(out_string);
+    if(!path_out_result){
+        LOGGER.e(0, "Invalid output path [" + out_string + "]: " + std::string(getUtilsErrorMessage(path_out_result.error())));
+    }
+    const string basename_out = basename_out_result.value();
+    const string path_out = path_out_result.value();
     for(auto & filename : files){
-        string basename = getFileName(filename);
-        output_fileNames.push_back(joinPath(path_out, basename + "_" + basename_out));
+        const auto basename_result = getFileName(filename);
+        if(!basename_result){
+            LOGGER.e(0, "Invalid GRM file path [" + filename + "]: " + std::string(getUtilsErrorMessage(basename_result.error())));
+        }
+        const auto output_path_result = joinPath(path_out, basename_result.value() + "_" + basename_out);
+        if(!output_path_result){
+            LOGGER.e(0, "Failed to compose output path for [" + filename + "]: " + std::string(getUtilsErrorMessage(output_path_result.error())));
+        }
+        output_fileNames.push_back(output_path_result.value());
     }
 
     #pragma omp parallel for
@@ -1427,9 +1446,9 @@ void GRM::deduce_GRM(){
  
     /* X chr adjustment
     float weights[5];
-    weights[2] = 0.5 * mtd_weight; // male male
-    weights[3] = sqrt(0.5) * mtd_weight; // male female;
-    weights[4] = 1.0 * mtd_weight; // female female;
+    weights[2] = 0.5 * mtd_weight; // heterogametic-heterogametic
+    weights[3] = sqrt(0.5) * mtd_weight; // heterogametic-homogametic;
+    weights[4] = 1.0 * mtd_weight; // homogametic-homogametic;
     // don't need now.
     */
 
@@ -1945,7 +1964,7 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
     if(options_in.find(op_grmx) != options_in.end()){
         /*
         std::map<string, vector<string>> t_option;
-        t_option["--chrx"] = {};
+        t_option["--chr-homogametic"] = {};
         t_option["--filter-sex"] = {};
         Pheno::registerOption(t_option);
         Marker::registerOption(t_option);

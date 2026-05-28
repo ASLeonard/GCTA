@@ -91,6 +91,14 @@ public:
     const std::string& getRawA2(uint32_t i)    const { return a2[i]; }  ///< reference allele
 
 private:
+    static bool isHomogameticChr(const std::string& chr_label);
+    static bool isHeterogameticChr(const std::string& chr_label);
+    static bool isPositiveIntegerChrLabel(const std::string& chr_label);
+    static bool isAllowedChrLabel(const std::string& chr_label);
+    static std::string normalizeChrLabel(const std::string& chr_label);
+    static void resetSexChromosomeSets();
+    static void loadSexChromosomeFile(const std::string& file_path);
+
     std::vector<string> chr;
     std::vector<string> name;
     std::vector<float> gd;
@@ -118,6 +126,8 @@ private:
 
     static std::map<string, std::string> options;
     static std::map<string, int> options_i;
+    static std::set<string> homogametic_chrs;
+    static std::set<string> heterogametic_chrs;
     static void addOneFileOption(string key_store, std::string append_string, std::string key_name,
                                  std::map<string, std::vector<string>> options_in);
     std::vector<string> read_snplist(string snplist_file);

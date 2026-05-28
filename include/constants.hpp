@@ -19,6 +19,7 @@
 namespace Constants{
     const int NUM_FAM_COL = 6;
     const int NUM_BIM_COL = 6;
+    const int DEFAULT_AUTOSOME_NUM = 22;
 
     const int NUM_MARKER_READ = 120;
 

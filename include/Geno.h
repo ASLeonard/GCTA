@@ -149,10 +149,10 @@ private:
     uint64_t num_raw_sample;
     uint64_t num_keep_sample;
     uint64_t num_byte_keep_geno1;
-    uint64_t num_male_keep_sample;
+    uint64_t num_heterogametic_keep_sample;
     uint64_t num_item_geno_buffer;
     uint64_t *keep_mask = NULL;
-    uint64_t *keep_male_mask = NULL;
+    uint64_t *keep_heterogametic_mask = NULL;
     bool isX;
     void bgen2bed(const vector<uint32_t> &raw_marker_index);
 
@@ -193,10 +193,10 @@ private:
     bool bMakeMiss;
     bool bGRM = false;
     bool bGRMDom = false;
-    int iGRMdc = -1; // 0 no male dosage comp; 1 full comp; //default value shall be -1, equal variance
+    int iGRMdc = -1; // 0 no heterogametic dosage comp; 1 full comp; //default value shall be -1, equal variance
     int iDC = 1;
     bool f_std = false;
-    void setMaleWeight(double &weight, bool &needWeight); // set the male weight by bGRM, dc specity
+    void setHeterogameticWeight(double &weight, bool &needWeight); // set the heterogametic weight by bGRM, dc specity
 
     int8_t alleModel = 1; // 1: add; 2: Dom; 3: Reces; 4: Het; //currently unused affect a0 a1 a2 na;
 
@@ -223,17 +223,17 @@ private:
     uintptr_t *keepMaskInterPtr = NULL; 
     
     uint32_t keepSexSampleCT;
-    uint32_t keepMaleSampleCT;
+    uint32_t keepHeterogameticSampleCT;
 
     vector<uint32_t> keepSexIndex;  // in the raw index of fam
     uintptr_t *sexMaskPtr = NULL;
     uintptr_t *sexMaskInterPtr = NULL;
 
-    vector<uint32_t> keepMaleIndex; // in raw index of fam
-    vector<uint32_t> keepMaleExtractIndex;
-    uintptr_t *maleMaskPtr = NULL;
-    uintptr_t *maleMaskInterPtr = NULL; 
-    //uintptr_t *maleMaskExtractPtr = NULL;
+    vector<uint32_t> keepHeterogameticIndex; // in raw index of fam
+    vector<uint32_t> keepHeterogameticExtractIndex;
+    uintptr_t *heterogameticMaskPtr = NULL;
+    uintptr_t *heterogameticMaskInterPtr = NULL; 
+    //uintptr_t *heterogameticMaskExtractPtr = NULL;
 
     //BGEN
     int bgenRawGenoBuf1PtrSize;

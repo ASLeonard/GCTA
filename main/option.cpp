@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include "gcta.h"
 #include "Logger.h"
+#include "constants.hpp"
 
 void option(int option_num, char* option_str[]);
 
@@ -74,7 +75,7 @@ void option(int option_num, char* option_str[])
     std::string bfile = "", bfile2 = "", bfile_list = "", update_sex_file = "", update_freq_file = "", update_refA_file = "", kp_indi_file = "", rm_indi_file = "", extract_snp_file = "", exclude_snp_file = "", extract_snp_name = "", exclude_snp_name = "", out = "gcta";
     bool SNP_major = false, make_bed_flag = false, dose_mach_flag = false, dose_mach_gz_flag = false, dose_beagle_flag = false, bfile2_flag = false, out_freq_flag = false, out_ssq_flag = false;
     bool ref_A = false, recode = false, recode_nomiss = false, recode_std = false, save_ram = false, autosome_flag = false;
-    int bfile_flag = 0, autosome_num = 22, extract_chr_start = 0, extract_chr_end = 0, extract_region_chr = 0, extract_region_bp = 0, extract_region_wind = 0, exclude_region_chr = 0, exclude_region_bp = 0, exclude_region_wind = 0;
+    int bfile_flag = 0, autosome_num = Constants::DEFAULT_AUTOSOME_NUM, extract_chr_start = 0, extract_chr_end = 0, extract_region_chr = 0, extract_region_bp = 0, extract_region_wind = 0, exclude_region_chr = 0, exclude_region_bp = 0, exclude_region_wind = 0;
     std::string dose_file = "", dose_info_file = "", update_impRsq_file = "";
     double maf = 0.0, max_maf = 0.0, dose_Rsq_cutoff = 0.0;
     std::vector<std::string> multi_bfiles;

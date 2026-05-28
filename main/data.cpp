@@ -1858,7 +1858,7 @@ void gcta::calcu_mu(bool ssq_flag) {
     }
 
     if(flag_x_problem){
-        LOGGER.w(0, "gender information (the 5th column of the .fam file) is required for analysis on chromosome X. GCTA assumes that those missing samples are females.");
+        LOGGER.w(0, "sex-code information (the 5th column of the .fam file) is required for analysis on chromosome X. GCTA assumes missing codes are homogametic (code 2).");
     }
 }
 

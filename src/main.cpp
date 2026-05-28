@@ -90,7 +90,8 @@ int main(int argc, char *argv[]){
     LOGGER.ts("main");
     vector<string> supported_flagsV2 = {"--test-covar",
         "--bfile", "--bim", "--fam", "--bed", "--keep", "--remove", 
-        "--chr", "--autosome-num", "--autosome", "--extract", "--exclude", "--maf", "--max-maf", 
+        "--chr", "--autosome-num", "--autosome", "--autosome-sex", "--chr-homogametic", "--extract", "--exclude", "--maf", "--max-maf", 
+        "--sex-chr-file", "--homogametic-chr", "--heterogametic-chr",
         "--freq", "--out", "--make-grm", "--make-grm-part", "--thread-num", "--threads", "--grm",
         "--grm-cutoff", "--grm-singleton", "--cutoff-detail", "--make-bK-sparse", "--make-bK", "--pheno",
         "--mpheno", "--ge", "--fastGWA", "--fastGWA-mlm", "--fastGWA-mlm-exact", "--fastGWA-lr", "--save-fastGWA-mlm-residual", "--grm-sparse", "--qcovar", "--covar", "--rcovar", "--covar-maxlevel", "--make-grm-d", "--make-grm-d-part",
@@ -178,6 +179,13 @@ int main(int argc, char *argv[]){
                 options[last_key].push_back(cur_string);
             }
         }
+    }
+
+    if(options.find("--autosome-x-y") != options.end()){
+        LOGGER.e(0, "--autosome-x-y has been removed. Use --autosome-sex.");
+    }
+    if(options.find("--chrx") != options.end()){
+        LOGGER.e(0, "--chrx has been removed. Use --chr-homogametic.");
     }
 
      //Find the --out options

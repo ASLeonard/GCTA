@@ -265,7 +265,7 @@ uint32_t Geno::getTotalMarker(){
 
 void Geno::setSexMode(){
     std::map<string, vector<string>> t_option;
-    t_option["--chrx"] = {};
+    t_option["--chr-homogametic"] = {};
     t_option["--filter-sex"] = {}; 
     Pheno::registerOption(t_option);
     Marker::registerOption(t_option);
@@ -440,7 +440,7 @@ void Geno::getGenoDouble(uintptr_t *buf, int bufIndex, GenoBufItem* gbuf){
     (this->*getGenoDoubleFunc)(buf, bufIndex, gbuf);
 }
 
-void Geno::setMaleWeight(double &weight, bool &needWeight){
+void Geno::setHeterogameticWeight(double &weight, bool &needWeight){
     weight = 1.0;
     if(bGRM){
         weight = sqrt(0.5);
@@ -470,13 +470,13 @@ void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
     uint32_t dosage_ct = cur_buf[pgenGenoBuf1PtrSize - 1];
     uint8_t isSexXY = isMarkersSexXYs[curBufferIndex];
 
-    const vector<uint32_t> *curMaleIndex = NULL;
+    const vector<uint32_t> *curHeterogameticIndex = NULL;
     if(isSexXY == 1){
-        curMaleIndex = &keepMaleExtractIndex;
+        curHeterogameticIndex = &keepHeterogameticExtractIndex;
     }
 
     string err;
-    if(!PgenReader::CountHardDosage(cur_buf, dosage_main, dosage_present, curMaleIndex, keepSampleCT, dosage_ct, &snpinfo, err)){
+    if(!PgenReader::CountHardDosage(cur_buf, dosage_main, dosage_present, curHeterogameticIndex, keepSampleCT, dosage_ct, &snpinfo, err)){
         LOGGER.e(0, err);
     }
 
@@ -499,10 +499,10 @@ void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
             if(isSexXY == 1){
                 double weight;
                 bool needWeight;
-                setMaleWeight(weight, needWeight);
+                setHeterogameticWeight(weight, needWeight);
                 if(needWeight){
-                    for(int i = 0 ; i < keepMaleSampleCT; i++){
-                        gbuf->geno[keepMaleExtractIndex[i]] *= weight;
+                    for(int i = 0 ; i < keepHeterogameticSampleCT; i++){
+                        gbuf->geno[keepHeterogameticExtractIndex[i]] *= weight;
                     }
                 }
             }
@@ -522,7 +522,7 @@ void Geno::getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf){
         PgenReader::CountHardFreqMissExt(cur_buf, keepMaskInterPtr, rawSampleCT, keepSampleCT, &snpinfo, f_std);
     }else{
         string errmsg;
-        hasNoHET = PgenReader::CountHardFreqMissExtX(cur_buf, keepMaskInterPtr, maleMaskInterPtr, rawSampleCT, keepSampleCT, keepMaleSampleCT, &snpinfo, errmsg, iDC==1, f_std);
+        hasNoHET = PgenReader::CountHardFreqMissExtX(cur_buf, keepMaskInterPtr, heterogameticMaskInterPtr, rawSampleCT, keepSampleCT, keepHeterogameticSampleCT, &snpinfo, errmsg, iDC==1, f_std);
     }
     uint32_t curExtractIndex = gbuf->extractedMarkerIndex;
     bool isEffRev = marker->isEffecRev(curExtractIndex);
@@ -609,16 +609,16 @@ void Geno::getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                 if(isSexXY == 1){
                     double weight;
                     bool needWeight;
-                    setMaleWeight(weight, needWeight);
+                    setHeterogameticWeight(weight, needWeight);
                     if(needWeight){
                         if(bGRM){
-                            for(int i = 0 ; i < keepMaleSampleCT; i++){
-                                gbuf->geno[keepMaleExtractIndex[i]] *= weight;
+                            for(int i = 0 ; i < keepHeterogameticSampleCT; i++){
+                                gbuf->geno[keepHeterogameticExtractIndex[i]] *= weight;
                             }
                         }else{
                             double correctWeight = (weight - 1) * rdev * center_value;
-                            for(int i = 0 ; i < keepMaleSampleCT; i++){
-                                uint32_t curIndex = keepMaleExtractIndex[i];
+                            for(int i = 0 ; i < keepHeterogameticSampleCT; i++){
+                                uint32_t curIndex = keepHeterogameticExtractIndex[i];
                                 gbuf->geno[curIndex] *= weight;
                                 gbuf->geno[curIndex] += correctWeight;
                             }
@@ -788,8 +788,8 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
     double dosage_sum_half = dosage_sum;
     double dosage2_sum_half = dosage2_sum;
     if(isSexXY == 1){
-        for(int j = 0; j < keepMaleSampleCT; j++){
-            uint32_t sindex = keepMaleIndex[j];
+        for(int j = 0; j < keepHeterogameticSampleCT; j++){
+            uint32_t sindex = keepHeterogameticIndex[j];
             uint8_t item_ploidy = sample_ploidy[sindex];
             if(item_ploidy == 2){
                 uint32_t start_bits = sindex * double_bits_prob;
@@ -921,16 +921,16 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                 if(isSexXY == 1){
                     double weight;
                     bool needWeight;
-                    setMaleWeight(weight, needWeight);
+                    setHeterogameticWeight(weight, needWeight);
                     if(needWeight){
                         if(bGRM){
-                            for(int i = 0 ; i < keepMaleSampleCT; i++){
-                                gbuf->geno[keepMaleExtractIndex[i]] *= weight;
+                            for(int i = 0 ; i < keepHeterogameticSampleCT; i++){
+                                gbuf->geno[keepHeterogameticExtractIndex[i]] *= weight;
                             }
                         }else{
                             double correctWeight = (weight - 1) * rdev * center_value;
-                            for(int i = 0 ; i < keepMaleSampleCT; i++){
-                                uint32_t curIndex = keepMaleExtractIndex[i];
+                            for(int i = 0 ; i < keepHeterogameticSampleCT; i++){
+                                uint32_t curIndex = keepHeterogameticExtractIndex[i];
                                 gbuf->geno[curIndex] *= weight;
                                 gbuf->geno[curIndex] += correctWeight;
                             }
@@ -963,10 +963,10 @@ void Geno::loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf,
     rawSampleCT        = pheno->count_raw();
     numMarkerBlock     = numMarkerBuf;
     keepSexIndex       = pheno->getSexValidRawIndex();
-    keepMaleIndex      = pheno->getMaleRawIndex();
-    keepMaleExtractIndex = pheno->getMaleExtractIndex();
+    keepHeterogameticIndex      = pheno->getHeterogameticRawIndex();
+    keepHeterogameticExtractIndex = pheno->getHeterogameticExtractIndex();
     keepSexSampleCT    = keepSexIndex.size();
-    keepMaleSampleCT   = keepMaleIndex.size();
+    keepHeterogameticSampleCT   = keepHeterogameticIndex.size();
     this->bMakeGeno    = bMakeGeno;
     this->bGenoCenter  = bGenoCenter;
     this->bGenoStd     = bGenoStd;
@@ -1828,7 +1828,7 @@ int Geno::registerOption(map<string, vector<string>>& options_in) {
         processFunctions.push_back("sum_geno_x");
         options["sex"] = "yes";
         std::map<string, vector<string>> t_option;
-        t_option["--chrx"] = {};
+        t_option["--chr-homogametic"] = {};
         t_option["--filter-sex"] = {};
         Pheno::registerOption(t_option);
         Marker::registerOption(t_option);
@@ -2108,7 +2108,7 @@ void Geno::make_bed_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex
 // ─────────────────────────────────────────────────────────────────────────────
 // sum_geno_x: per-sample genotype sum across all (kept) X chromosome markers.
 // Output file columns: FID TAB IID TAB Sex TAB SumGenoX TAB NValidX TAB MeanGenoX
-// Sex encoding follows FAM convention: 1=male, 2=female, 0=unknown.
+// Sex encoding follows FAM convention: 1=heterogametic, 2=homogametic, 0=unknown.
 // ─────────────────────────────────────────────────────────────────────────────
 void Geno::processSumGenoX() {
     LOGGER.i(0, "Computing per-sample genotype sums on the X chromosome...");

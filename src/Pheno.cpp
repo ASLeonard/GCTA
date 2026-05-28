@@ -131,7 +131,10 @@ Pheno::Pheno() {
     }
 
     reinit();
-    LOGGER << index_keep.size() << " individuals to be included. " << index_keep_male.size() << " males, " << index_keep_sex.size() - index_keep_male.size() << " females, " << index_keep.size() - index_keep_sex.size() <<" unknown." << std::endl;
+        LOGGER << index_keep.size() << " individuals to be included. "
+            << index_keep_heterogametic.size() << " sex-code-1, "
+            << index_keep_sex.size() - index_keep_heterogametic.size() << " sex-code-2, "
+            << index_keep.size() - index_keep_sex.size() << " unknown." << std::endl;
 
     /*
     vector<string> filter_marker;
@@ -158,7 +161,7 @@ void Pheno::filter_keep_index(vector<uint32_t>& k_index){
 
 void Pheno::filter_sex(){
     vector<uint32_t> new_index;
-    vector<uint32_t> male_index;
+    vector<uint32_t> heterogametic_index;
     new_index.reserve(index_keep.size());
     uint32_t valid_index = 0;
     for(int i = 0; i < index_keep.size(); i++){
@@ -166,7 +169,7 @@ void Pheno::filter_sex(){
         int8_t sex_item = sex[index];
         switch(sex_item){
             case 1:
-                male_index.push_back(valid_index);
+                heterogametic_index.push_back(valid_index);
                 new_index.push_back(index);
                 valid_index++;
                 break;
@@ -179,7 +182,7 @@ void Pheno::filter_sex(){
 
     new_index.shrink_to_fit();
     index_keep = new_index;
-    index_keep_male = male_index;
+    index_keep_heterogametic = heterogametic_index;
     LOGGER.i(0, to_string(new_index.size()) + " individuals have gender information.");
 }
 
@@ -192,18 +195,18 @@ void Pheno::reinit(){
         LOGGER.e(0, "0 individual remains for further analysis.");
     }
     //init_mask_block();
-    index_keep_male.clear();
+    index_keep_heterogametic.clear();
     index_keep_sex.clear();
-    index_keep_male_extract.clear();
+    index_keep_heterogametic_extract.clear();
 
     uint32_t curSexIndex = 0;
     for(int i = 0; i < num_keep; i++){
         uint32_t curIndex = index_keep[i];
         int8_t curSex = sex[curIndex];
         if(curSex == 1){
-            index_keep_male.push_back(curIndex);
-            //index_keep_male_extract.push_back(curSexIndex);
-            index_keep_male_extract.push_back(i);
+            index_keep_heterogametic.push_back(curIndex);
+            //index_keep_heterogametic_extract.push_back(curSexIndex);
+            index_keep_heterogametic_extract.push_back(i);
             index_keep_sex.push_back(curIndex);
             curSexIndex++;
         }else if(curSex == 2){
@@ -589,11 +592,11 @@ vector<uint32_t>& Pheno::get_index_keep() {
 vector<uint32_t>& Pheno::getSexValidRawIndex(){
     return this->index_keep_sex;
 }
-vector<uint32_t>& Pheno::getMaleRawIndex(){
-    return this->index_keep_male;
+vector<uint32_t>& Pheno::getHeterogameticRawIndex(){
+    return this->index_keep_heterogametic;
 }
-vector<uint32_t>& Pheno::getMaleExtractIndex(){
-    return this->index_keep_male_extract;
+vector<uint32_t>& Pheno::getHeterogameticExtractIndex(){
+    return this->index_keep_heterogametic_extract;
 }
 
 
@@ -652,8 +655,8 @@ uint32_t Pheno::count_keep(){
     return num_keep;
 }
 
-uint32_t Pheno::count_male(){
-    return index_keep_male.size();
+uint32_t Pheno::count_heterogametic(){
+    return index_keep_heterogametic.size();
 }
 
 int8_t Pheno::get_sex(uint32_t index){
@@ -926,8 +929,8 @@ void Pheno::getMaskBit(uint64_t *maskp){
 }
 
 //maskp must be zeroed
-void Pheno::getMaskBitMale(uint64_t *maskp){
-    for(auto keep_item : index_keep_male){
+void Pheno::getMaskBitHeterogametic(uint64_t *maskp){
+    for(auto keep_item : index_keep_heterogametic){
         uint32_t cur_qword = keep_item / 64;
         uint32_t cur_offset = keep_item % 64;
         maskp[cur_qword] |= k1LU << cur_offset;

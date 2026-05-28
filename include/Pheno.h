@@ -43,7 +43,7 @@ public:
     static void set_keep(vector<string>& indi_marks, vector<string>& marks, vector<uint32_t>& keeps, bool isKeep);
     static void reinit_rm(vector<uint32_t>& keeps, vector<uint32_t>& rms, int total_sample_number);
     uint32_t count_keep();
-    uint32_t count_male();
+    uint32_t count_heterogametic();
     void mask_geno_keep(uint8_t *const geno_1block, int num_blocks);
     vector<string> get_id(int from_index, int to_index, string delim = "\t");
     uint8_t extract_genobit(uint8_t * const buf, int index_in_keep);
@@ -52,12 +52,12 @@ public:
     void save_pheno(string filename);
     void filter_keep_index(vector<uint32_t>& k_index);
     void getMaskBit(uint64_t *maskp);
-    void getMaskBitMale(uint64_t *maskp);
+    void getMaskBitHeterogametic(uint64_t *maskp);
     uint32_t getSeed();
 
     vector<uint32_t>& getSexValidRawIndex();
-    vector<uint32_t>& getMaleRawIndex();
-    vector<uint32_t>& getMaleExtractIndex();
+    vector<uint32_t>& getHeterogameticRawIndex();
+    vector<uint32_t>& getHeterogameticExtractIndex();
 
     /// Return just the IID (individual ID) for the given raw sample index.
     const std::string& getRawIID(uint32_t rawIndex) const { return pid[rawIndex]; }
@@ -80,8 +80,8 @@ private:
     vector<uint32_t> index_rm;
 
     vector<uint32_t> index_keep_sex;
-    vector<uint32_t> index_keep_male;
-    vector<uint32_t> index_keep_male_extract; // in the sex valid
+    vector<uint32_t> index_keep_heterogametic;
+    vector<uint32_t> index_keep_heterogametic_extract; // in the sex valid
 
     vector<int> block8_rm;
     vector<uint8_t> mask_rm;

@@ -14,6 +14,7 @@
 #include "gcta.h"
 #include "Logger.h"
 #include "StatFunc.h"
+#include "constants.hpp"
 #include "zlib.h"
 #include <limits>
 #include <cmath>
@@ -1699,9 +1700,10 @@ std::vector<double> gcta::gsmr_meta(std::vector<std::string> &snp_instru, eigenV
     return rst;
 }
 
-int read_ld_marker(std::string ref_ld_dirt) {
+int read_ld_marker(std::string ref_ld_dirt, int autosome_num) {
     // Read the number of markers
-    int i = 0, i_buf = 0, ttl_mk_num = 0, chr_num = 22;
+    int i = 0, i_buf = 0, ttl_mk_num = 0;
+    int chr_num = (autosome_num > 0) ? autosome_num : Constants::DEFAULT_AUTOSOME_NUM;
     std::string filestr = "", strbuf = "";
     for(i=0; i<chr_num; i++) {
         filestr = ref_ld_dirt + std::to_string(i+1)+ ".l2.M_5_50";
@@ -1799,10 +1801,11 @@ std::vector<std::string> read_ld_score_gz(std::string filestr, std::map<std::str
     return ld_score_snps;
 }
 
-std::vector<std::string> read_ld_score(std::string ld_dirt, std::map<std::string,int> snplist_map, int nsnp, std::vector<double> &ld_score) {
+std::vector<std::string> read_ld_score(std::string ld_dirt, std::map<std::string,int> snplist_map, int nsnp, std::vector<double> &ld_score, int autosome_num) {
 
     // Read the reference / weighted LD score
-    int i = 0, chr_num = 22;
+    int i = 0;
+    int chr_num = (autosome_num > 0) ? autosome_num : Constants::DEFAULT_AUTOSOME_NUM;
     std::string filestr_t1 = "", filestr_t2 = "";
     std::vector<std::string> ld_score_snps, snpbuf;
     
@@ -2052,11 +2055,11 @@ std::vector<std::string> gcta::read_snp_ldsc(std::map<std::string,int> ldsc_snp_
 
     ref_ld_vec.clear(); w_ld_vec.clear();
     // Read the total number of markers
-    ttl_mk_num = read_ld_marker(ref_ld_dirt);
+    ttl_mk_num = read_ld_marker(ref_ld_dirt, _autosome_num);
     // Read the reference LD scores
-    ref_ld_snps = read_ld_score(ref_ld_dirt, ldsc_snp_name_map, nsnp, ref_ld_vec);
+    ref_ld_snps = read_ld_score(ref_ld_dirt, ldsc_snp_name_map, nsnp, ref_ld_vec, _autosome_num);
     // Read the weighted LD scores
-    w_ld_snps = read_ld_score(w_ld_dirt, ldsc_snp_name_map, nsnp, w_ld_vec);
+    w_ld_snps = read_ld_score(w_ld_dirt, ldsc_snp_name_map, nsnp, w_ld_vec, _autosome_num);
     // SNPs in common
     std::map<std::string,int> w_ld_snp_map;
     std::vector<std::string> cm_ld_snps;
