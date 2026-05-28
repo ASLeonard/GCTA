@@ -158,6 +158,7 @@ void option(int option_num, char* option_str[])
     bool mlma_flag = false, mlma_loco_flag = false, mlma_no_adj_covar = false;
     bool save_reml_flag = false;
     std::string subtract_grm_file = "", save_reml_file = "", load_reml_file = "";
+    std::string grm_chr_prefix = "";  // prefix for per-chromosome GRM files (--grm-chr)
 
     // Fst
     bool fst_flag = false;
@@ -449,6 +450,9 @@ void option(int option_num, char* option_str[])
             grm_bin_flag = false;
             grm_file = argv[++i];
             LOGGER << "--mgrm-gz " << grm_file << std::endl;
+        } else if (flag == "--grm-chr") {
+            grm_chr_prefix = argv[++i];
+            LOGGER << "--grm-chr " << grm_chr_prefix << std::endl;
         } else if (flag == "--grm" || flag == "--grm-bin") {
             grm_flag = true;
             grm_file = argv[++i];
@@ -1566,7 +1570,17 @@ void option(int option_num, char* option_str[])
                 }
                 pter_gcta->mlma(grm_file, m_grm_flag, subtract_grm_file, phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, within_family, make_grm_inbred_flag, mlma_no_adj_covar, weight_file, save_reml_file, load_reml_file);
             }
-            else if (mlma_loco_flag) pter_gcta->mlma_loco(phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, make_grm_inbred_flag, mlma_no_adj_covar);
+            else if (mlma_loco_flag) {
+                if (!grm_file.empty() && !m_grm_flag) {
+                    // Memory-efficient path: G_loco_c = (G_all*m_all − G_chr_c*m_c)/(m_all−m_c).
+                    // Peak RAM = O(3·n²) regardless of n_chr, vs O(n_chr·n²) for the legacy path.
+                    pter_gcta->mlma_loco_v2(grm_file, grm_chr_prefix, phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, make_grm_inbred_flag, mlma_no_adj_covar);
+                } else {
+                    if (!grm_file.empty() && m_grm_flag)
+                        LOGGER.w(0, "--mlma-loco with --mgrm: multiple-GRM lists are not supported by the memory-efficient path. Falling back to legacy all-in-memory LOCO. Use --grm (single all-autosome GRM) to enable the efficient path.");
+                    pter_gcta->mlma_loco(phen_file, qcovar_file, covar_file, mphen, MaxIter, reml_priors, reml_priors_var, no_constrain, make_grm_inbred_flag, mlma_no_adj_covar);
+                }
+            }
             else if (massoc_slct_flag | massoc_joint_flag) {pter_gcta->set_massoc_pC_thresh(massoc_out_pC_thresh); pter_gcta->run_massoc_slct(massoc_file, massoc_wind, massoc_p, massoc_collinear, massoc_top_SNPs, massoc_joint_flag, massoc_gc_flag, massoc_gc_val, massoc_actual_geno_flag, massoc_mld_slct_alg);}
             else if (!massoc_cond_snplist.empty()) {pter_gcta->set_massoc_pC_thresh(massoc_out_pC_thresh); pter_gcta->run_massoc_cond(massoc_file, massoc_cond_snplist, massoc_wind, massoc_collinear, massoc_gc_flag, massoc_gc_val, massoc_actual_geno_flag);}
             else if (massoc_sblup_flag) pter_gcta->run_massoc_sblup(massoc_file, massoc_wind, massoc_sblup_fac);

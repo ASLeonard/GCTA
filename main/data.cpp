@@ -2021,7 +2021,7 @@ void gcta::read_indi_blup(std::string blup_indi_file) {
 
 bool gcta::make_XMat(Eigen::MatrixXf &X)
 {
-    compact_snp_data();
+    if (!_make_XMat_no_compact) compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
     LOGGER << "Recoding genotypes (individual major mode) ..." << std::endl;
@@ -2117,10 +2117,12 @@ void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag,
     unsigned long i = 0, j = 0, n = _keep.size(), m = _include.size();
     sd_SNP.resize(m);
     if (_dosage_flag) {
-        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - Eigen::VectorXf::Constant(n, _mu[j])).squaredNorm() / (n - 1.0);
+        // Use _mu[_include[j]]: correct when compact is inhibited (_include[j]!=j),
+        // and equivalent to _mu[j] when compact has been applied (_include[j]==j).
+        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - Eigen::VectorXf::Constant(n, _mu[_include[j]])).squaredNorm() / (n - 1.0);
     } 
     else {
-        for (j = 0; j < m; j++) sd_SNP[j] = _mu[j]*(1.0 - 0.5 * _mu[j]);
+        for (j = 0; j < m; j++) sd_SNP[j] = _mu[_include[j]]*(1.0 - 0.5 * _mu[_include[j]]);
     }
     if (divid_by_std) {
         for (j = 0; j < m; j++) {
@@ -2133,7 +2135,7 @@ void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag,
     for (i = 0; i < n; i++) {
         for (j = 0; j < m; j++) {
             if (X(i,j) < DOSAGE_NA) {
-                X(i,j) -= _mu[j];
+                X(i,j) -= _mu[_include[j]];
                 if (divid_by_std) X(i,j) *= sd_SNP[j];
             } 
             else if (miss_with_mu) X(i,j) = 0.0;
@@ -2312,7 +2314,7 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
 bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
-    compact_snp_data();
+    if (!_make_XMat_no_compact) compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
     const int n = _keep.size(), m = snp_indx.size();
@@ -2351,16 +2353,16 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
             }
         }
     } else {
-        // After compact_snp_data(): _include[j]==j and _keep[i]==i.
-        // Pre-cache per-SNP metadata once, including the std scale so the
-        // normalisation pass is fused into the column-fill loop below.
-        // snp_k[j] == snp_indx[j] post-compact, so we index snp_indx directly
-        // and avoid the redundant copy.
+        // After compact_snp_data(): _include[j]==j and _keep[i]==i, so snp_indx[j]
+        // is the raw _snp_1 index directly.
+        // When _make_XMat_no_compact=true (LOCO loop), compaction is skipped and
+        // _snp_1 retains its original BIM order; snp_indx values are positions
+        // within _include, so we must map through _include to get the raw index.
         std::vector<bool>  snp_flip(m);
         std::vector<float> snp_mu(m);
         std::vector<float> sd_inv(m, 1.0f);
         for (int j = 0; j < m; j++) {
-            const int k  = snp_indx[j];
+            const int k  = _make_XMat_no_compact ? _include[snp_indx[j]] : snp_indx[j];
             snp_flip[j]  = (_allele1[k] != _ref_A[k]);
             snp_mu[j]    = static_cast<float>(_mu[k]);
             if (divid_by_std) {
@@ -2377,7 +2379,7 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
         // through a proxy.  Cost is negligible vs the inner loop work.
         #pragma omp parallel for schedule(static)
         for (int j = 0; j < m; j++) {
-            const int   k     = snp_indx[j];
+            const int   k     = _make_XMat_no_compact ? _include[snp_indx[j]] : snp_indx[j];
             const bool  flip  = snp_flip[j];
             const float mu_k  = snp_mu[j];
             const float scale = sd_inv[j];

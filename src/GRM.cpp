@@ -2022,7 +2022,12 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
             processFunctions.push_back("make_grm");
             options_in.erase("--make-grm");
             std::map<string, vector<string>> t_option;
-            t_option["--autosome"] = {};
+            if(options_in.find("--chr") != options_in.end()){
+                t_option["--chr"] = options_in["--chr"];
+                options_in.erase("--chr");
+            } else {
+                t_option["--autosome"] = {};
+            }
             Marker::registerOption(t_option);
             return_value++;
         }else{

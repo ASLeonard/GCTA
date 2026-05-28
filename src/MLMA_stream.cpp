@@ -17,6 +17,7 @@
 #include "cpu.h"          // cblas_strmm
 #include "main/StatFunc.h"
 #include "mlma_woodbury.hpp"
+#include "RemlState.hpp"
 
 #include <Eigen/Dense>
 #include <fstream>
@@ -48,14 +49,8 @@ vector<string>       MLMA::processFunctions;
 // ---------------------------------------------------------------------------
 namespace {
 
-struct RemlState {
-    int32_t n            = 0;
-    int32_t x_c          = 0;
-    bool    is_woodbury  = false;
-    Eigen::MatrixXf Vi;   // GOBY: full n×n V^{-1}
-    WoodburyMLMACache wb; // TUNA: Woodbury low-rank factors
-    Eigen::VectorXf b;    // fixed-effect coefficients (x_c elements)
-};
+// RemlState is now defined in include/RemlState.hpp (shared with MLMA_loco).
+// The readRemlState() function below remains file-local (only MLMA_stream needs it).
 
 // Read the binary REML state written by save_reml_state().
 // When !no_adj_covar the 'b' vector is loaded; otherwise it is skipped.
