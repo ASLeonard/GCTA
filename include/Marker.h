@@ -51,8 +51,8 @@ public:
     uint32_t count_extract();
     bool isInExtract(uint32_t index);
     uint32_t getRawIndex(uint32_t extractedIndex);
-    std::vector<uint32_t>& get_extract_index(); // return the raw index for autosome;
-    std::vector<uint32_t> get_extract_index_autosome(); // return the extract index for autosome; //not raw index
+    std::vector<uint32_t>& get_extract_index(); // return the raw index for all kept markers
+    std::vector<uint32_t> get_extract_index_autosome(); // return the extract index for non-sex markers //not raw index
     std::vector<uint32_t> get_extract_index_X();
     int getMIndex(uint32_t raw_index);
     //uint64_t getStartPosSize(uint32_t raw_index);

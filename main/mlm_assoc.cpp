@@ -894,6 +894,8 @@ void gcta::mlma_loco_v2(std::string grm_file, std::string grm_chr_prefix,
         LOGGER.e(0, "There is only one chromosome. LOCO analysis requires ≥2 chromosomes.");
     for (const int c : vi_buf)
         if (isAutosomalChr(c)) chrs.push_back(c);
+    if (chrs.size() < 2)
+        LOGGER.e(0, "LOCO analysis requires at least two autosomal chromosomes.");
 
     std::vector<int> include_o(_include);
     std::map<std::string, int> snp_name_map_o(_snp_name_map);
