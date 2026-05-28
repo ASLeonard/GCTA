@@ -346,16 +346,31 @@ void MLMALoco::processMain()
         const int n = static_cast<int>(final_keep.size());
         LOGGER << "[LOCO] After GRM intersection: " << n << " individuals for analysis." << std::endl;
 
-        // Subset G_all to final_keep individuals (using kp[final_keep[i]] as GRM row)
-        Eigen::MatrixXd G_all_n(n, n);
+        // Subset G_all to the n analysis individuals.
+        // Fast path: if GRM sample == analysis sample (in order), move instead of copy.
+        Eigen::MatrixXd G_all_n;
         {
+            const int n_grm = static_cast<int>(grm_all_ids.size());
             vector<int> grm_rows(n);
-            for (int i = 0; i < n; ++i) grm_rows[i] = kp[final_keep[i]];
-            for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j)
-                    G_all_n(i, j) = G_all(grm_rows[i], grm_rows[j]);
+            bool is_identity = (n_grm == n);
+            for (int i = 0; i < n; ++i) {
+                grm_rows[i] = kp[final_keep[i]];
+                if (grm_rows[i] != i) is_identity = false;
+            }
+            if (is_identity) {
+                G_all_n = std::move(G_all);  // O(1): GRM sample == analysis sample
+            } else {
+                G_all_n.resize(n, n);
+                // Column-first traversal: accesses contiguous columns of G_all
+                // (column-major Eigen storage), reducing cache misses by ~n×.
+                for (int j = 0; j < n; ++j) {
+                    const int src_col = grm_rows[j];
+                    for (int i = 0; i < n; ++i)
+                        G_all_n(i, j) = G_all(grm_rows[i], src_col);
+                }
+                G_all.resize(0, 0);
+            }
         }
-        G_all.resize(0, 0);  // free
 
         // Subset y and X
         Eigen::VectorXd y_vec(n);
@@ -431,21 +446,40 @@ void MLMALoco::processMain()
                               + ": individual [" + analysis_ids[i]
                               + "] not found in per-chr GRM [" + row.grm_chr + "].");
 
-            // Subset G_chr to analysis individuals
-            Eigen::MatrixXd G_chr(n, n);
-            for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j)
-                    G_chr(i, j) = G_chr_raw(kp_chr[i], kp_chr[j]);
-            G_chr_raw.resize(0, 0);
+            // Subset G_chr to analysis individuals.
+            // Fast path: if chr-GRM sample == analysis sample (in order), move.
+            Eigen::MatrixXd G_chr;
+            {
+                const int n_grm_chr = static_cast<int>(grm_chr_ids.size());
+                bool chr_is_identity = (n_grm_chr == n);
+                for (int i = 0; i < n && chr_is_identity; ++i)
+                    if (kp_chr[i] != i) chr_is_identity = false;
 
-            // ---- 7b. Compute LOCO GRM ----
+                if (chr_is_identity) {
+                    G_chr = std::move(G_chr_raw);
+                } else {
+                    G_chr.resize(n, n);
+                    // Column-first traversal for column-major Eigen storage.
+                    for (int j = 0; j < n; ++j) {
+                        const int src_col = kp_chr[j];
+                        for (int i = 0; i < n; ++i)
+                            G_chr(i, j) = G_chr_raw(kp_chr[i], src_col);
+                    }
+                    G_chr_raw.resize(0, 0);
+                }
+            }
+
+            // ---- 7b. Compute LOCO GRM in-place via G_chr ----
+            // G_loco = (G_all_n * m_all - G_chr * m_chr) / m_loco
+            // Reuse G_chr's buffer to avoid a 3rd n×n allocation (saves ~1.8 GB peak).
             const double m_loco = m_all - m_chr;
             if (m_loco <= 0.0)
                 LOGGER.e(0, "[LOCO] Chr " + to_string(row.chrom) + ": m_chr=" +
                             to_string(static_cast<long long>(m_chr))
                           + " >= m_all=" + to_string(static_cast<long long>(m_all)) + ".");
-            Eigen::MatrixXd G_loco = (G_all_n * m_all - G_chr * m_chr) / m_loco;
-            G_chr.resize(0, 0);
+            G_chr.array() *= (-m_chr / m_loco);
+            G_chr.noalias() += (m_all / m_loco) * G_all_n;
+            // G_chr now holds G_loco; G_chr_raw is already freed.
 
             // ---- 7c. Fill RemlCtx ----
             RemlCtx ctx;
@@ -454,7 +488,7 @@ void MLMALoco::processMain()
             ctx.X   = X_mat;
             ctx.y   = y_vec;
             ctx.A.resize(2);
-            ctx.A[0] = std::move(G_loco);  // consumed by compute_woodbury_basis or used as-is
+            ctx.A[0] = std::move(G_chr);  // consumed by compute_woodbury_basis or used as-is
             // ctx.A[1] left default (size 0 == identity convention for residual)
             ctx.r_indx = {0, 1};
             ctx.var_name = {"V(G)", "V(e)"};
@@ -503,10 +537,19 @@ void MLMALoco::processMain()
             // ---- 7g. Compute Vi_y_adj ----
             Eigen::VectorXf Vi_y(n);
             Eigen::LLT<Eigen::MatrixXf> Vi_llt;
-            const bool use_wb = rs.is_woodbury;
+            const bool use_wb  = rs.is_woodbury;
+            const bool use_llt = rs.is_llt;
 
             if (use_wb) {
                 Vi_y = woodbury_apply_Vi_f(rs.wb, y_adj);
+            } else if (use_llt) {
+                // V^{-1} y = L^{-T}(L^{-1} y) via two float triangular solves.
+                // Avoids dpotri + second Cholesky (saves 2×O(n³/3) per chromosome).
+                Vi_y = y_adj;
+                cblas_strsv(CblasColMajor, CblasLower, CblasNoTrans, CblasNonUnit,
+                            n, rs.Vi_L_f.data(), n, Vi_y.data(), 1);
+                cblas_strsv(CblasColMajor, CblasLower, CblasTrans, CblasNonUnit,
+                            n, rs.Vi_L_f.data(), n, Vi_y.data(), 1);
             } else {
                 Vi_y.noalias() = rs.Vi * y_adj;
                 Vi_llt = Eigen::LLT<Eigen::MatrixXf>(rs.Vi);
@@ -557,7 +600,16 @@ void MLMALoco::processMain()
 
                 if (use_wb) {
                     woodbury_xvx_diag_block(wb, X_block, bs, xvx_diag);
+                } else if (use_llt) {
+                    // x^T V^{-1} x = ||L^{-1} x||^2 (L = lower Cholesky of V).
+                    // In-place STRSM overwrites X_block with L^{-1} X_block.
+                    cblas_strsm(CblasColMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
+                                n, bs, 1.0f,
+                                rs.Vi_L_f.data(), n,
+                                X_block.data(), n);
+                    xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
                 } else {
+                    // x^T V^{-1} x = ||L_vi^T x||^2 (L_vi = Cholesky of V^{-1}).
                     cblas_strmm(CblasColMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
                                 n, bs, 1.0f,
                                 Vi_llt.matrixLLT().data(), n,

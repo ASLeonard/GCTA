@@ -18,7 +18,11 @@ struct RemlState {
     int32_t n           = 0;
     int32_t x_c         = 0;
     bool    is_woodbury = false;
-    Eigen::MatrixXf Vi;    // GOBY: full n×n V^{-1}
-    WoodburyMLMACache wb;  // TUNA: Woodbury low-rank factors
-    Eigen::VectorXf b;     // fixed-effect coefficients (x_c elements)
+    // LLT path: is_llt=true means Vi_L_f holds lower Cholesky of V (not V^{-1}).
+    // Apply V^{-1} via two triangular solves: L^{-T}(L^{-1}·v), avoiding dpotri.
+    bool    is_llt      = false;
+    Eigen::MatrixXf Vi;      // GOBY: full n×n V^{-1}  (is_woodbury=false, is_llt=false)
+    Eigen::MatrixXf Vi_L_f;  // LLT:  lower Cholesky of V (is_llt=true)
+    WoodburyMLMACache wb;    // TUNA: Woodbury low-rank factors (is_woodbury=true)
+    Eigen::VectorXf b;       // fixed-effect coefficients (x_c elements)
 };

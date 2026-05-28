@@ -1011,14 +1011,11 @@ RemlState build_reml_state(const RemlCtx& ctx) {
         rs.wb.sqrt_ck_f    = rs.wb.ck_f.cwiseSqrt();
         rs.wb.sigma2_eff_f = static_cast<float>(ctx.sigma2_eff);
     } else if (ctx.Vi_use_llt) {
-        // Vi_L holds the Cholesky factor L; materialise V^{-1} via dpotri.
-        // Copy to avoid mutating ctx (it's const ref).
-        Eigen::MatrixXd Vi_copy = ctx.Vi_L;
-        gcta_blas_int blas_n = static_cast<gcta_blas_int>(ctx.n);
-        if (gcta_dpotri(blas_n, Vi_copy.data(), blas_n) != 0)
-            LOGGER.e(0, "build_reml_state: dpotri failed materialising V^{-1}.");
-        Vi_copy.triangularView<Eigen::Upper>() = Vi_copy.transpose();
-        rs.Vi = Vi_copy.cast<float>();
+        // Vi_L holds the lower Cholesky factor L of V (from dpotrf).
+        // Store it as float — the streaming code uses STRSV/STRSM directly,
+        // avoiding dpotri (O(n³/3)) and a second Cholesky of V^{-1} (O(n³/3)).
+        rs.is_llt   = true;
+        rs.Vi_L_f   = ctx.Vi_L.cast<float>();   // n×n float, ~n²/2 significant bytes
     } else {
         // Vi is already a full V^{-1}
         rs.Vi = ctx.Vi.cast<float>();
