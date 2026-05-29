@@ -406,6 +406,97 @@ void PgenReader::ReadRawFullHard(uintptr_t *buf, int variant_idx){
     }
 }
 
+void PgenReader::ReadRawFullHardBatch(uintptr_t *buf,
+                                      const int *variant_indices,
+                                      int variant_count,
+                                      int stride_uptr)
+{
+    if (!_info_ptr) {
+        stop("pgen is closed");
+    }
+    if (!variant_indices && variant_count > 0) {
+        stop("variant_indices is null");
+    }
+    if (variant_count < 0) {
+        stop("variant_count must be non-negative");
+    }
+    if (stride_uptr <= 0) {
+        stop("stride_uptr must be positive");
+    }
+
+    plink2::PgrSampleSubsetIndex pssi;
+    plink2::PgrSetSampleSubsetIndex(nullptr, _state_ptr, &pssi);
+
+    const uint32_t raw_variant_ct = _info_ptr->raw_variant_ct;
+    for (int i = 0; i < variant_count; ++i) {
+        const int variant_idx = variant_indices[i];
+        if ((variant_idx < 0) || (static_cast<uint32_t>(variant_idx) >= raw_variant_ct)) {
+            char errstr_buf[256];
+            snprintf(errstr_buf, sizeof(errstr_buf),
+                     "variant_num out of range (%d; must be 1..%u)",
+                     variant_idx + 1, raw_variant_ct);
+            stop(errstr_buf);
+        }
+
+        uintptr_t *dst = buf + static_cast<std::size_t>(i) * static_cast<std::size_t>(stride_uptr);
+        plink2::PglErr reterr = plink2::PgrGet(
+            nullptr, pssi, _info_ptr->raw_sample_ct, variant_idx, _state_ptr, dst);
+        if (reterr != plink2::kPglRetSuccess) {
+            char errstr_buf[256];
+            snprintf(errstr_buf, sizeof(errstr_buf),
+                     "PgrGet() error %d", static_cast<int>(reterr));
+            stop(errstr_buf);
+        }
+    }
+}
+
+void PgenReader::ReadRawFullHardRange(uintptr_t *buf,
+                                      int start_variant_idx,
+                                      int variant_count,
+                                      int stride_uptr)
+{
+    if (!_info_ptr) {
+        stop("pgen is closed");
+    }
+    if (variant_count < 0) {
+        stop("variant_count must be non-negative");
+    }
+    if (stride_uptr <= 0) {
+        stop("stride_uptr must be positive");
+    }
+    if (variant_count == 0) {
+        return;
+    }
+
+    const uint32_t raw_variant_ct = _info_ptr->raw_variant_ct;
+    if ((start_variant_idx < 0)
+        || (static_cast<uint32_t>(start_variant_idx) >= raw_variant_ct)
+        || (static_cast<uint64_t>(start_variant_idx) + static_cast<uint64_t>(variant_count)
+            > static_cast<uint64_t>(raw_variant_ct))) {
+        char errstr_buf[256];
+        snprintf(errstr_buf, sizeof(errstr_buf),
+                 "variant range out of bounds ([%d, %d), max %u)",
+                 start_variant_idx, start_variant_idx + variant_count, raw_variant_ct);
+        stop(errstr_buf);
+    }
+
+    plink2::PgrSampleSubsetIndex pssi;
+    plink2::PgrSetSampleSubsetIndex(nullptr, _state_ptr, &pssi);
+
+    for (int i = 0; i < variant_count; ++i) {
+        uintptr_t *dst = buf + static_cast<std::size_t>(i) * static_cast<std::size_t>(stride_uptr);
+        const int variant_idx = start_variant_idx + i;
+        plink2::PglErr reterr = plink2::PgrGet(
+            nullptr, pssi, _info_ptr->raw_sample_ct, variant_idx, _state_ptr, dst);
+        if (reterr != plink2::kPglRetSuccess) {
+            char errstr_buf[256];
+            snprintf(errstr_buf, sizeof(errstr_buf),
+                     "PgrGet() error %d", static_cast<int>(reterr));
+            stop(errstr_buf);
+        }
+    }
+}
+
 bool PgenReader::CountHardFreqMissExt(uintptr_t *buf, const uintptr_t *subset_iter_vec, uint32_t rawSampleSize, uint32_t keepSize, SNPInfo *snpinfo, bool f_std){
     std::array<uint32_t,4> genocounts;
     plink2::ZeroTrailingNyps(rawSampleSize, buf);

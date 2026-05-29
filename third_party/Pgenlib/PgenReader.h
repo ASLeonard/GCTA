@@ -135,6 +135,20 @@ class PgenReader {
 
         void ReadRawFullHard(uintptr_t *buf, int variant_idx);
 
+        // Batch full-hard reads into a strided output buffer.
+        // This reuses one subset-index setup for the whole batch to reduce
+        // per-variant call overhead in tight streaming loops.
+        void ReadRawFullHardBatch(uintptr_t *buf,   
+                      const int *variant_indices,
+                      int variant_count,
+                      int stride_uptr);
+
+        // Fast path for contiguous variant indices [start_variant_idx, start_variant_idx + variant_count).
+        void ReadRawFullHardRange(uintptr_t *buf,
+                  int start_variant_idx,
+                  int variant_count,
+                  int stride_uptr);
+
         void ReadDosage(uintptr_t *buf, int variant_idx, int allele_idx);
         void ReadDosage(DosageBuf &buf, int variant_idx, int allele_idx);
 
