@@ -60,7 +60,11 @@ GRM::GRM(){
         if(!file){
             LOGGER.e(0, "can't open " + grm_file + ".grm.bin");
         }
-        if(num_grm * 4 != getFileByteSize(file)){
+        const auto grm_file_size = getFileByteSize(file);
+        if(!grm_file_size){
+            LOGGER.e(0, "Failed to read GRM binary size for [" + grm_file + "]: " + std::string(getUtilsErrorMessage(grm_file_size.error())));
+        }
+        if(num_grm * 4 != grm_file_size.value()){
             LOGGER.e(0, "The IDs in GRM and the IDs in the GRM binary file do not match [" + grm_file + "]");
         }
         fclose(file);
@@ -291,11 +295,26 @@ void GRM::unify_grm(string mgrm_file, string out_file){
     //produce output file names
     vector<string> output_fileNames;
     string out_string = options["out"];
-    string basename_out = getFileName(out_string);
-    string path_out = getPathName(out_string);
+    const auto basename_out_result = getFileName(out_string);
+    if(!basename_out_result){
+        LOGGER.e(0, "Invalid output path [" + out_string + "]: " + std::string(getUtilsErrorMessage(basename_out_result.error())));
+    }
+    const auto path_out_result = getPathName(out_string);
+    if(!path_out_result){
+        LOGGER.e(0, "Invalid output path [" + out_string + "]: " + std::string(getUtilsErrorMessage(path_out_result.error())));
+    }
+    const string basename_out = basename_out_result.value();
+    const string path_out = path_out_result.value();
     for(auto & filename : files){
-        string basename = getFileName(filename);
-        output_fileNames.push_back(joinPath(path_out, basename + "_" + basename_out));
+        const auto basename_result = getFileName(filename);
+        if(!basename_result){
+            LOGGER.e(0, "Invalid GRM file path [" + filename + "]: " + std::string(getUtilsErrorMessage(basename_result.error())));
+        }
+        const auto output_path_result = joinPath(path_out, basename_result.value() + "_" + basename_out);
+        if(!output_path_result){
+            LOGGER.e(0, "Failed to compose output path for [" + filename + "]: " + std::string(getUtilsErrorMessage(output_path_result.error())));
+        }
+        output_fileNames.push_back(output_path_result.value());
     }
 
     #pragma omp parallel for
@@ -991,7 +1010,7 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
         }
     }
 
-    static const double alpha = 1.0;
+    static constexpr double alpha = 1.0;
     if(grm_tile_size > 0){
         // Block-tiled path: split into off-diagonal dgemm + diagonal dsyrk.
         //
@@ -1427,9 +1446,9 @@ void GRM::deduce_GRM(){
  
     /* X chr adjustment
     float weights[5];
-    weights[2] = 0.5 * mtd_weight; // male male
-    weights[3] = sqrt(0.5) * mtd_weight; // male female;
-    weights[4] = 1.0 * mtd_weight; // female female;
+    weights[2] = 0.5 * mtd_weight; // heterogametic-heterogametic
+    weights[3] = sqrt(0.5) * mtd_weight; // heterogametic-homogametic;
+    weights[4] = 1.0 * mtd_weight; // homogametic-homogametic;
     // don't need now.
     */
 
@@ -1508,7 +1527,7 @@ void GRM::deduce_GRM(){
     }
     /* // don't need special case
     else{
-        if(!options_b["xchr"]){
+        if(!options_b["homogametic_chr"]){
             for(int pair1 = part_keep_indices.first; pair1 != part_keep_indices.second + 1; pair1++){
                 uint32_t sub_miss1 = finished_marker - sub_miss[pair1];
                 for(int pair2 = 0; pair2 != pair1 + 1; pair2++){
@@ -1876,10 +1895,10 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
 
     string part_grm = "--make-grm-part";
     string part_grm_d = "--make-grm-d-part";
-    string part_grm_xchr = "--make-grm-xchr-part";
+    string part_grm_homogametic = "--make-grm-homogametic-part";
     bool bool_part_grm = options_in.find(part_grm) != options_in.end();
     bool bool_part_grm_d = options_in.find(part_grm_d) != options_in.end();
-    bool bool_part_grm_xchr = options_in.find(part_grm_xchr) != options_in.end();
+    bool bool_part_grm_homogametic = options_in.find(part_grm_homogametic) != options_in.end();
     string part_grm_symbol = "";
     bool isDominance = false;
     if(bool_part_grm){
@@ -1890,15 +1909,15 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
         part_grm_symbol = part_grm_d;
         isDominance = true;
     }
-    if(bool_part_grm_xchr){
-        part_grm_symbol = part_grm_xchr;
+    if(bool_part_grm_homogametic){
+        part_grm_symbol = part_grm_homogametic;
         isDominance = false;
     }
-    if(bool_part_grm && bool_part_grm_d && bool_part_grm_xchr){
-        LOGGER.e(0, "can't specify --make-grm-part, --make-grm-d-part or --make-grm-xchr-part together.");
+    if(bool_part_grm && bool_part_grm_d && bool_part_grm_homogametic){
+        LOGGER.e(0, "can't specify --make-grm-part, --make-grm-d-part or --make-grm-homogametic-part together.");
     }
 
-    if(bool_part_grm || bool_part_grm_d || bool_part_grm_xchr){
+    if(bool_part_grm || bool_part_grm_d || bool_part_grm_homogametic){
         if(options_in[part_grm_symbol].size() == 2){
             try{
                 num_parts = std::stoi(options_in[part_grm_symbol][0]);
@@ -1918,14 +1937,14 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
             options["out"] = options["out"] + ".part_" + s_parts + "_" + std::string(s_parts.length() - c_parts.length(), '0') + c_parts;
             options_in["out"][0] = options["out"];
             options_in.erase(part_grm_symbol);
-            if(!bool_part_grm_xchr){
+            if(!bool_part_grm_homogametic){
                 std::map<string, vector<string>> t_option;
                 t_option["--autosome"] = {};
                 Marker::registerOption(t_option);
                 processFunctions.push_back("make_grm");
                 return_value++;
             }else{
-                options_in["--make-grm-xchr"] = {};
+                options_in["--make-grm-homogametic"] = {};
             }
  
         }else{
@@ -1940,20 +1959,20 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
         options_in["--make-grm"] = {};
     }
 
-    string op_grmx = "--make-grm-xchr";
-    options_b["xchr"] = false;
-    if(options_in.find(op_grmx) != options_in.end()){
+    string op_grm_homogametic = "--make-grm-homogametic";
+    options_b["homogametic_chr"] = false;
+    if(options_in.find(op_grm_homogametic) != options_in.end()){
         /*
         std::map<string, vector<string>> t_option;
-        t_option["--chrx"] = {};
+        t_option["--chr-homogametic"] = {};
         t_option["--filter-sex"] = {};
         Pheno::registerOption(t_option);
         Marker::registerOption(t_option);
         Geno::registerOption(t_option);
         */
-        processFunctions.push_back("make_grmx");
-        options_b["xchr"] = true;
-        options_in.erase(op_grmx);
+        processFunctions.push_back("make_grm_homogametic");
+        options_b["homogametic_chr"] = true;
+        options_in.erase(op_grm_homogametic);
         return_value++;
     }
 
@@ -2370,8 +2389,8 @@ void GRM::processMain() {
             return;
         }
 
-        if(process_function == "make_grmx"){
-            LOGGER.i(0, "Note: this function takes X chromosome as non-PAR region.");
+        if(process_function == "make_grm_homogametic"){
+            LOGGER.i(0, "Note: this function treats homogametic chromosomes as non-PAR regions.");
 
             Pheno pheno;
             Marker marker;

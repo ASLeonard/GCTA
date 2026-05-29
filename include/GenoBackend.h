@@ -45,7 +45,7 @@ struct GenoBlock {
     std::vector<uintptr_t, AlignedAllocator<uintptr_t, 32>> buf;  ///< raw packed data, stride × numMarkers elements; 32-byte aligned for AVX2 vmovdqa
     std::vector<uint32_t>  extractIndex; ///< marker extract-indices for this block
     uint32_t               numMarkers = 0;
-    uint8_t                isSexXY   = 0; ///< 0=autosome, 1=chrX, 2=chrY
+    uint8_t                sexChromType   = 0; ///< 0=non-sex, 1=homogametic, 2=heterogametic
     int                    fileIndex  = 0; ///< which geno_file[] this block came from
 };
 

@@ -294,7 +294,7 @@ void gcta::read_subpopu(std::string filename, std::vector<std::string> &subpopu,
     subpopu_name.erase(unique(subpopu_name.begin(), subpopu_name.end()), subpopu_name.end());
  }
 
- void gcta::std_XMat_subpopu(std::string subpopu_file, Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std)
+ void gcta::std_XMat_subpopu(std::string subpopu_file, Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_homogametic_flag, bool miss_with_mu, bool divid_by_std)
 {
     std::vector<std::string> subpopu, subpopu_name;
     read_subpopu(subpopu_file, subpopu, subpopu_name);
@@ -366,9 +366,9 @@ void gcta::read_subpopu(std::string filename, std::vector<std::string> &subpopu,
         }
     }
 
-    if (!grm_xchr_flag) return;
+    if (!grm_homogametic_flag) return;
 
-    // for the X-chromosome
+    // for homogametic chromosomes
     check_sex();
     double f_buf = sqrt(0.5);
 

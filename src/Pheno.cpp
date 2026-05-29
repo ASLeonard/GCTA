@@ -34,8 +34,82 @@
 using std::to_string;
 
 map<string, string> Pheno::options;
+int8_t Pheno::heterogametic_sex_code = 1;
+int8_t Pheno::homogametic_sex_code = 2;
 
 const uintptr_t k1LU = (uintptr_t)1;
+
+int8_t Pheno::normalizeSexCode(int raw_code){
+    if(raw_code == heterogametic_sex_code){
+        return 1;
+    }
+    if(raw_code == homogametic_sex_code){
+        return 2;
+    }
+    return 0;
+}
+
+void Pheno::loadSexCodeMappingFromFile(const string& file_path){
+    std::ifstream fin(file_path.c_str());
+    if(!fin.good()){
+        LOGGER.e(0, "can't open sex chromosome file [" + file_path + "]");
+    }
+
+    bool found_homog = false;
+    bool found_heterog = false;
+    int homog_code = -1;
+    int heterog_code = -1;
+
+    string line;
+    while(std::getline(fin, line)){
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        boost::trim(line);
+        if(line.empty() || line[0] == '#'){
+            continue;
+        }
+
+        vector<string> toks;
+        boost::split(toks, line, boost::is_any_of("\t "), boost::token_compress_on);
+        if(toks.size() < 3){
+            LOGGER.e(0, "invalid --sex-chr-file format. Require at least 3 columns per non-comment line: <HOMOGAMETIC|HETEROGAMETIC> <PLINK sex code 1|2> <chromosome labels...>.");
+        }
+
+        string key = toks[0];
+        boost::to_upper(key);
+
+        int parsed_code = -1;
+        try{
+            parsed_code = std::stoi(toks[1]);
+        }catch(std::invalid_argument&){
+            LOGGER.e(0, "invalid PLINK sex code [" + toks[1] + "] in --sex-chr-file. Expected 1 or 2.");
+        }catch(std::out_of_range&){
+            LOGGER.e(0, "PLINK sex code [" + toks[1] + "] is out of range in --sex-chr-file.");
+        }
+        if(parsed_code != 1 && parsed_code != 2){
+            LOGGER.e(0, "invalid PLINK sex code [" + toks[1] + "] in --sex-chr-file. Expected 1 or 2.");
+        }
+
+        if(key == "HOMOGAMETIC" || key == "HOMO" || key == "XX"){
+            homog_code = parsed_code;
+            found_homog = true;
+        }else if(key == "HETEROGAMETIC" || key == "HETERO" || key == "XY"){
+            heterog_code = parsed_code;
+            found_heterog = true;
+        }else{
+            LOGGER.e(0, "invalid --sex-chr-file line prefix [" + toks[0] + "]. Use HOMOGAMETIC/HETEROGAMETIC.");
+        }
+    }
+
+    if(!found_homog || !found_heterog){
+        LOGGER.e(0, "invalid --sex-chr-file format. Both HOMOGAMETIC and HETEROGAMETIC lines are required.");
+    }
+    if(homog_code == heterog_code){
+        LOGGER.e(0, "invalid --sex-chr-file format. HOMOGAMETIC and HETEROGAMETIC must use different PLINK sex codes.");
+    }
+    if(heterog_code != 1 || homog_code != 2){
+        LOGGER.e(0, "invalid --sex-chr-file format. Fixed PLINK coding is required: HETEROGAMETIC=1 and HOMOGAMETIC=2.");
+    }
+}
 
 Pheno::Pheno() {
     if(options.find("m_file") != options.end()){
@@ -131,7 +205,10 @@ Pheno::Pheno() {
     }
 
     reinit();
-    LOGGER << index_keep.size() << " individuals to be included. " << index_keep_male.size() << " males, " << index_keep_sex.size() - index_keep_male.size() << " females, " << index_keep.size() - index_keep_sex.size() <<" unknown." << std::endl;
+        LOGGER << index_keep.size() << " individuals to be included. "
+            << index_keep_heterogametic.size() << " sex-code-1, "
+            << index_keep_sex.size() - index_keep_heterogametic.size() << " sex-code-2, "
+            << index_keep.size() - index_keep_sex.size() << " unknown." << std::endl;
 
     /*
     vector<string> filter_marker;
@@ -158,7 +235,7 @@ void Pheno::filter_keep_index(vector<uint32_t>& k_index){
 
 void Pheno::filter_sex(){
     vector<uint32_t> new_index;
-    vector<uint32_t> male_index;
+    vector<uint32_t> heterogametic_index;
     new_index.reserve(index_keep.size());
     uint32_t valid_index = 0;
     for(int i = 0; i < index_keep.size(); i++){
@@ -166,7 +243,7 @@ void Pheno::filter_sex(){
         int8_t sex_item = sex[index];
         switch(sex_item){
             case 1:
-                male_index.push_back(valid_index);
+                heterogametic_index.push_back(valid_index);
                 new_index.push_back(index);
                 valid_index++;
                 break;
@@ -179,7 +256,7 @@ void Pheno::filter_sex(){
 
     new_index.shrink_to_fit();
     index_keep = new_index;
-    index_keep_male = male_index;
+    index_keep_heterogametic = heterogametic_index;
     LOGGER.i(0, to_string(new_index.size()) + " individuals have gender information.");
 }
 
@@ -192,18 +269,18 @@ void Pheno::reinit(){
         LOGGER.e(0, "0 individual remains for further analysis.");
     }
     //init_mask_block();
-    index_keep_male.clear();
+    index_keep_heterogametic.clear();
     index_keep_sex.clear();
-    index_keep_male_extract.clear();
+    index_keep_heterogametic_extract.clear();
 
     uint32_t curSexIndex = 0;
     for(int i = 0; i < num_keep; i++){
         uint32_t curIndex = index_keep[i];
         int8_t curSex = sex[curIndex];
         if(curSex == 1){
-            index_keep_male.push_back(curIndex);
-            //index_keep_male_extract.push_back(curSexIndex);
-            index_keep_male_extract.push_back(i);
+            index_keep_heterogametic.push_back(curIndex);
+            //index_keep_heterogametic_extract.push_back(curSexIndex);
+            index_keep_heterogametic_extract.push_back(i);
             index_keep_sex.push_back(curIndex);
             curSexIndex++;
         }else if(curSex == 2){
@@ -410,10 +487,8 @@ void Pheno::read_psam(string psam_file){
             mark[i] = (fid[i] + "\t" + pid[i]);
             int sex_code = 0;
             string &sex_item = lists[iSEX][i];
-            if(sex_item == "1"){
-                sex_code = 1;
-            }else if(sex_item == "2"){
-                sex_code = 2;
+            if(sex_item == "1" || sex_item == "2"){
+                sex_code = normalizeSexCode(std::stoi(sex_item));
             }// others all unknown
             //sex[i] = std::stoi(lists[iSEX][i]);
             sex[i] = sex_code;
@@ -472,8 +547,8 @@ void Pheno::read_sample(string sample_file){
 
     std::map<string, uint8_t> sex_map;
     sex_map["0"] = 0;
-    sex_map["1"] = 1;
-    sex_map["2"] = 2;
+    sex_map["1"] = normalizeSexCode(1);
+    sex_map["2"] = normalizeSexCode(2);
     sex_map["NA"] = 0;
     sex_map["NAN"] = 0;
     sex_map["na"] = 0;
@@ -533,7 +608,13 @@ void Pheno::read_fam(string fam_file) {
         mark.push_back(line_elements[0] + "\t" + line_elements[1]);
         fa_id.push_back(line_elements[2]);
         mo_id.push_back(line_elements[3]);
-        sex.push_back(std::stoi(line_elements[4]));
+        int sex_raw = 0;
+        try{
+            sex_raw = std::stoi(line_elements[4]);
+        }catch(std::invalid_argument&){
+            sex_raw = 0;
+        }
+        sex.push_back(normalizeSexCode(sex_raw));
         pheno.push_back(strtod("nan", NULL)); //5
         last_length = line_elements.size();
 
@@ -589,11 +670,11 @@ vector<uint32_t>& Pheno::get_index_keep() {
 vector<uint32_t>& Pheno::getSexValidRawIndex(){
     return this->index_keep_sex;
 }
-vector<uint32_t>& Pheno::getMaleRawIndex(){
-    return this->index_keep_male;
+vector<uint32_t>& Pheno::getHeterogameticRawIndex(){
+    return this->index_keep_heterogametic;
 }
-vector<uint32_t>& Pheno::getMaleExtractIndex(){
-    return this->index_keep_male_extract;
+vector<uint32_t>& Pheno::getHeterogameticExtractIndex(){
+    return this->index_keep_heterogametic_extract;
 }
 
 
@@ -652,8 +733,8 @@ uint32_t Pheno::count_keep(){
     return num_keep;
 }
 
-uint32_t Pheno::count_male(){
-    return index_keep_male.size();
+uint32_t Pheno::count_heterogametic(){
+    return index_keep_heterogametic.size();
 }
 
 int8_t Pheno::get_sex(uint32_t index){
@@ -724,9 +805,7 @@ void Pheno::update_sex(vector<string>& indi_marks, vector<double>& phenos){
     for(int i = 0; i < common_index.size(); i++){
         uint32_t raw_index = index_keep[common_index[i]];
         int temp_update_pheno = std::round(phenos[update_index[pheno_index2[i]]]);
-        if(temp_update_pheno != 1 && temp_update_pheno != 2){
-            temp_update_pheno = 0;
-        }
+        temp_update_pheno = normalizeSexCode(temp_update_pheno);
         indicies.push_back(raw_index);
         sex[raw_index] = temp_update_pheno;
     }
@@ -926,8 +1005,8 @@ void Pheno::getMaskBit(uint64_t *maskp){
 }
 
 //maskp must be zeroed
-void Pheno::getMaskBitMale(uint64_t *maskp){
-    for(auto keep_item : index_keep_male){
+void Pheno::getMaskBitHeterogametic(uint64_t *maskp){
+    for(auto keep_item : index_keep_heterogametic){
         uint32_t cur_qword = keep_item / 64;
         uint32_t cur_offset = keep_item % 64;
         maskp[cur_qword] |= k1LU << cur_offset;
@@ -936,6 +1015,16 @@ void Pheno::getMaskBitMale(uint64_t *maskp){
 
 
 int Pheno::registerOption(map<string, vector<string>>& options_in){
+    heterogametic_sex_code = 1;
+    homogametic_sex_code = 2;
+    if(options_in.find("--sex-chr-file") != options_in.end()){
+        if(options_in["--sex-chr-file"].size() == 1){
+            loadSexCodeMappingFromFile(options_in["--sex-chr-file"][0]);
+        }else{
+            LOGGER.e(0, "multiple values in --sex-chr-file are not supported currently");
+        }
+    }
+
     addOneFileOption("pheno_file", ".fam", "--bfile", options_in, options);
     addOneFileOption("pheno_file", "", "--fam", options_in, options);
     options_in.erase("--fam");

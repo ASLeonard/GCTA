@@ -27,6 +27,8 @@
 #include "OptionIO.h"
 #include <memory>
 #include <utility>
+#include <cctype>
+#include <limits>
 
 #ifdef BGEN_SUPPORT
 #include <sqlite3.h>
@@ -38,6 +40,126 @@ using std::unique_ptr;
 std::map<std::string, std::string> Marker::options;
 std::map<std::string, int> Marker::options_i;
 std::set<std::string> Marker::allowed_chrs;
+std::set<std::string> Marker::homogametic_chrs;
+std::set<std::string> Marker::heterogametic_chrs;
+
+std::string Marker::normalizeChrLabel(const std::string& chr_label) {
+    std::string norm = chr_label;
+    boost::trim(norm);
+    std::transform(norm.begin(), norm.end(), norm.begin(),
+                   [](unsigned char c){ return static_cast<char>(std::toupper(c)); });
+    return norm;
+}
+
+bool Marker::isHomogameticChr(const std::string& chr_label) {
+    return homogametic_chrs.count(normalizeChrLabel(chr_label)) > 0;
+}
+
+bool Marker::isHeterogameticChr(const std::string& chr_label) {
+    return heterogametic_chrs.count(normalizeChrLabel(chr_label)) > 0;
+}
+
+bool Marker::isPositiveIntegerChrLabel(const std::string& chr_label) {
+    const std::string norm = normalizeChrLabel(chr_label);
+    if (norm.empty()) return false;
+    for (char c : norm) {
+        if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+    }
+    try {
+        return std::stoi(norm) >= 1;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool Marker::isAllowedChrLabel(const std::string& chr_label) {
+    const std::string norm = normalizeChrLabel(chr_label);
+    const auto mode_it = options_i.find("chr_filter_mode");
+    const int filter_mode = (mode_it == options_i.end()) ? 0 : mode_it->second;
+
+    if (filter_mode == 1) {
+        return !isHomogameticChr(norm) && !isHeterogameticChr(norm);
+    }
+    if (filter_mode == 2) {
+        return true;
+    }
+    return allowed_chrs.empty() || allowed_chrs.count(norm) > 0;
+}
+
+void Marker::resetSexChromosomeSets() {
+    homogametic_chrs.clear();
+    heterogametic_chrs.clear();
+}
+
+void Marker::loadSexChromosomeFile(const std::string& file_path) {
+    std::ifstream fin(file_path.c_str());
+    if (!fin.good()) {
+        LOGGER.e(0, "can't open sex chromosome file [" + file_path + "]");
+    }
+
+    std::set<std::string> file_homog;
+    std::set<std::string> file_hetero;
+
+    std::string line;
+    while (std::getline(fin, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        boost::trim(line);
+        if (line.empty() || line[0] == '#') continue;
+
+        std::vector<std::string> toks;
+        boost::split(toks, line, boost::is_any_of("\t "), boost::token_compress_on);
+        if (toks.empty()) continue;
+        if (toks.size() < 3) {
+            LOGGER.e(0, "invalid --sex-chr-file format. Require at least 3 columns per non-comment line: <HOMOGAMETIC|HETEROGAMETIC> <PLINK sex code 1|2> <chromosome labels...>.");
+        }
+
+        const std::string key = normalizeChrLabel(toks[0]);
+        int plink_sex_code = -1;
+        try {
+            plink_sex_code = std::stoi(toks[1]);
+        } catch (std::invalid_argument&) {
+            LOGGER.e(0, "invalid PLINK sex code [" + toks[1] + "] in --sex-chr-file. Expected 1 or 2.");
+        } catch (std::out_of_range&) {
+            LOGGER.e(0, "PLINK sex code [" + toks[1] + "] is out of range in --sex-chr-file.");
+        }
+        if (plink_sex_code != 1 && plink_sex_code != 2) {
+            LOGGER.e(0, "invalid PLINK sex code [" + toks[1] + "] in --sex-chr-file. Expected 1 or 2.");
+        }
+
+        if (key == "HOMOGAMETIC" || key == "HOMO" || key == "XX") {
+            if (plink_sex_code != 2) {
+                LOGGER.e(0, "invalid --sex-chr-file mapping for HOMOGAMETIC. Fixed PLINK coding requires HOMOGAMETIC=2.");
+            }
+            for (size_t i = 2; i < toks.size(); ++i) {
+                const std::string v = normalizeChrLabel(toks[i]);
+                if (!v.empty()) file_homog.insert(v);
+            }
+        } else if (key == "HETEROGAMETIC" || key == "HETERO" || key == "XY") {
+            if (plink_sex_code != 1) {
+                LOGGER.e(0, "invalid --sex-chr-file mapping for HETEROGAMETIC. Fixed PLINK coding requires HETEROGAMETIC=1.");
+            }
+            for (size_t i = 2; i < toks.size(); ++i) {
+                const std::string v = normalizeChrLabel(toks[i]);
+                if (!v.empty()) file_hetero.insert(v);
+            }
+        } else {
+            LOGGER.e(0, "invalid --sex-chr-file line prefix [" + toks[0] + "]. Use HOMOGAMETIC/HETEROGAMETIC.");
+        }
+    }
+
+    if (file_homog.empty() && file_hetero.empty()) {
+        LOGGER.e(0, "invalid --sex-chr-file format. Provide at least one 'HOMOGAMETIC <PLINK sex code 1|2> <labels...>' or 'HETEROGAMETIC <PLINK sex code 1|2> <labels...>' line.");
+    }
+
+    for (const auto& v : file_homog) {
+        if (file_hetero.count(v)) {
+            LOGGER.e(0, "sex chromosome label [" + v + "] is listed for both homogametic and heterogametic sets.");
+        }
+    }
+
+    homogametic_chrs = std::move(file_homog);
+    heterogametic_chrs = std::move(file_hetero);
+}
 
 Marker::Marker() {
  
@@ -286,7 +408,7 @@ void Marker::read_mbgen(string mbgen_file){
 
 
 //cur_marker_index:  is the index point to position of index_extract
-std::vector<uint32_t> Marker::getNextWindowIndex(uint32_t cur_marker_index, uint32_t window, bool& chr_ends, bool& isX, bool retRaw){
+std::vector<uint32_t> Marker::getNextWindowIndex(uint32_t cur_marker_index, uint32_t window, bool& chr_ends, bool& isHomogameticChrom, bool retRaw){
     std::vector<uint32_t> indices;
     if(cur_marker_index >= index_extract.size()){
         chr_ends = true;
@@ -299,7 +421,7 @@ std::vector<uint32_t> Marker::getNextWindowIndex(uint32_t cur_marker_index, uint
     uint32_t final_pd = window + cur_pd;
 
     chr_ends = false;
-    isX = (cur_chr == "X");
+    isHomogameticChrom = isHomogameticChr(cur_chr);
 
     for(uint32_t marker_index = cur_marker_index; marker_index < index_extract.size(); marker_index++){
         uint32_t temp_index = index_extract[marker_index];
@@ -316,7 +438,7 @@ std::vector<uint32_t> Marker::getNextWindowIndex(uint32_t cur_marker_index, uint
     return indices;
 }
 
-uint32_t Marker::getNextSize(const std::vector<uint32_t> &rawRef, uint32_t curExtractIndex, uint32_t num, int &fileIndex, bool &chr_ends, uint8_t &isSexXY){
+uint32_t Marker::getNextSize(const std::vector<uint32_t> &rawRef, uint32_t curExtractIndex, uint32_t num, int &fileIndex, bool &chr_ends, uint8_t &sexChromType){
     if(curExtractIndex >= rawRef.size()){
         chr_ends = true;
         return 0;
@@ -327,12 +449,12 @@ uint32_t Marker::getNextSize(const std::vector<uint32_t> &rawRef, uint32_t curEx
 
     chr_ends = false;
     
-    if(cur_chr == "X"){
-        isSexXY = 1;
-    }else if(cur_chr == "Y"){
-        isSexXY = 2;
+    if(isHomogameticChr(cur_chr)){
+        sexChromType = 1;
+    }else if(isHeterogameticChr(cur_chr)){
+        sexChromType = 2;
     }else{
-        isSexXY = 0;
+        sexChromType = 0;
     }
 
     fileIndex = getMIndex(cur_index);
@@ -359,7 +481,7 @@ uint32_t Marker::getNextSize(const std::vector<uint32_t> &rawRef, uint32_t curEx
 
 
 
-std::vector<uint32_t> Marker::getNextSizeIndex(uint32_t cur_marker_index, uint32_t num, bool& chr_ends, bool& isX, bool retRaw){
+std::vector<uint32_t> Marker::getNextSizeIndex(uint32_t cur_marker_index, uint32_t num, bool& chr_ends, bool& isHomogameticChrom, bool retRaw){
     std::vector<uint32_t> indices;
     indices.reserve(num);
     if(cur_marker_index >= index_extract.size()){
@@ -370,7 +492,7 @@ std::vector<uint32_t> Marker::getNextSizeIndex(uint32_t cur_marker_index, uint32
     std::string cur_chr = chr[cur_index];
 
     chr_ends = false;
-    isX = (cur_chr == "X");
+    isHomogameticChrom = isHomogameticChr(cur_chr);
 
     for(uint32_t marker_index = cur_marker_index; marker_index < cur_marker_index + num; marker_index++){
         if(marker_index >= index_extract.size()){
@@ -504,7 +626,7 @@ void Marker::read_pvar(string pvar_file){
             uint32_t curRow = i + oriSize;
             std::string chr_str = lists[iChr][i];
             chr[curRow] = chr_str;
-            validSNP[i] = (allowed_chrs.empty() || allowed_chrs.count(chr_str)) ? 1 : 0;
+            validSNP[i] = isAllowedChrLabel(chr_str) ? 1 : 0;
             name[curRow] = lists[iID][i];
             try{
                 //gd here if need;
@@ -601,7 +723,7 @@ void Marker::read_bim(string bim_file) {
         //TODO refractor the code.
         byte_start.push_back(1);
         last_length = line_elements.size();
-        if(allowed_chrs.empty() || allowed_chrs.count(chr_str)){
+        if(isAllowedChrLabel(chr_str)){
             index_extract.push_back(line_number - 1);
         }
     }
@@ -944,7 +1066,7 @@ void Marker::read_bgen_index(string bgen_file){
     int count_chr_error = 0;
     while((rc = sqlite3_step(stmt)) == SQLITE_ROW){
         std::string snp_chr = RCSTR(sqlite3_column_text(stmt, 0));
-        bool keep_snp = allowed_chrs.empty() || allowed_chrs.count(snp_chr);
+        bool keep_snp = isAllowedChrLabel(snp_chr);
         if(!keep_snp) count_chr_error++;
         if(keep_snp){
             chr.push_back(snp_chr);
@@ -1152,7 +1274,7 @@ void Marker::read_bgen(string bgen_file){
 		unique_ptr<char[]> snp_chr(new char[len_chr + 1]());
         readBytes(h_bgen, len_chr, snp_chr.get());
         std::string chr_str = std::string(snp_chr.get());
-        bool keep_snp = allowed_chrs.empty() || allowed_chrs.count(chr_str);
+        bool keep_snp = isAllowedChrLabel(chr_str);
         if(!keep_snp) count_chr_error++;
 
 
@@ -1226,19 +1348,11 @@ std::vector<uint32_t>& Marker::get_extract_index(){ // raw index
 }
 
 std::vector<uint32_t> Marker::get_extract_index_autosome(){ // returns the index in keep list not raw
-    int last_auto_chr = options_i["last_chr_autosome"];
     std::vector<uint32_t> auto_index;
     for(int i = 0; i < (int)index_extract.size(); i++){
         uint32_t curIndex = index_extract[i];
         const std::string& c = chr[curIndex];
-        bool is_auto = false;
-        try {
-            int n = std::stoi(c);
-            if(n >= 1 && n <= last_auto_chr) is_auto = true;
-        } catch(...) {
-            if(c == "XY") is_auto = true;
-        }
-        if(is_auto) auto_index.push_back(i);
+        if(!isHomogameticChr(c) && !isHeterogameticChr(c)) auto_index.push_back(i);
     }
     return auto_index;
 }
@@ -1247,7 +1361,7 @@ std::vector<uint32_t> Marker::get_extract_index_X(){
    std::vector<uint32_t> auto_index;
    for(int i = 0; i < (int)index_extract.size(); i++){
        uint32_t curIndex = index_extract[i];
-       if(chr[curIndex] == "X"){
+       if(isHomogameticChr(chr[curIndex])){
            auto_index.push_back(i);
        }
    }
@@ -1428,61 +1542,73 @@ int Marker::registerOption(map<string, std::vector<string>>& options_in){
 		addOneFileOption("bgen_file", "", "--bgen", options_in);
 		addMFileListsOption("mbgen_file", ".bgen", "--mbgen", options_in, options);
 	#endif
-	
-        
-    if(options_in.find("--autosome-num") != options_in.end()){
-        if(options_in["--autosome-num"].size() == 1){
-            try{
-                options_i["last_chr_autosome"] = std::stoi(options_in["--autosome-num"][0]);
-            }catch(std::invalid_argument&){
-                LOGGER.e(0, "invalid autosome number: " + options_in["--autosome-num"][0]);
-            }
+
+    allowed_chrs.clear();
+    resetSexChromosomeSets();
+    options_i["chr_filter_mode"] = 0; // 0: exact labels from allowed_chrs
+
+    if(options_in.find("--sex-chr-file") != options_in.end()){
+        if(options_in["--sex-chr-file"].size() == 1){
+            loadSexChromosomeFile(options_in["--sex-chr-file"][0]);
         }else{
-            LOGGER.e(0, "multiple values in --autosome-num are not supported currently");
+            LOGGER.e(0, "multiple values in --sex-chr-file are not supported currently");
         }
     }
-    if(options_i.find("last_chr_autosome") == options_i.end()){
-        options_i["last_chr_autosome"] = 22;
+
+    if(options_in.find("--homogametic-chr") != options_in.end()){
+        if(options_in["--homogametic-chr"].empty()){
+            LOGGER.e(0, "--homogametic-chr requires at least one chromosome label");
+        }
+        homogametic_chrs.clear();
+        for(const auto& s : options_in["--homogametic-chr"]){
+            homogametic_chrs.insert(normalizeChrLabel(s));
+        }
     }
-    // include the x y xy MT
-    options_i["last_chr"] = options_i["last_chr_autosome"] + 4;
+
+    if(options_in.find("--heterogametic-chr") != options_in.end()){
+        if(options_in["--heterogametic-chr"].empty()){
+            LOGGER.e(0, "--heterogametic-chr requires at least one chromosome label");
+        }
+        heterogametic_chrs.clear();
+        for(const auto& s : options_in["--heterogametic-chr"]){
+            heterogametic_chrs.insert(normalizeChrLabel(s));
+        }
+    }
+
+    for(const auto& s : homogametic_chrs){
+        if(heterogametic_chrs.count(s)){
+            LOGGER.e(0, "chromosome label [" + s + "] cannot be both homogametic and heterogametic.");
+        }
+    }
+
+    if(options_in.find("--autosome-num") != options_in.end()){
+        LOGGER.w(0, "--autosome-num is ignored in the reference-agnostic Marker schema; use --homogametic-chr/--heterogametic-chr or --sex-chr-file to classify chromosomes.");
+    }
     if(options_i.find("start_chr") == options_i.end()){
         options_i["start_chr"] = 0;
-        options_i["end_chr"] = options_i["last_chr"];
+        options_i["end_chr"] = 0;
     }
 
     bool filterChrFlag = false;
-    //static std::map<string, std::string> options;
-    //static std::map<string, int> options_i;
-    
     static bool specifiedChrFlag = false;
 
     if(options_in.find("--autosome") != options_in.end()){
-        if(specifiedChrFlag){
-            if(options_i["start_chr"] < 1 || options_i["end_chr"] > options_i["last_chr_autosome"]){
-                LOGGER.e(0, "the chromosome number specified for --chr is not within the range for the autosomes (i.e., 1 to 22)");
-            }
-        }else{
-            options_i["start_chr"] = 1;
-            options_i["end_chr"] = options_i["last_chr_autosome"];
-            filterChrFlag = true;
-        }
+        options_i["start_chr"] = 0;
+        options_i["end_chr"] = 0;
+        allowed_chrs.clear();
+        options_i["chr_filter_mode"] = 1;
+        filterChrFlag = true;
     }
 
-
-    if(options_in.find("--autosome-x-y") != options_in.end()){
+    if(options_in.find("--autosome-sex") != options_in.end()){
         if(filterChrFlag){
-            LOGGER.w(0, "One of the chromosome filtering criteria has been applied, which has been overridden by --autosome-x-y");
+            LOGGER.w(0, "One of the chromosome filtering criteria has been applied, which has been overridden by --autosome-sex");
         }
-        if(specifiedChrFlag){
-            if(options_i["start_chr"] < 1 || options_i["end_chr"] > options_i["last_chr_autosome"] + 2){
-                LOGGER.e(0, "The chromosome number specified for --chr is not within the range for the autosomes (i.e., 1 to 22)");
-            }
-        }else{
-            options_i["start_chr"] = 1;
-            options_i["end_chr"] = options_i["last_chr_autosome"] + 2;
-            filterChrFlag = true;
-        }
+        options_i["start_chr"] = 0;
+        options_i["end_chr"] = 0;
+        allowed_chrs.clear();
+        options_i["chr_filter_mode"] = 2;
+        filterChrFlag = true;
     }
 
     if(options_in.find("--chr") != options_in.end()){
@@ -1490,43 +1616,67 @@ int Marker::registerOption(map<string, std::vector<string>>& options_in){
         if(filterChrFlag){
             LOGGER.w(0, "One of the CHR filtering criteria has been applied, which has been overridden by --chr");
         }
-        if(options_in["--chr"].size() == 1){
+
+        const auto& chr_args = options_in["--chr"];
+        allowed_chrs.clear();
+        options_i["chr_filter_mode"] = 0;
+        if(chr_args.size() == 1){
             try{
-                options_i["start_chr"] = std::stoi(options_in["--chr"][0]);
+                options_i["start_chr"] = std::stoi(chr_args[0]);
                 options_i["end_chr"] = options_i["start_chr"];
+                if(options_i["start_chr"] < 1){
+                    LOGGER.e(0, "the value specified for --chr must be >= 1.");
+                }
+                allowed_chrs.insert(std::to_string(options_i["start_chr"]));
             }catch(std::invalid_argument&){
-                LOGGER.e(0, "non-numeric value specified for --chr");
+                allowed_chrs.insert(normalizeChrLabel(chr_args[0]));
+            }
+        }else if(chr_args.size() == 2){
+            bool both_numeric = true;
+            int chr_start = 0;
+            int chr_end = 0;
+            try{
+                chr_start = std::stoi(chr_args[0]);
+                chr_end = std::stoi(chr_args[1]);
+            }catch(std::invalid_argument&){
+                both_numeric = false;
             }
 
-        }else if(options_in["--chr"].size() == 2){
-            try{
-                options_i["start_chr"] = std::stoi(options_in["--chr"][0]);
-                options_i["end_chr"] = std::stoi(options_in["--chr"][1]);
-            }catch(std::invalid_argument&){
-                LOGGER.e(0, "non-numeric value specified for --chr");
+            if(both_numeric){
+                options_i["start_chr"] = chr_start;
+                options_i["end_chr"] = chr_end;
+                if(options_i["start_chr"] < 1 || options_i["end_chr"] < 1){
+                    LOGGER.e(0, "the numeric value(s) specified for --chr must be >= 1.");
+                }
+                if(options_i["start_chr"] > options_i["end_chr"]){
+                    LOGGER.e(0, "--chr numeric range is invalid: start is larger than end.");
+                }
+                for(int c = options_i["start_chr"]; c <= options_i["end_chr"]; c++){
+                    allowed_chrs.insert(std::to_string(c));
+                }
+            }else{
+                allowed_chrs.insert(normalizeChrLabel(chr_args[0]));
+                allowed_chrs.insert(normalizeChrLabel(chr_args[1]));
             }
         }else{
             LOGGER.e(0, "multiple --chr flags are not supported currently");
         }
 
-        if(options_i["start_chr"] < 0 || options_i["end_chr"] > options_i["last_chr"]){
-            LOGGER.e(0, "the value specified for --chr is out of the accepted range.");
-        }
         filterChrFlag = true;
-        // Populate allowed_chrs so that read_bim/read_pvar filter to these chromosomes
-        allowed_chrs.clear();
-        for(int c = options_i["start_chr"]; c <= options_i["end_chr"]; c++){
-            allowed_chrs.insert(std::to_string(c));
-        }
     }
 
-    if(options_in.find("--chrx") != options_in.end()){
+    if(options_in.find("--chr-homogametic") != options_in.end()){
         specifiedChrFlag = true;
         if(filterChrFlag){
-            LOGGER.w(0, "One of the CHR filtering criteria has been applied, which has been overridden by --chrx");
+            LOGGER.w(0, "One of the CHR filtering criteria has been applied, which has been overridden by --chr-homogametic");
         }
-        options_i["start_chr"] = options_i["last_chr_autosome"] + 1;
-        options_i["end_chr"] = options_i["start_chr"];
+        if(homogametic_chrs.empty()){
+            LOGGER.e(0, "--chr-homogametic requires homogametic chromosome labels to be provided via --sex-chr-file or --homogametic-chr.");
+        }
+        options_i["start_chr"] = 0;
+        options_i["end_chr"] = 0;
+        options_i["chr_filter_mode"] = 0;
+        allowed_chrs = homogametic_chrs;
         filterChrFlag = true;
     }
 

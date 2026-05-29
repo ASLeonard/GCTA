@@ -29,7 +29,9 @@
 
 gcta::gcta(int autosome_num, double rm_ld_cutoff, std::string out)
 {
+    // autosome_num <= 0 means no explicit autosome upper bound was provided.
     _autosome_num = autosome_num;
+    _legacy_homogametic_chr = 0;
     _rm_ld_cutoff = rm_ld_cutoff;
     _out = out;
     _dosage_flag = false;
@@ -66,6 +68,7 @@ gcta::gcta(int autosome_num, double rm_ld_cutoff, std::string out)
 }
 
 gcta::gcta() {
+    _legacy_homogametic_chr = 0;
     _dosage_flag = false;
     _genetic_model = GeneticModel::ADDITIVE;
     _grm_bin_flag = false;
@@ -1823,7 +1826,7 @@ void gcta::update_ref_A(std::string ref_A_file) {
 void gcta::calcu_mu(bool ssq_flag) {
     int i = 0, j = 0;
 
-    std::vector<double> auto_fac(_keep.size()), xfac(_keep.size()), fac(_keep.size());
+    std::vector<double> auto_fac(_keep.size()), xfac(_keep.size());
     bool no_sex_info = false;
     bool flag_x_problem = false;
     for (i = 0; i < _keep.size(); i++) {
@@ -1836,7 +1839,6 @@ void gcta::calcu_mu(bool ssq_flag) {
             xfac[i] = 1.0;
             no_sex_info = true;
         }
-        fac[i] = 0.5;
     }
 
     LOGGER << "Calculating allele frequencies ..." << std::endl;
@@ -1845,20 +1847,18 @@ void gcta::calcu_mu(bool ssq_flag) {
 
     #pragma omp parallel for
     for (int j = 0; j < _include.size(); j++) {
-        if (_chr[_include[j]]<(_autosome_num + 1)) {
-            mu_func(j, auto_fac);
-        }else if (_chr[_include[j]] == (_autosome_num + 1)) {
+        if (_legacy_homogametic_chr != 0 && _chr[_include[j]] == _legacy_homogametic_chr) {
             if(no_sex_info){
                 flag_x_problem = true;
             }
             mu_func(j, xfac);
-        }else{
-            mu_func(j, fac);
+        } else {
+            mu_func(j, auto_fac);
         }
     }
 
     if(flag_x_problem){
-        LOGGER.w(0, "gender information (the 5th column of the .fam file) is required for analysis on chromosome X. GCTA assumes that those missing samples are females.");
+        LOGGER.w(0, "sex-code information (the 5th column of the .fam file) is required for analysis on the selected homogametic chromosome. GCTA assumes missing codes are homogametic (code 2).");
     }
 }
 
@@ -2110,7 +2110,7 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
     return have_mis;
 }
 
-void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag, bool miss_with_mu, bool divid_by_std)
+void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_homogametic_flag, bool miss_with_mu, bool divid_by_std)
 {
     if (_mu.empty()) calcu_mu();
 
@@ -2142,9 +2142,9 @@ void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_xchr_flag,
         }
     }
 
-    if (!grm_xchr_flag) return;
+    if (!grm_homogametic_flag) return;
 
-    // for the X-chromosome
+    // for homogametic chromosomes
     check_sex();
     double f_buf = sqrt(0.5);
 

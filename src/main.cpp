@@ -90,12 +90,13 @@ int main(int argc, char *argv[]){
     LOGGER.ts("main");
     vector<string> supported_flagsV2 = {"--test-covar",
         "--bfile", "--bim", "--fam", "--bed", "--keep", "--remove", 
-        "--chr", "--autosome-num", "--autosome", "--extract", "--exclude", "--maf", "--max-maf", 
+        "--chr", "--autosome-num", "--autosome", "--autosome-sex", "--chr-homogametic", "--extract", "--exclude", "--maf", "--max-maf", 
+        "--sex-chr-file", "--homogametic-chr", "--heterogametic-chr",
         "--freq", "--out", "--make-grm", "--make-grm-part", "--thread-num", "--threads", "--grm",
         "--grm-cutoff", "--grm-singleton", "--cutoff-detail", "--make-bK-sparse", "--make-bK", "--pheno",
         "--mpheno", "--ge", "--fastGWA", "--fastGWA-mlm", "--fastGWA-mlm-exact", "--fastGWA-lr", "--save-fastGWA-mlm-residual", "--grm-sparse", "--qcovar", "--covar", "--rcovar", "--covar-maxlevel", "--make-grm-d", "--make-grm-d-part",
         "--cg", "--ldlt", "--llt", "--pardiso", "--tcg", "--lscg", "--save-inv", "--load-inv",
-        "--update-ref-allele", "--update-freq", "--update-sex", "--mbfile", "--freqx", "--make-grm-xchr", "--make-grm-xchr-part", "--dc", "--make-grm-alg",
+        "--update-ref-allele", "--update-freq", "--update-sex", "--mbfile", "--freqx", "--make-grm-homogametic", "--make-grm-homogametic-part", "--dc", "--make-grm-alg",
         "--make-bed", "--recodet", "--sum-geno-x", "--sample", "--bgen", "--mbgen", "--hard-call-thresh", "--dosage-call", "--dosage", "--mgrm", "--unify-grm", "--rel-only", 
         "--ld-matrix", "--r", "--ld-wind", "--r2", "--subtract-grm", "--save-pheno", "--save-bin", "--no-marker", "--joint-covar", "--sparse-cutoff", "--noblas", "--fastGWA-gram",
         "--inv-t1", "--est-vg", "--force-gwa", "--reml-detail", "--h2-limit", "--gwa-no-constrain", "--verbose", "--c-inf", "--c-inf-no-filter", "--geno", "--info", "--nofilter",
@@ -178,6 +179,13 @@ int main(int argc, char *argv[]){
                 options[last_key].push_back(cur_string);
             }
         }
+    }
+
+    if(options.find("--autosome-x-y") != options.end()){
+        LOGGER.e(0, "--autosome-x-y has been removed. Use --autosome-sex.");
+    }
+    if(options.find("--chrx") != options.end()){
+        LOGGER.e(0, "--chrx has been removed. Use --chr-homogametic.");
     }
 
      //Find the --out options

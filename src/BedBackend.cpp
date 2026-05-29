@@ -71,8 +71,8 @@ private:
     MaskBuf keepMaskInter_;
     MaskBuf sexMask_;
     MaskBuf sexMaskInter_;
-    MaskBuf maleMask_;
-    MaskBuf maleMaskInter_;
+    MaskBuf heterogameticMask_;
+    MaskBuf heterogameticMaskInter_;
 };
 
 // --------------------------------------------------------------------------
@@ -101,12 +101,12 @@ BedBackend::BedBackend(Geno &geno) : g_(geno)
     keepMaskInter_  = allocMask(nMask);
     sexMask_        = allocMask(nMask);
     sexMaskInter_   = allocMask(nMask);
-    maleMask_       = allocMask(nMask);
-    maleMaskInter_  = allocMask(nMask);
+    heterogameticMask_       = allocMask(nMask);
+    heterogameticMaskInter_  = allocMask(nMask);
 
     if (!keepMask_ || !keepMaskInter_ ||
         !sexMask_  || !sexMaskInter_  ||
-        !maleMask_ || !maleMaskInter_) {
+        !heterogameticMask_ || !heterogameticMaskInter_) {
         LOGGER.e(0, "BedBackend: can't allocate mask buffers.");
     }
 
@@ -115,15 +115,15 @@ BedBackend::BedBackend(Geno &geno) : g_(geno)
     g_.keepMaskInterPtr = keepMaskInter_.get();
     g_.sexMaskPtr       = sexMask_.get();
     g_.sexMaskInterPtr  = sexMaskInter_.get();
-    g_.maleMaskPtr      = maleMask_.get();
-    g_.maleMaskInterPtr = maleMaskInter_.get();
+    g_.heterogameticMaskPtr      = heterogameticMask_.get();
+    g_.heterogameticMaskInterPtr = heterogameticMaskInter_.get();
 
     PgenReader::SetSampleSubsets(g_.sampleKeepIndex, rawCT,
                                  g_.keepMaskPtr, g_.keepMaskInterPtr);
     PgenReader::SetSampleSubsets(g_.keepSexIndex,  rawCT,
                                  g_.sexMaskPtr,  g_.sexMaskInterPtr);
-    PgenReader::SetSampleSubsets(g_.keepMaleIndex, rawCT,
-                                 g_.maleMaskPtr, g_.maleMaskInterPtr);
+    PgenReader::SetSampleSubsets(g_.keepHeterogameticIndex, rawCT,
+                                 g_.heterogameticMaskPtr, g_.heterogameticMaskInterPtr);
 }
 
 // --------------------------------------------------------------------------
@@ -136,8 +136,8 @@ BedBackend::~BedBackend()
     g_.keepMaskInterPtr = nullptr;
     g_.sexMaskPtr       = nullptr;
     g_.sexMaskInterPtr  = nullptr;
-    g_.maleMaskPtr      = nullptr;
-    g_.maleMaskInterPtr = nullptr;
+    g_.heterogameticMaskPtr      = nullptr;
+    g_.heterogameticMaskInterPtr = nullptr;
 }
 
 // --------------------------------------------------------------------------
@@ -169,20 +169,20 @@ try {
     int      preFileIndex   = -1;
     int      fileIndex      = 0;
     bool     chr_ends       = false;
-    uint8_t  isSexXY        = 0;
+    uint8_t  sexChromType        = 0;
     PgenReader reader;
 
     // ── Main I/O loop ────────────────────────────────────────────────────
     while (finishedMarker < numMarker) {
         uint32_t nextSize = g_.marker->getNextSize(
             rawIndices, finishedMarker, markerBlock,
-            fileIndex, chr_ends, isSexXY);
+            fileIndex, chr_ends, sexChromType);
         if (nextSize == 0) break;
 
         // Build a block on the I/O thread.
         GenoBlock block;
         block.numMarkers = nextSize;
-        block.isSexXY   = isSexXY;
+        block.sexChromType   = sexChromType;
         block.fileIndex  = fileIndex;
         block.buf.resize(static_cast<std::size_t>(stride) * nextSize);
         block.extractIndex.assign(

@@ -669,7 +669,7 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
     vi_buf.erase(unique_range.begin(), vi_buf.end());
     if(vi_buf.size()<2) LOGGER.e(0, "There is only one chromosome. The MLM leave-on-chromosome-out (LOCO) analysis requires at least two chromosomes.");
     for(i=0; i<vi_buf.size(); i++){
-        if(vi_buf[i]<=_autosome_num) chrs.push_back(vi_buf[i]);
+        if(isAutosomalChr(vi_buf[i])) chrs.push_back(vi_buf[i]);
     }
     std::vector<int> include_o(_include);
     std::map<std::string, int> snp_name_map_o(_snp_name_map);
@@ -893,7 +893,9 @@ void gcta::mlma_loco_v2(std::string grm_file, std::string grm_chr_prefix,
     if (vi_buf.size() < 2)
         LOGGER.e(0, "There is only one chromosome. LOCO analysis requires ≥2 chromosomes.");
     for (const int c : vi_buf)
-        if (c <= _autosome_num) chrs.push_back(c);
+        if (isAutosomalChr(c)) chrs.push_back(c);
+    if (chrs.size() < 2)
+        LOGGER.e(0, "LOCO analysis requires at least two autosomal chromosomes.");
 
     std::vector<int> include_o(_include);
     std::map<std::string, int> snp_name_map_o(_snp_name_map);

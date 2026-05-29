@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include "gcta.h"
 #include "Logger.h"
+#include "constants.hpp"
 
 void option(int option_num, char* option_str[]);
 
@@ -74,13 +75,14 @@ void option(int option_num, char* option_str[])
     std::string bfile = "", bfile2 = "", bfile_list = "", update_sex_file = "", update_freq_file = "", update_refA_file = "", kp_indi_file = "", rm_indi_file = "", extract_snp_file = "", exclude_snp_file = "", extract_snp_name = "", exclude_snp_name = "", out = "gcta";
     bool SNP_major = false, make_bed_flag = false, dose_mach_flag = false, dose_mach_gz_flag = false, dose_beagle_flag = false, bfile2_flag = false, out_freq_flag = false, out_ssq_flag = false;
     bool ref_A = false, recode = false, recode_nomiss = false, recode_std = false, save_ram = false, autosome_flag = false;
-    int bfile_flag = 0, autosome_num = 22, extract_chr_start = 0, extract_chr_end = 0, extract_region_chr = 0, extract_region_bp = 0, extract_region_wind = 0, exclude_region_chr = 0, exclude_region_bp = 0, exclude_region_wind = 0;
+    int bfile_flag = 0, autosome_num = 0, extract_chr_start = 0, extract_chr_end = 0, extract_region_chr = 0, extract_region_bp = 0, extract_region_wind = 0, exclude_region_chr = 0, exclude_region_bp = 0, exclude_region_wind = 0;
+    bool autosome_num_explicit = false;
     std::string dose_file = "", dose_info_file = "", update_impRsq_file = "";
     double maf = 0.0, max_maf = 0.0, dose_Rsq_cutoff = 0.0;
     std::vector<std::string> multi_bfiles;
 
     // GRM
-    bool ibc = false, ibc_all = false, grm_flag = false, grm_bin_flag = true, m_grm_flag = false, m_grm_bin_flag = true, make_grm_flag = false, make_grm_inbred_flag = false, dominance_flag = false, make_grm_xchar_flag = false, grm_out_bin_flag = true, make_grm_f3_flag = false;
+    bool ibc = false, ibc_all = false, grm_flag = false, grm_bin_flag = true, m_grm_flag = false, m_grm_bin_flag = true, make_grm_flag = false, make_grm_inbred_flag = false, dominance_flag = false, make_grm_homogametic_flag = false, grm_out_bin_flag = true, make_grm_f3_flag = false;
     bool align_grm_flag = false;
     bool pca_flag = false, pcl_flag = false;
     std::string pca_approx_flag = "";
@@ -261,12 +263,12 @@ void option(int option_num, char* option_str[])
         if (flag == "--thread-num") {
             thread_num = std::atoi(argv[++i]);
             LOGGER << "--thread-num " << thread_num << std::endl;
-            if (thread_num < 1 || thread_num > 1000) LOGGER.e(0, "\n  --thread-num should be from 1 to 1000.\n");
+            if (thread_num < 1) LOGGER.e(0, "\n  --thread-num should be >= 1.\n");
         }
         else if (flag == "--threads") {
             thread_num = std::atoi(argv[++i]);
             LOGGER << "--threads " << thread_num << std::endl;
-            if (thread_num < 1 || thread_num > 1000) LOGGER.e(0, "\n  --threads should be from 1 to 1000.\n");
+            if (thread_num < 1) LOGGER.e(0, "\n  --threads should be >= 1.\n");
         }// raw genotype data
         else if (flag == "--raw-files") {
             RG_fname_file = argv[++i];
@@ -344,11 +346,12 @@ void option(int option_num, char* option_str[])
         } else if (flag == "--chr") {
             extract_chr_start = extract_chr_end = std::atoi(argv[++i]);
             LOGGER << "--chr " << extract_chr_start << std::endl;
-            if (extract_chr_start < 1 || extract_chr_start > 100) LOGGER.e(0, "\n --chr should be within the range from 1 to 100.\n");
+            if (extract_chr_start < 1) LOGGER.e(0, "\n --chr should be >= 1.\n");
         } else if (flag == "--autosome-num") {
             autosome_num = std::atoi(argv[++i]);
+            autosome_num_explicit = true;
             LOGGER << "--autosome-num " << autosome_num << std::endl;
-            if (autosome_num < 1 || autosome_num > 100) LOGGER.e(0, "\n  invalid number specified after the option --autosome-num.\n");
+            if (autosome_num < 1) LOGGER.e(0, "\n  invalid number specified after the option --autosome-num (must be >= 1).\n");
         } else if (flag == "--autosome") {
             autosome_flag = true;
             LOGGER << "--autosome" << std::endl;
@@ -511,18 +514,18 @@ void option(int option_num, char* option_str[])
                 LOGGER.e(0, "\n  --model should be either 'additive' or 'nonadditive'.\n");
             }
             LOGGER << "--model " << genetic_model << std::endl;
-        } else if (flag == "--make-grm-xchr" || flag == "--make-grm-xchr-bin") {
+        } else if (flag == "--make-grm-homogametic" || flag == "--make-grm-homogametic-bin") {
 
             make_grm_flag = true;
-            make_grm_xchar_flag = true;
+            make_grm_homogametic_flag = true;
             thread_flag = true;
             LOGGER << argv[i] << std::endl;
-        } else if (flag == "--make-grm-xchr-gz") {
+        } else if (flag == "--make-grm-homogametic-gz") {
             make_grm_flag = true;
-            make_grm_xchar_flag = true;
+            make_grm_homogametic_flag = true;
             grm_out_bin_flag = false;
             thread_flag = true;
-            LOGGER << "--make-grm-xchr-gz" << std::endl;
+            LOGGER << "--make-grm-homogametic-gz" << std::endl;
         } else if (flag == "--make-grm-inbred" || flag == "--make-grm-inbred-bin") {
             make_grm_flag = true;
             make_grm_inbred_flag = true;
@@ -584,7 +587,7 @@ void option(int option_num, char* option_str[])
             project_file = argv[++i];
             project_N = std::atoi(argv[++i]);
             LOGGER << "--project-loading " << project_file << " " << project_N << std::endl;
-            if(project_N < 1 || project_N > 1e3) LOGGER.e(0, "\n invalid number of PCs to output");
+            if(project_N < 1) LOGGER.e(0, "\n invalid number of PCs to output (must be >= 1)");
         }
         // estimation of LD structure
         else if (flag == "--ld") {
@@ -596,7 +599,7 @@ void option(int option_num, char* option_str[])
             LD_search = true;
             LD_step = std::atoi(argv[++i]);
             LOGGER << "--ld-step " << LD_step << std::endl;
-            if (LD_step < 1 || LD_step > 20) LOGGER.e(0, "\n --ld-step should be within the range from 1 to 20.\n");
+            if (LD_step < 1) LOGGER.e(0, "\n --ld-step should be >= 1.\n");
         } else if (flag == "--ld-wind" || flag == "--ld-pruning-wind" || flag == "--make-grm-wt-wind") {
             LD_wind = std::atof(argv[++i]);
             LOGGER << argv[i - 1] << " " << LD_wind << std::endl;
@@ -673,7 +676,7 @@ void option(int option_num, char* option_str[])
         } else if (flag == "--simu-rep") {
             simu_rep = std::atoi(argv[++i]);
             LOGGER << "--simu-rep " << simu_rep << std::endl;
-            if (simu_rep < 1 || simu_rep > 10000) LOGGER.e(0, "--simu-rep should be within the range from 1 to 10000.");
+            if (simu_rep < 1) LOGGER.e(0, "--simu-rep should be >= 1.");
         } else if (flag == "--simu-hsq") {
             simu_h2 = std::atof(argv[++i]);
             LOGGER << "--simu-hsq " << simu_h2 << std::endl;
@@ -817,7 +820,7 @@ void option(int option_num, char* option_str[])
         } else if (flag == "--reml-maxit") {
             MaxIter = std::atoi(argv[++i]);
             LOGGER << "--reml-maxit " << MaxIter << std::endl;
-            if (MaxIter < 1 || MaxIter > 10000) LOGGER.e(0, "\n --reml-maxit should be within the range from 1 to 10000.\n");
+            if (MaxIter < 1) LOGGER.e(0, "\n --reml-maxit should be >= 1.\n");
         } else if (flag == "--reml-bendV") {
             reml_force_inv_fac_flag = true;
             LOGGER << "--reml-bendV " <<  std::endl;
@@ -1016,7 +1019,7 @@ void option(int option_num, char* option_str[])
             massoc_slct_flag = true;
             massoc_top_SNPs = std::atoi(argv[++i]);
             LOGGER << "--cojo-top-SNPs " << massoc_top_SNPs << std::endl;
-            if (massoc_top_SNPs < 1 || massoc_top_SNPs > 10000) LOGGER.e(0, "\n --cojo-top-SNPs should be within the range from 1 to 10000.\n");
+            if (massoc_top_SNPs < 1) LOGGER.e(0, "\n --cojo-top-SNPs should be >= 1.\n");
         } else if (flag == "--cojo-actual-geno") {
             massoc_actual_geno_flag = false;
             LOGGER << "--cojo-actual-geno is deprecated currently." << std::endl;
@@ -1033,11 +1036,7 @@ void option(int option_num, char* option_str[])
         } else if (flag == "--cojo-wind") {
             massoc_wind = std::atoi(argv[++i]);
             LOGGER << "--cojo-wind " << massoc_wind << std::endl;
-
-            // debug
-            if (massoc_wind > 100000) LOGGER.e(0, "\n invalid value for --cojo-wind. Valid range: 100 ~ 100000\n");
-
-            //if (massoc_wind < 100 || massoc_wind > 100000) LOGGER.e(0, "\n invalid value for --cojo-wind. Valid range: 100 ~ 100000\n");
+            if (massoc_wind <= 0) LOGGER.e(0, "\n invalid value for --cojo-wind. It should be > 0.\n");
             massoc_wind *= 1000;
         } else if (flag == "--cojo-joint") {
             massoc_joint_flag = true;
@@ -1053,7 +1052,7 @@ void option(int option_num, char* option_str[])
                 i--;
             } else {
                 massoc_gc_val = std::atof(argv[i]);
-                if (massoc_gc_val < 1 || massoc_gc_val > 10) LOGGER.e(0, "\n invalid value specified after --cojo-gc.\n");
+                if (massoc_gc_val < 1) LOGGER.e(0, "\n invalid value specified after --cojo-gc (must be >= 1).\n");
             }
             LOGGER << "--cojo-gc " << ((massoc_gc_val < 0) ? "" : argv[i]) << std::endl;
         } else if (flag == "--cojo-sblup") {
@@ -1117,7 +1116,7 @@ void option(int option_num, char* option_str[])
         } else if (flag == "--fastBAT-wind") {
             sbat_wind = std::atoi(argv[++i]);
             LOGGER << "--fastBAT-wind " << sbat_wind << std::endl;
-            if (sbat_wind < 0 || sbat_wind > 1000) LOGGER.e(0, "\n invalid value for --fastBAT-wind. Valid range: 0 ~ 1000\n");
+            if (sbat_wind < 0) LOGGER.e(0, "\n invalid value for --fastBAT-wind. Valid range: >= 0\n");
             sbat_wind *= 1000;
         } else if (flag == "--fastBAT-seg") {
             sbat_seg_flag = true;
@@ -1128,7 +1127,7 @@ void option(int option_num, char* option_str[])
                 i--;
             } else sbat_seg_size = std::atoi(argv[i]);
             LOGGER << "--fastBAT-seg " << sbat_seg_size << std::endl;
-            if (sbat_seg_size < 10 || sbat_seg_size > 10000) LOGGER.e(0, "\n invalid value for --fastBAT-seg. Valid range: 10 ~ 10000\n");
+            if (sbat_seg_size < 1) LOGGER.e(0, "\n invalid value for --fastBAT-seg. Valid range: >= 1\n");
             sbat_seg_size *= 1000;
         }
         else if (flag == "--mBAT-svd-gamma") {
@@ -1156,7 +1155,7 @@ void option(int option_num, char* option_str[])
         } else if (flag == "--mBAT-wind") {
             mbat_wind = std::atoi(argv[++i]);
             LOGGER << "--mBAT-wind " << mbat_wind << std::endl;
-            if (mbat_wind < 0 || mbat_wind > 1000) LOGGER.e(0, "\n invalid value for --mBAT-wind. Valid range: 0 ~ 1000\n");
+            if (mbat_wind < 0) LOGGER.e(0, "\n invalid value for --mBAT-wind. Valid range: >= 0\n");
             mbat_wind *= 1000;
         }
         else if (flag == "--efile") {
@@ -1324,7 +1323,7 @@ void option(int option_num, char* option_str[])
         } else if ((flag == "--gsmr-snp") || (flag == "--gsmr-snp-min")) {
             if(flag == "--gsmr-snp") gsmr_snp_update_flag = true;
             nsnp_gsmr = std::atoi(argv[++i]);
-            if(nsnp_gsmr < 0 || nsnp_gsmr > 1e6)
+            if(nsnp_gsmr < 0)
                 LOGGER.e(0, "--gsmr-snp-min, Invalid SNP number threshold for the GSMR analysis.");
             LOGGER<<"--gsmr-snp-min "<<nsnp_gsmr<<std::endl;
         } else if (flag == "--gsmr-ld-fdr") {
@@ -1382,7 +1381,7 @@ void option(int option_num, char* option_str[])
     if (dosage_compen>-1 && update_sex_file.empty()) LOGGER.e(0, "you need to specify the sex information for the individuals by the option --update-sex because of the use of the –dc option.");
     if (bfile2_flag && update_freq_file.empty()) LOGGER.e(0, "you need to update the allele frequency by the option --update-freq because there are two datasets.");
     if ((dose_beagle_flag || dose_mach_flag || dose_mach_gz_flag) && dominance_flag) LOGGER.e(0, "unable to calculate the GRM for dominance effect using imputed dosage data.");
-    if (make_grm_xchar_flag && dominance_flag) LOGGER.e(0, "unable to calculate the GRM for dominance effect for the X chromosome.");
+    if (make_grm_homogametic_flag && dominance_flag) LOGGER.e(0, "unable to calculate the GRM for dominance effect for homogametic chromosomes.");
     if (mlma_flag || mlma_loco_flag) {
         if (!gxe_file.empty()) LOGGER.w(0, "the option --gxe option is disabled in this analysis.");
         if (!update_sex_file.empty()) LOGGER.w(0, "the option --update-sex option is disabled in this analysis.");
@@ -1427,14 +1426,22 @@ void option(int option_num, char* option_str[])
 
     // set autosome
     if (autosome_flag) {
-        if(extract_chr_start == extract_chr_end && extract_chr_start != 0){
-            LOGGER.w(0, "--autosome option omitted. You have specified the chromosome to analysis.");
-        }else{
-            extract_chr_start = 1;
-            extract_chr_end = autosome_num;
+        if(!autosome_num_explicit){
+            LOGGER.w(0, "--autosome was specified without --autosome-num; all positive numeric chromosome labels are treated as autosomal by default.");
+        } else {
+            if(extract_chr_start == extract_chr_end && extract_chr_start != 0){
+                LOGGER.w(0, "--autosome option omitted. You have specified the chromosome to analysis.");
+            }else{
+                extract_chr_start = 1;
+                extract_chr_end = autosome_num;
+            }
         }
     }
-    if (make_grm_xchar_flag) extract_chr_start = extract_chr_end = (autosome_num + 1);
+    if (make_grm_homogametic_flag) {
+        if(!(extract_chr_start == extract_chr_end && extract_chr_start > 0)){
+            LOGGER.e(0, "--make-grm-homogametic in the legacy pipeline requires --chr to specify the homogametic chromosome explicitly.");
+        }
+    }
 
     // Implement
     LOGGER << std::endl;
@@ -1547,7 +1554,7 @@ void option(int option_num, char* option_str[])
             if (out_freq_flag) pter_gcta->save_freq(out_ssq_flag);
             else if (!paa_file.empty()) pter_gcta->paa(paa_file);
             else if (ibc) pter_gcta->ibc(ibc_all);
-            else if (make_grm_flag) pter_gcta->make_grm(dominance_flag, make_grm_xchar_flag, make_grm_inbred_flag, grm_out_bin_flag, make_grm_mtd, false, make_grm_f3_flag, subpopu_file);
+            else if (make_grm_flag) pter_gcta->make_grm(dominance_flag, make_grm_homogametic_flag, make_grm_inbred_flag, grm_out_bin_flag, make_grm_mtd, false, make_grm_f3_flag, subpopu_file);
             else if (recode || recode_nomiss || recode_std) pter_gcta->save_XMat(recode_nomiss, recode_std);
             else if (LD) pter_gcta->LD_Blocks(LD_step, LD_wind, LD_sig, LD_i, save_ram);
             else if (LD_prune_rsq>-1.0) pter_gcta->LD_pruning(LD_prune_rsq, LD_wind);
@@ -1624,7 +1631,7 @@ void option(int option_num, char* option_str[])
         if (maf > 0.0) pter_gcta->filter_snp_maf(maf);
         if (max_maf > 0.0) pter_gcta->filter_snp_max_maf(max_maf);
         if (out_freq_flag) pter_gcta->save_freq(out_ssq_flag);
-        else if (make_grm_flag) pter_gcta->make_grm(dominance_flag, make_grm_xchar_flag, make_grm_inbred_flag, grm_out_bin_flag, make_grm_mtd, false, make_grm_f3_flag, subpopu_file);
+        else if (make_grm_flag) pter_gcta->make_grm(dominance_flag, make_grm_homogametic_flag, make_grm_inbred_flag, grm_out_bin_flag, make_grm_mtd, false, make_grm_f3_flag, subpopu_file);
         else if (recode || recode_nomiss || recode_std) pter_gcta->save_XMat(recode_nomiss, recode_std);
         else if (LD_prune_rsq>-1.0) pter_gcta->LD_pruning(LD_prune_rsq, LD_wind);
         else if (ld_score_flag){

@@ -126,7 +126,7 @@ private:
     int num_byte_buffer;
     uint64_t num_subjects;
     std::vector<string> grm_ids;
-    const int num_byte_GRM_read = 100 * 1024 * 1024;
+    static constexpr int num_byte_GRM_read = 100 * 1024 * 1024;
     std::vector<uint64_t> byte_part_grms;
 
     void outBinFile(FILE *sFile, FILE *dFile);

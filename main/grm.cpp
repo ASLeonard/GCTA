@@ -31,14 +31,21 @@ void gcta::enable_grm_bin_flag() {
 
 void gcta::check_autosome() {
     for (int i = 0; i < _include.size(); i++) {
-        if (_chr[_include[i]] > _autosome_num) LOGGER.e(0, "this option is for the autosomal SNPs only. Please check the option --autosome.");
+        if (!isAutosomalChr(_chr[_include[i]])) LOGGER.e(0, "this option requires autosomal SNPs only under the current autosome definition. Check --autosome/--autosome-num.");
     }
 }
 
-void gcta::check_chrX() {
-    for (int i = 0; i < _include.size(); i++) {
-        if (_chr[_include[i]] != (_autosome_num + 1)) LOGGER.e(0, "this option is for SNPs on the X chromosome only.");
+void gcta::check_homogametic_chromosomes() {
+    if (_include.empty()) {
+        LOGGER.e(0, "no SNPs are included for homogametic chromosome analysis.");
     }
+    const int target_chr = _chr[_include[0]];
+    for (int i = 1; i < _include.size(); i++) {
+        if (_chr[_include[i]] != target_chr) {
+            LOGGER.e(0, "this option requires SNPs from exactly one chromosome. Use --chr to select the homogametic chromosome explicitly.");
+        }
+    }
+    _legacy_homogametic_chr = target_chr;
 }
 
 void gcta::check_sex() {
@@ -47,12 +54,15 @@ void gcta::check_sex() {
     }
 }
 
-void gcta::make_grm(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool output_bin, int grm_mtd, bool mlmassoc, bool diag_f3_flag, std::string subpopu_file)
+void gcta::make_grm(bool grm_d_flag, bool grm_homogametic_flag, bool inbred, bool output_bin, int grm_mtd, bool mlmassoc, bool diag_f3_flag, std::string subpopu_file)
 {
     bool have_mis = false;
 
-    if (!grm_d_flag && grm_xchr_flag) check_chrX();
-    else check_autosome();
+    if (!grm_d_flag && grm_homogametic_flag) check_homogametic_chromosomes();
+    else {
+        _legacy_homogametic_chr = 0;
+        check_autosome();
+    }
 
     unsigned long i = 0, j = 0, k = 0, n = _keep.size(), m = _include.size();
     if(grm_d_flag) have_mis = make_XMat_d(_geno);
@@ -62,16 +72,16 @@ void gcta::make_grm(bool grm_d_flag, bool grm_xchr_flag, bool inbred, bool outpu
     if (grm_mtd == 0) {
         if (grm_d_flag) std_XMat_d(_geno, sd_SNP, false, true);
         else{
-            if(subpopu_file.empty()) std_XMat(_geno, sd_SNP, grm_xchr_flag, false, true);
-            else std_XMat_subpopu(subpopu_file, _geno, sd_SNP, grm_xchr_flag, false, true);
+            if(subpopu_file.empty()) std_XMat(_geno, sd_SNP, grm_homogametic_flag, false, true);
+            else std_XMat_subpopu(subpopu_file, _geno, sd_SNP, grm_homogametic_flag, false, true);
         }
     } 
     else {
         if (grm_d_flag) std_XMat_d(_geno, sd_SNP, false, false);
-        else std_XMat(_geno, sd_SNP, grm_xchr_flag, false, false);
+        else std_XMat(_geno, sd_SNP, grm_homogametic_flag, false, false);
     }
 
-    if (!mlmassoc) LOGGER << "\nCalculating the" << ((grm_d_flag) ? " dominance" : "") << " genetic relationship matrix (GRM)" << (grm_xchr_flag ? " for the X chromosome" : "") << (_dosage_flag ? " using imputed dosage data" : "") << " ... (Note: default speed-optimized mode, may use huge RAM)" << std::endl;
+    if (!mlmassoc) LOGGER << "\nCalculating the" << ((grm_d_flag) ? " dominance" : "") << " genetic relationship matrix (GRM)" << (grm_homogametic_flag ? " for homogametic chromosomes" : "") << (_dosage_flag ? " using imputed dosage data" : "") << " ... (Note: default speed-optimized mode, may use huge RAM)" << std::endl;
     else LOGGER << "\nCalculating the genetic relationship matrix (GRM) ... " << std::endl;
 
     // count the number of missing genotypes

@@ -73,7 +73,7 @@ using HashTable = std::unordered_map<std::string, ChromBucket>;
 // ---------------------------------------------------------------------------
 
 // Normalise the raw chromosome field to a canonical string key.
-// Accepts numeric strings ("1"–"22"), "X", "Y", "XY".
+// Accepts positive numeric strings plus "X", "Y", "XY".
 static std::string chrom_key(const std::string & s)
 {
     if (s == "X" || s == "Y" || s == "XY")

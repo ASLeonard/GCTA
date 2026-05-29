@@ -51,8 +51,8 @@ public:
     uint32_t count_extract();
     bool isInExtract(uint32_t index);
     uint32_t getRawIndex(uint32_t extractedIndex);
-    std::vector<uint32_t>& get_extract_index(); // return the raw index for autosome;
-    std::vector<uint32_t> get_extract_index_autosome(); // return the extract index for autosome; //not raw index
+    std::vector<uint32_t>& get_extract_index(); // return the raw index for all kept markers
+    std::vector<uint32_t> get_extract_index_autosome(); // return the extract index for non-sex markers //not raw index
     std::vector<uint32_t> get_extract_index_X();
     int getMIndex(uint32_t raw_index);
     //uint64_t getStartPosSize(uint32_t raw_index);
@@ -71,9 +71,9 @@ public:
     void keep_extracted_index(const std::vector<uint32_t>& keep_index);
     void matchSNPListFile(string filename, int num_min_fields, const std::vector<int>& field_return, std::vector<string> &fields, std::vector<bool>& a_rev, bool update_a_rev = false);
     void save_marker(string filename);
-    std::vector<uint32_t> getNextWindowIndex(uint32_t cur_marker_index, uint32_t window, bool& chr_ends, bool& isX, bool retRaw = true);
-    std::vector<uint32_t> getNextSizeIndex(uint32_t cur_marker_index, uint32_t num, bool& chr_ends, bool& isX, bool retRaw = false);
-    uint32_t getNextSize(const std::vector<uint32_t> &rawRef, uint32_t curExtractIndex, uint32_t num, int &fileIndex, bool &chr_ends, uint8_t &isSexXY);
+    std::vector<uint32_t> getNextWindowIndex(uint32_t cur_marker_index, uint32_t window, bool& chr_ends, bool& isHomogameticChrom, bool retRaw = true);
+    std::vector<uint32_t> getNextSizeIndex(uint32_t cur_marker_index, uint32_t num, bool& chr_ends, bool& isHomogameticChrom, bool retRaw = false);
+    uint32_t getNextSize(const std::vector<uint32_t> &rawRef, uint32_t curExtractIndex, uint32_t num, int &fileIndex, bool &chr_ends, uint8_t &sexChromType);
     uint32_t getNextWindowSize(uint32_t cur_marker_index, uint32_t window);
 
     MarkerParam getMarkerParams(int part_num);
@@ -91,6 +91,14 @@ public:
     const std::string& getRawA2(uint32_t i)    const { return a2[i]; }  ///< reference allele
 
 private:
+    static bool isHomogameticChr(const std::string& chr_label);
+    static bool isHeterogameticChr(const std::string& chr_label);
+    static bool isPositiveIntegerChrLabel(const std::string& chr_label);
+    static bool isAllowedChrLabel(const std::string& chr_label);
+    static std::string normalizeChrLabel(const std::string& chr_label);
+    static void resetSexChromosomeSets();
+    static void loadSexChromosomeFile(const std::string& file_path);
+
     std::vector<string> chr;
     std::vector<string> name;
     std::vector<float> gd;
@@ -118,6 +126,8 @@ private:
 
     static std::map<string, std::string> options;
     static std::map<string, int> options_i;
+    static std::set<string> homogametic_chrs;
+    static std::set<string> heterogametic_chrs;
     static void addOneFileOption(string key_store, std::string append_string, std::string key_name,
                                  std::map<string, std::vector<string>> options_in);
     std::vector<string> read_snplist(string snplist_file);

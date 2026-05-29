@@ -16,36 +16,49 @@
 
 
 #include <utils.hpp>
+#include <array>
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <iomanip>
 #include <sstream>
-#include <stdio.h>
-#include <stdlib.h>
-#include <chrono>
+#include <string>
 
 #if defined(__unix__) || defined(__APPLE__)
 #include <unistd.h>
 #endif
 
+std::string_view getUtilsErrorMessage(UtilsError error){
+    switch(error){
+    case UtilsError::EmptyInput:
+        return "input path is empty";
+    case UtilsError::NullFileHandle:
+        return "file handle is null";
+    case UtilsError::FileSeekFailed:
+        return "failed to seek in file";
+    case UtilsError::FileTellFailed:
+        return "failed to read file position";
+    }
+    return "unknown utils error";
+}
+
 std::string getHostName(){
-    char *temp = NULL;
     std::string computerName;
 
 #if defined(WIN32) || defined(_WIN32) || defined(_WIN64)
-    temp = getenv("COMPUTERNAME");
-    if (temp != NULL) {
+    if (const char *temp = std::getenv("COMPUTERNAME"); temp != nullptr) {
         computerName = temp;
     }
 #else
-    temp = getenv("HOSTNAME");
-    if (temp != NULL) {
+    if (const char *temp = std::getenv("HOSTNAME"); temp != nullptr) {
         computerName = temp;
     } else {
-        temp = new char[512];
-        if (gethostname(temp, 512) == 0) {
-            computerName = temp;
+        std::array<char, 512> buffer{};
+        if (gethostname(buffer.data(), buffer.size()) == 0) {
+            computerName = buffer.data();
         }
-        delete []temp;
     }
 #endif
     return computerName;
@@ -70,7 +83,7 @@ std::string getSSEvar(){
     return "avx2";
     #elif __AVX__
     return "avx";
-    #elif __SSE4_1
+    #elif __SSE4_1__
     return "sse4";
     #elif __SSE2__
     return "sse2";
@@ -82,50 +95,71 @@ std::string getSSEvar(){
 std::string getLocalTime(){
     auto now = std::chrono::system_clock::now();
     auto now_c = std::chrono::system_clock::to_time_t(now);
-    auto tm = std::put_time(std::localtime(&now_c), "%T %Z on %a %b %d %Y");
+    std::tm local_tm{};
+#if defined(_WIN32)
+    localtime_s(&local_tm, &now_c);
+#else
+    localtime_r(&now_c, &local_tm);
+#endif
     std::ostringstream oss;
-    oss << tm;
+    oss << std::put_time(&local_tm, "%T %Z on %a %b %d %Y");
     return oss.str();
 }
 
-std::string getFileName(const std::string & path){
-    auto index = path.find_last_of("\\/");
-    if(index == std::string::npos){
-        return path;
-    }else{
-        return path.substr(index + 1);
+std::expected<std::string, UtilsError> getFileName(std::string_view path){
+    if(path.empty()){
+        return std::unexpected(UtilsError::EmptyInput);
     }
+    return std::filesystem::path(path).filename().string();
 }
 
 // get the path without the last slash
-std::string getPathName(const std::string & path){
-    auto index = path.find_last_of("\\/");
-    if(index == std::string::npos){
-        return "";
-    }else{
-        return path.substr(0, index);
+std::expected<std::string, UtilsError> getPathName(std::string_view path){
+    if(path.empty()){
+        return std::unexpected(UtilsError::EmptyInput);
     }
+    return std::filesystem::path(path).parent_path().string();
 }
 
-std::string joinPath(const std::string & dir, const std::string & path){
-    #ifdef WIN32
-    std::string sep = "\\";
-    #else
-    std::string sep="/";
-    #endif
+std::expected<std::string, UtilsError> joinPath(std::string_view dir, std::string_view path){
+    if(dir.empty() && path.empty()){
+        return std::unexpected(UtilsError::EmptyInput);
+    }
     if(dir.empty()){
-        return path;
-    }else{
-        return dir + path;
+        return std::string(path);
     }
+    if(path.empty()){
+        return std::string(dir);
+    }
+    return (std::filesystem::path(dir) / std::filesystem::path(path)).string();
 }
 
-uint64_t getFileByteSize(FILE * file) {
-    uint64_t f_size;
-    fseek(file, 0, SEEK_END);
-    f_size = ftell(file);
-    rewind(file);
-    return f_size;
+std::expected<uint64_t, UtilsError> getFileByteSize(FILE * file) {
+    if(file == nullptr){
+        return std::unexpected(UtilsError::NullFileHandle);
+    }
+
+#if defined(_WIN32)
+    if(_fseeki64(file, 0, SEEK_END) != 0){
+        return std::unexpected(UtilsError::FileSeekFailed);
+    }
+    const auto end_pos = _ftelli64(file);
+    std::rewind(file);
+    if(end_pos < 0){
+        return std::unexpected(UtilsError::FileTellFailed);
+    }
+    return static_cast<uint64_t>(end_pos);
+#else
+    if(fseeko(file, 0, SEEK_END) != 0){
+        return std::unexpected(UtilsError::FileSeekFailed);
+    }
+    const auto end_pos = ftello(file);
+    std::rewind(file);
+    if(end_pos < 0){
+        return std::unexpected(UtilsError::FileTellFailed);
+    }
+    return static_cast<uint64_t>(end_pos);
+#endif
 }
 
 

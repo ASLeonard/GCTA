@@ -62,7 +62,7 @@ typedef struct GenoBuffer{
     vector<double> geno;  // genotype double per marker
     vector<uint64_t> miss; // missing bits per marker, 1 means miss.
 
-    bool bSex = false; // sex mode (chrX) //IN
+    bool bSex = false; // sex mode (homogametic chromosome filter) //IN
     bool hasInfo = false; // determine has info score or not //preIN
     bool bHasPreAF = false; //use Pre AF? //preIN
     vector<double> preAF; //pre AF //preIN
@@ -75,7 +75,7 @@ typedef struct GenoBufItem{
     // out
     bool valid = false;
   //  int refAllele; //0 as 1, 1 as GCTA
-    uint8_t isSexXY = 0;   // 0: no, 1: X, 2: Y
+    uint8_t sexChromType = 0;   // 0: non-sex, 1: homogametic, 2: heterogametic
     vector<double> geno;
     vector<uintptr_t> missing;
     double af = 0.0;
@@ -149,11 +149,11 @@ private:
     uint64_t num_raw_sample;
     uint64_t num_keep_sample;
     uint64_t num_byte_keep_geno1;
-    uint64_t num_male_keep_sample;
+    uint64_t num_heterogametic_keep_sample;
     uint64_t num_item_geno_buffer;
     uint64_t *keep_mask = NULL;
-    uint64_t *keep_male_mask = NULL;
-    bool isX;
+    uint64_t *keep_heterogametic_mask = NULL;
+    bool isHomogameticChrom;
     void bgen2bed(const vector<uint32_t> &raw_marker_index);
 
     friend class LD;
@@ -193,16 +193,16 @@ private:
     bool bMakeMiss;
     bool bGRM = false;
     bool bGRMDom = false;
-    int iGRMdc = -1; // 0 no male dosage comp; 1 full comp; //default value shall be -1, equal variance
+    int iGRMdc = -1; // 0 no heterogametic dosage comp; 1 full comp; //default value shall be -1, equal variance
     int iDC = 1;
     bool f_std = false;
-    void setMaleWeight(double &weight, bool &needWeight); // set the male weight by bGRM, dc specity
+    void setHeterogameticWeight(double &weight, bool &needWeight); // set the heterogametic weight by bGRM, dc specity
 
     int8_t alleModel = 1; // 1: add; 2: Dom; 3: Reces; 4: Het; //currently unused affect a0 a1 a2 na;
 
     int curBufferIndex;
     vector<int> numMarkersReadBlocks;
-    vector<uint8_t> isMarkersSexXYs;
+    vector<uint8_t> markerSexChromTypes;
     vector<int> fileIndexBuf;
     vector<int32_t> baseIndexLookup;
 
@@ -223,17 +223,17 @@ private:
     uintptr_t *keepMaskInterPtr = NULL; 
     
     uint32_t keepSexSampleCT;
-    uint32_t keepMaleSampleCT;
+    uint32_t keepHeterogameticSampleCT;
 
     vector<uint32_t> keepSexIndex;  // in the raw index of fam
     uintptr_t *sexMaskPtr = NULL;
     uintptr_t *sexMaskInterPtr = NULL;
 
-    vector<uint32_t> keepMaleIndex; // in raw index of fam
-    vector<uint32_t> keepMaleExtractIndex;
-    uintptr_t *maleMaskPtr = NULL;
-    uintptr_t *maleMaskInterPtr = NULL; 
-    //uintptr_t *maleMaskExtractPtr = NULL;
+    vector<uint32_t> keepHeterogameticIndex; // in raw index of fam
+    vector<uint32_t> keepHeterogameticExtractIndex;
+    uintptr_t *heterogameticMaskPtr = NULL;
+    uintptr_t *heterogameticMaskInterPtr = NULL; 
+    //uintptr_t *heterogameticMaskExtractPtr = NULL;
 
     //BGEN
     int bgenRawGenoBuf1PtrSize;
@@ -262,12 +262,12 @@ private:
     void processMakeBed();
     void make_bed_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex);
 
-    // sum_geno_x: per-sample genotype sum across X chromosome markers.
+    // sum_geno_x: per-sample genotype sum across homogametic chromosome markers.
     // Used for dosage compensation analysis (--sum-geno-x).
-    void processSumGenoX();
-    void sum_geno_x_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex);
-    vector<double>   sumGenoX;    // per-sample accumulated genotype sum on chrX
-    vector<uint32_t> nValidGenoX; // per-sample count of valid X markers
+    void processSumGenoHomogametic();
+    void sum_geno_homogametic_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex);
+    vector<double>   sumGenoHomogametic;    // per-sample accumulated genotype sum on homogametic chromosomes
+    vector<uint32_t> nValidGenoHomogametic; // per-sample count of valid homogametic markers
 
  };
 
