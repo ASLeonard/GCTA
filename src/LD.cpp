@@ -106,7 +106,7 @@ void LD::calcLD(){
     fflush(h_ld);
 }
 
-void LD::readGeno(uintptr_t *buf, const vector<uint32_t> &markerIndex){
+void LD::readGeno(uintptr_t *buf, std::span<const uint32_t> markerIndex){
     int num_marker = static_cast<int>(markerIndex.size());
     double * ptr = geno_buffer[cur_buffer].get();
     uint64_t cur_offset = cur_buffer_offset[cur_buffer];
@@ -186,7 +186,7 @@ void LD::processMain(){
             uint32_t total_num_marker = marker.count_extract();
             uint32_t cur_index_marker = 0;
 
-            vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks;
+            vector<function<void (uintptr_t *, std::span<const uint32_t>)>> callBacks;
             callBacks.push_back(std::bind(&LD::readGeno, &ld, _1, _2));
 
             while(cur_index_marker < total_num_marker){

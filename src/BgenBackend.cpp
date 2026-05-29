@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <span>
 #include <vector>
 
 // --------------------------------------------------------------------------
@@ -33,7 +34,7 @@ public:
 
     exec::task<void> stream(GenoScheduler               io_sched,
                             GenoScheduler               cpu_sched,
-                            const std::vector<uint32_t> &extractIndex,
+                            std::vector<uint32_t>       extractIndex,
                             Callback                    callback) override;
 
 private:
@@ -88,7 +89,7 @@ BgenBackend::~BgenBackend()
 // reference — it would dangle the moment the caller's scope is suspended.
 exec::task<void> BgenBackend::stream(GenoScheduler               io_sched,
                                      GenoScheduler               cpu_sched,
-                                     const std::vector<uint32_t> &extractIndex,
+                                     std::vector<uint32_t>       extractIndex,
                                      Callback                    callback)
 try {
     co_await stdexec::schedule(io_sched);
@@ -121,9 +122,9 @@ try {
         block.sexChromType   = sexChromType;
         block.fileIndex  = fileIndex;
         block.buf.resize(static_cast<std::size_t>(stride) * nextSize);
-        block.extractIndex.assign(
-            extractIndex.begin() + finishedMarker,
-            extractIndex.begin() + finishedMarker + nextSize);
+        block.extractIndex = std::span<const uint32_t>{
+            extractIndex.data() + finishedMarker,
+            static_cast<std::size_t>(nextSize)};
 
         FILE *bgenFile = fileHandles_[fileIndex];
         for (uint32_t i = 0; i < nextSize; ++i) {

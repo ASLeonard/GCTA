@@ -1362,7 +1362,7 @@ void generateRandom(Ref<MatrixXd> mat){
     }
 }
 
-void FastFAM::genRandY(uintptr_t *buf, const vector<uint32_t> &markerIndex){
+void FastFAM::genRandY(uintptr_t *buf, std::span<const uint32_t> markerIndex){
     int num_marker = static_cast<int>(markerIndex.size());
     MatrixXd X(num_indi, num_marker);
     double * ptr = X.data();
@@ -1386,7 +1386,7 @@ void FastFAM::genRandY(uintptr_t *buf, const vector<uint32_t> &markerIndex){
     finished_rand_marker += num_marker;
 }
 
-void FastFAM::estBeta(uintptr_t *buf, const vector<uint32_t> &markerIndex){
+void FastFAM::estBeta(uintptr_t *buf, std::span<const uint32_t> markerIndex){
     int num_marker = static_cast<int>(markerIndex.size());
     MatrixXd X(num_indi, num_marker);
     double * ptr = X.data();
@@ -1434,7 +1434,7 @@ double FastFAM::fitREML(double logdet, const SpMat &fam, const VectorXd &pheno){
     std::iota(extract_index.begin(), extract_index.end(), 0);
 
     finished_rand_marker = 0;
-    vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks;
+    vector<function<void (uintptr_t *, std::span<const uint32_t>)>> callBacks;
     callBacks.push_back(std::bind(&FastFAM::genRandY, this, _1, _2));
     geno->loopDouble(extract_index, Constants::NUM_MARKER_READ, true, true, true, false, callBacks, true);
 
@@ -1452,7 +1452,7 @@ double FastFAM::fitREML(double logdet, const SpMat &fam, const VectorXd &pheno){
     double sum_e2 = det2 * (VinvY.squaredNorm()); 
 
     finished_rand_marker = 0;
-    vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks2;
+    vector<function<void (uintptr_t *, std::span<const uint32_t>)>> callBacks2;
     callBacks2.push_back(std::bind(&FastFAM::estBeta, this, _1, _2));
     geno->loopDouble(extract_index, Constants::NUM_MARKER_READ, true, true, true, false, callBacks2, true);
 
@@ -2185,7 +2185,7 @@ void FastFAM::readFAM(string filename, SpMat& fam, const vector<string> &ids, ve
 
 }
 
-void FastFAM::grammar_func(uintptr_t *genobuf, const vector<uint32_t> &markerIndex){
+void FastFAM::grammar_func(uintptr_t *genobuf, std::span<const uint32_t> markerIndex){
     int nMarker = markerIndex.size();
     #pragma omp parallel for schedule(dynamic)
     for(int i = 0; i < nMarker; i++){
@@ -2298,7 +2298,7 @@ void FastFAM::grammar(SpMat& fam, double VG, double VR){
     num_grammar_markers = 0;
 
     LOGGER << "  reading genotypes..." << std::endl; 
-    vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks;
+    vector<function<void (uintptr_t *, std::span<const uint32_t>)>> callBacks;
     callBacks.push_back(bind(&FastFAM::grammar_func, this, _1, _2));
     geno->loopDouble(marker_index, nMarker, true, true, false, false, callBacks);
 
@@ -2405,7 +2405,7 @@ void FastFAM::inverseFAM(SpMat& fam, double VG, double VR){
     LOGGER.i(0, "The V matrix inverted in " + to_string(LOGGER.tp("INVERSE_FAM")) + " sec.");
 }
 
-void FastFAM::calculate_gwa(uintptr_t * genobuf, const vector<uint32_t> &markerIndex){
+void FastFAM::calculate_gwa(uintptr_t * genobuf, std::span<const uint32_t> markerIndex){
 
     static double iN = 1.0 /(num_indi - (covarFlag ? covar.cols() : 1.0) - 1.0);
     static double SSy = phenoVec.dot(phenoVec);
@@ -2463,7 +2463,7 @@ void FastFAM::calculate_gwa(uintptr_t * genobuf, const vector<uint32_t> &markerI
     */
 }
 
-void FastFAM::calculate_gwa_2df(uintptr_t * genobuf, const vector<uint32_t> &markerIndex){
+void FastFAM::calculate_gwa_2df(uintptr_t * genobuf, std::span<const uint32_t> markerIndex){
     static double iN = 1.0 /(num_indi - (covarFlag ? covar.cols() : 1.0) - 2.0);
     static double SSy = phenoVec.dot(phenoVec);
 
@@ -2563,7 +2563,7 @@ void FastFAM::calculate_gwa_2df(uintptr_t * genobuf, const vector<uint32_t> &mar
     output_res_2df(isValids, markerIndex);
 }
 
-void FastFAM::calculate_gwa_2df_sandwich(uintptr_t * genobuf, const vector<uint32_t> &markerIndex){
+void FastFAM::calculate_gwa_2df_sandwich(uintptr_t * genobuf, std::span<const uint32_t> markerIndex){
 
     int num_marker = markerIndex.size();
     vector<uint8_t> isValids(num_marker);
@@ -2683,7 +2683,7 @@ void FastFAM::calculate_gwa_2df_sandwich(uintptr_t * genobuf, const vector<uint3
     output_res_2df(isValids, markerIndex);
 }
 
-void FastFAM::output_res_spa(const vector<uint8_t> &isValids, const vector<uint32_t> markerIndex){
+void FastFAM::output_res_spa(const vector<uint8_t> &isValids, std::span<const uint32_t> markerIndex){
     int numKept = 0;
     int num_marker = markerIndex.size();
     if(bSaveBin){
@@ -2752,7 +2752,7 @@ void FastFAM::output_res_spa(const vector<uint8_t> &isValids, const vector<uint3
  
 
 
-void FastFAM::output_res(const vector<uint8_t> &isValids, const vector<uint32_t> markerIndex){
+void FastFAM::output_res(const vector<uint8_t> &isValids, std::span<const uint32_t> markerIndex){
     int numKept = 0;
     int num_marker = markerIndex.size();
     if(bSaveBin){
@@ -2816,7 +2816,7 @@ void FastFAM::output_res(const vector<uint8_t> &isValids, const vector<uint32_t>
 }
 
 
-void FastFAM::output_res_2df(const vector<uint8_t> &isValids, const vector<uint32_t> markerIndex){
+void FastFAM::output_res_2df(const vector<uint8_t> &isValids, std::span<const uint32_t> markerIndex){
     int numKept = 0;
     int num_marker = markerIndex.size();
     if(bSaveBin){
@@ -2905,7 +2905,7 @@ void FastFAM::output_res_2df(const vector<uint8_t> &isValids, const vector<uint3
  
 
 
-void FastFAM::calculate_fam(uintptr_t *genobuf, const vector<uint32_t> &markerIndex){
+void FastFAM::calculate_fam(uintptr_t *genobuf, std::span<const uint32_t> markerIndex){
 
     int num_marker = markerIndex.size();
     vector<uint8_t> isValids(num_marker);
@@ -2947,7 +2947,7 @@ void FastFAM::calculate_fam(uintptr_t *genobuf, const vector<uint32_t> &markerIn
     output_res(isValids, markerIndex);
 }
 
-void FastFAM::calculate_grammar(uintptr_t *genobuf, const vector<uint32_t> &markerIndex){
+void FastFAM::calculate_grammar(uintptr_t *genobuf, std::span<const uint32_t> markerIndex){
     int num_marker = markerIndex.size();
     vector<uint8_t> isValids(num_marker);
     #pragma omp parallel for schedule(dynamic)
@@ -2988,7 +2988,7 @@ void FastFAM::calculate_grammar(uintptr_t *genobuf, const vector<uint32_t> &mark
 }
 
 
-void FastFAM::calculate_mixed_2df(uintptr_t *genobuf, const vector<uint32_t> &markerIndex){
+void FastFAM::calculate_mixed_2df(uintptr_t *genobuf, std::span<const uint32_t> markerIndex){
     //calculate residualized phenotype
     phenoVec = VR_copy * Vi_y;
     //center residualized phenotype
@@ -2997,7 +2997,7 @@ void FastFAM::calculate_mixed_2df(uintptr_t *genobuf, const vector<uint32_t> &ma
     calculate_gwa_2df(genobuf, markerIndex);
 }
 
-void FastFAM::calculate_mixed_2df_sandwich(uintptr_t *genobuf, const vector<uint32_t> &markerIndex){
+void FastFAM::calculate_mixed_2df_sandwich(uintptr_t *genobuf, std::span<const uint32_t> markerIndex){
     //calculate residualized phenotype
     phenoVec = VR_copy * Vi_y;
     //center residualized phenotype
@@ -3006,7 +3006,7 @@ void FastFAM::calculate_mixed_2df_sandwich(uintptr_t *genobuf, const vector<uint
     calculate_gwa_2df_sandwich(genobuf, markerIndex);
 }
 
-void FastFAM::processFAM(vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks){
+void FastFAM::processFAM(vector<function<void (uintptr_t *, std::span<const uint32_t>)>> callBacks){
     sFileName = options["out"]; 
     int buf_size = 23068672;
     osBuf.resize(buf_size);
@@ -3500,7 +3500,7 @@ int FastFAM::registerOption(map<string, vector<string>>& options_in){
 
 
 void FastFAM::processMain(){
-    vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks;
+    vector<function<void (uintptr_t *, std::span<const uint32_t>)>> callBacks;
     for(auto &process_function : processFunctions){
         if(process_function == "fast_fam"){
             FastFAM ffam;
@@ -3599,7 +3599,7 @@ void FastFAM::processFAMreg(){
     }
 
     //
-    vector<function<void (uintptr_t *, const vector<uint32_t> &)>> calls;
+    vector<function<void (uintptr_t *, std::span<const uint32_t>)>> calls;
     calls.push_back(bind(&FastFAM::getX, this, _1, _2));
     int nMarker = 100;
 
@@ -3718,7 +3718,7 @@ void FastFAM::processFAMreg(){
     LOGGER.i(0, ss.str());
 }
 
-void FastFAM::getX(uintptr_t *genobuf, const vector<uint32_t> &markerIndex){
+void FastFAM::getX(uintptr_t *genobuf, std::span<const uint32_t> markerIndex){
     int num_marker = markerIndex.size();
     vector<uint8_t> isValids(num_marker);
     for(int i = 0; i < num_marker; i++){
@@ -4207,7 +4207,7 @@ void FastFAM::initBinary(const SpMat &fam){
     //solverV.~SimplicialLDLT<SpMat>();
 }
 
-void FastFAM::binGrammar_func(uintptr_t *genobuf, const vector<uint32_t> &markerIndex){
+void FastFAM::binGrammar_func(uintptr_t *genobuf, std::span<const uint32_t> markerIndex){
     int nMarker = markerIndex.size();
     #pragma omp parallel for schedule(dynamic)
     for(int i = 0; i < nMarker; i++){
@@ -4269,7 +4269,7 @@ void FastFAM::estBinGamma(){
     int nMarker = 100;
     int curNumModel = 0;
 
-    vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks;
+    vector<function<void (uintptr_t *, std::span<const uint32_t>)>> callBacks;
     callBacks.push_back(bind(&FastFAM::binGrammar_func, this, _1, _2));
     double cvThreshold = options_d["cv_threshold"];
 
@@ -4356,7 +4356,7 @@ void FastFAM::estBinGamma(){
     bValids.resize(0);
 }
 
-void FastFAM::calculate_spa(uintptr_t *genobuf, const vector<uint32_t> &markerIndex){
+void FastFAM::calculate_spa(uintptr_t *genobuf, std::span<const uint32_t> markerIndex){
     int num_marker = markerIndex.size();
     vector<uint8_t> isValids(num_marker);
     #pragma omp parallel for schedule(dynamic)

@@ -546,7 +546,7 @@ void MLMA::processMain()
             }
         };
 
-        auto callback = [&](uintptr_t* buf, const vector<uint32_t>& exIdx) {
+        auto callback = [&](uintptr_t* buf, std::span<const uint32_t> exIdx) {
             const int bs = static_cast<int>(exIdx.size());
 
             for (int i = 0; i < bs; ++i) {

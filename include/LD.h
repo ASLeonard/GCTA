@@ -3,6 +3,7 @@
 #define GCTA_LD_H
 #include "Geno.h"
 #include <string>
+#include <span>
 #include <vector>
 #include <map>
 #include <memory>
@@ -51,7 +52,7 @@ class LD{
 public:
     LD(Geno *geno);
     ~LD();
-    void readGeno(uintptr_t *buf, const std::vector<uint32_t> &markerIndex);
+    void readGeno(uintptr_t *buf, std::span<const uint32_t> markerIndex);
     void readLD();
     static int registerOption(map<string, vector<string>>& options_in);
     static void processMain();

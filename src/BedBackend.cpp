@@ -24,7 +24,15 @@
 #include <exec/static_thread_pool.hpp>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <exception>
+#include <mutex>
 #include <numeric>
+#include <span>
+#include <thread>
 #include <vector>
 
 // --------------------------------------------------------------------------
@@ -59,7 +67,7 @@ public:
 
     exec::task<void> stream(GenoScheduler               io_sched,
                             GenoScheduler               cpu_sched,
-                            const std::vector<uint32_t> &extractIndex,
+                            std::vector<uint32_t>       extractIndex,
                             Callback                    callback) override;
 
 private:
@@ -73,6 +81,12 @@ private:
     MaskBuf sexMaskInter_;
     MaskBuf heterogameticMask_;
     MaskBuf heterogameticMaskInter_;
+
+    // Two reusable slots keep allocator pressure off the hot loop.
+    std::array<GenoBlock, 2> blocks_;
+
+    // stream() is not safe to run concurrently on the same backend instance.
+    std::atomic<bool> streamActive_{false};
 };
 
 // --------------------------------------------------------------------------
@@ -95,6 +109,14 @@ BedBackend::BedBackend(Geno &geno) : g_(geno)
     uint32_t rawCT    = g_.rawSampleCT;
     g_.bedRawGenoBuf1PtrSize = PgenReader::GetGenoBufPtrSize(rawCT);
     g_.maskPtrSize           = static_cast<int>(PgenReader::GetSubsetMaskSize(rawCT));
+
+    const std::size_t maxBlockMarkers =
+        static_cast<std::size_t>(std::max(1, g_.numMarkerBlock));
+    const std::size_t blockElemCapacity =
+        static_cast<std::size_t>(g_.bedRawGenoBuf1PtrSize) * maxBlockMarkers;
+    for (auto &block : blocks_) {
+        block.buf.resize(blockElemCapacity);
+    }
 
     std::size_t nMask = static_cast<std::size_t>(g_.maskPtrSize);
     keepMask_       = allocMask(nMask);
@@ -146,24 +168,32 @@ BedBackend::~BedBackend()
 // reference — it would dangle the moment the caller's scope is suspended.
 exec::task<void> BedBackend::stream(GenoScheduler               io_sched,
                                     GenoScheduler               cpu_sched,
-                                    const std::vector<uint32_t> &extractIndex,
+                                    std::vector<uint32_t>       extractIndex,
                                     Callback                    callback)
 try {
+    (void)cpu_sched;
+
+    if (streamActive_.exchange(true, std::memory_order_acq_rel)) {
+        LOGGER.e(0, "BedBackend::stream called concurrently on one backend instance.");
+    }
+    struct StreamActiveReset {
+        std::atomic<bool> &active;
+        ~StreamActiveReset() { active.store(false, std::memory_order_release); }
+    } streamActiveReset{streamActive_};
+
     // ── Transfer to the I/O thread ───────────────────────────────────────
     co_await stdexec::schedule(io_sched);
 
-    // ── Build rawIndices (extract → raw marker index) ────────────────────
+    // ── Raw marker map and small per-block raw-index scratch ─────────────
     const std::vector<uint32_t> &raw_marker_index = g_.marker->get_extract_index();
-    std::vector<uint32_t> rawIndices(extractIndex.size());
-    std::transform(extractIndex.begin(), extractIndex.end(),
-                   rawIndices.begin(),
-                   [&raw_marker_index](std::size_t pos) {
-                       return raw_marker_index[pos];
-                   });
 
     const uint32_t numMarker    = static_cast<uint32_t>(extractIndex.size());
     const int      stride       = g_.bedRawGenoBuf1PtrSize;
     const int      markerBlock  = g_.numMarkerBlock;
+    std::vector<uint32_t> rawRefScratch;
+    rawRefScratch.reserve(static_cast<std::size_t>(std::max(1, markerBlock)));
+    std::vector<int> lagIndexScratch;
+    lagIndexScratch.reserve(static_cast<std::size_t>(std::max(1, markerBlock)));
 
     uint32_t finishedMarker = 0;
     int      preFileIndex   = -1;
@@ -172,22 +202,102 @@ try {
     uint8_t  sexChromType        = 0;
     PgenReader reader;
 
+    std::mutex queueMutex;
+    std::condition_variable_any readyCv;
+    std::condition_variable_any freeCv;
+    std::deque<int> readySlots;
+    std::array<bool, 2> slotInUse{false, false};
+    bool done = false;
+    std::exception_ptr callbackError;
+    std::stop_source stopSource;
+    const std::stop_token stopToken = stopSource.get_token();
+
+    std::jthread computeThread([&]() {
+        while (true) {
+            int slot = -1;
+            {
+                std::unique_lock<std::mutex> lock(queueMutex);
+                readyCv.wait(lock, stopToken, [&]() {
+                    return callbackError || done || !readySlots.empty();
+                });
+
+                if (stopToken.stop_requested()) break;
+                if (callbackError) break;
+                if (readySlots.empty()) {
+                    if (done) break;
+                    continue;
+                }
+
+                slot = readySlots.front();
+                readySlots.pop_front();
+            }
+
+            try {
+                callback(blocks_[static_cast<std::size_t>(slot)]);
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(queueMutex);
+                callbackError = std::current_exception();
+                done = true;
+                stopSource.request_stop();
+                readyCv.notify_all();
+                freeCv.notify_all();
+                break;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(queueMutex);
+                slotInUse[static_cast<std::size_t>(slot)] = false;
+            }
+            freeCv.notify_one();
+        }
+    });
+
     // ── Main I/O loop ────────────────────────────────────────────────────
     while (finishedMarker < numMarker) {
+        rawRefScratch.clear();
+        const uint32_t remain = numMarker - finishedMarker;
+        const uint32_t probeSize = std::min<uint32_t>(
+            static_cast<uint32_t>(std::max(1, markerBlock)), remain);
+        rawRefScratch.resize(static_cast<std::size_t>(probeSize));
+        for (uint32_t i = 0; i < probeSize; ++i) {
+            rawRefScratch[static_cast<std::size_t>(i)] =
+                raw_marker_index[extractIndex[finishedMarker + i]];
+        }
+
         uint32_t nextSize = g_.marker->getNextSize(
-            rawIndices, finishedMarker, markerBlock,
+            rawRefScratch, 0, probeSize,
             fileIndex, chr_ends, sexChromType);
         if (nextSize == 0) break;
 
-        // Build a block on the I/O thread.
-        GenoBlock block;
+        int slot = -1;
+        {
+            std::unique_lock<std::mutex> lock(queueMutex);
+            freeCv.wait(lock, stopToken, [&]() {
+                return callbackError || !slotInUse[0] || !slotInUse[1];
+            });
+            if (stopToken.stop_requested() && callbackError) {
+                std::rethrow_exception(callbackError);
+            }
+            if (callbackError) std::rethrow_exception(callbackError);
+
+            slot = !slotInUse[0] ? 0 : 1;
+            slotInUse[static_cast<std::size_t>(slot)] = true;
+        }
+
+        // Fill a reusable block on the I/O thread.
+        GenoBlock &block = blocks_[static_cast<std::size_t>(slot)];
         block.numMarkers = nextSize;
-        block.sexChromType   = sexChromType;
-        block.fileIndex  = fileIndex;
-        block.buf.resize(static_cast<std::size_t>(stride) * nextSize);
-        block.extractIndex.assign(
-            extractIndex.begin() + finishedMarker,
-            extractIndex.begin() + finishedMarker + nextSize);
+        block.sexChromType = sexChromType;
+        block.fileIndex = fileIndex;
+        const std::size_t requiredElems =
+            static_cast<std::size_t>(stride) * nextSize;
+        if (block.buf.size() < requiredElems) {
+            block.buf.resize(requiredElems);
+        }
+
+        block.extractIndex = std::span<const uint32_t>{
+            extractIndex.data() + finishedMarker,
+            static_cast<std::size_t>(nextSize)};
 
         if (preFileIndex != fileIndex) {
             reader.Load(g_.geno_files[fileIndex],
@@ -197,23 +307,48 @@ try {
             preFileIndex = fileIndex;
         }
 
+        lagIndexScratch.resize(static_cast<std::size_t>(nextSize));
+        const int baseIndex = g_.baseIndexLookup[fileIndex];
+        bool contiguousLag = (nextSize > 0);
         for (uint32_t i = 0; i < nextSize; ++i) {
-            int rawIndex  = static_cast<int>(rawIndices[finishedMarker + i]);
-            int lag_index = rawIndex - g_.baseIndexLookup[fileIndex];
-            reader.ReadRawFullHard(
-                block.buf.data() + static_cast<std::size_t>(i) * stride,
-                lag_index);
+            lagIndexScratch[static_cast<std::size_t>(i)] =
+                static_cast<int>(rawRefScratch[static_cast<std::size_t>(i)]) - baseIndex;
+            if (i > 0 && contiguousLag) {
+                contiguousLag =
+                    (lagIndexScratch[static_cast<std::size_t>(i)]
+                     == lagIndexScratch[static_cast<std::size_t>(i - 1)] + 1);
+            }
+        }
+        if (contiguousLag) {
+            reader.ReadRawFullHardRange(
+                block.buf.data(), lagIndexScratch.front(), static_cast<int>(nextSize), stride);
+        } else {
+            reader.ReadRawFullHardBatch(
+                block.buf.data(), lagIndexScratch.data(), static_cast<int>(nextSize), stride);
         }
 
-        // ── Transfer to CPU thread — callback does compute ────────────────
-        co_await stdexec::schedule(cpu_sched);
-        callback(block);
-
-        // ── Return to I/O thread for next block ───────────────────────────
-        co_await stdexec::schedule(io_sched);
+        {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            readySlots.push_back(slot);
+        }
+        readyCv.notify_one();
 
         finishedMarker += nextSize;
     }
+
+    {
+        std::lock_guard<std::mutex> lock(queueMutex);
+        done = true;
+    }
+    readyCv.notify_all();
+
+    if (computeThread.joinable()) {
+        computeThread.join();
+    }
+    if (callbackError) {
+        std::rethrow_exception(callbackError);
+    }
+
     // Destructor handles mask cleanup.
 } catch (...) {
     // Re-propagate through exec::task's error channel so that

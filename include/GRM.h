@@ -20,6 +20,7 @@
 #define GCTA2_GRM_H
 #include "Geno.h"
 #include <string>
+#include <span>
 #include <vector>
 #include <utility>
 #include <cmath>
@@ -45,8 +46,8 @@ public:
         if(geno) delete geno;
     };
 
-    void calculate_GRM(uintptr_t* genobuf, const vector<uint32_t> &markerIndex);
-    void calculate_GRM_blas(uintptr_t* genobuf, const vector<uint32_t> &markerIndex);
+    void calculate_GRM(uintptr_t* genobuf, std::span<const uint32_t> markerIndex);
+    void calculate_GRM_blas(uintptr_t* genobuf, std::span<const uint32_t> markerIndex);
     
     void grm_thread(int grm_index_from, int grm_index_to);
     void N_thread(int grm_index_from, int grm_index_to, const uintptr_t* cmask);

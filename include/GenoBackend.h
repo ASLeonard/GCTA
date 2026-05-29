@@ -15,13 +15,14 @@
        on an I/O thread and hands them to the user callback on a CPU thread,
        using the NVIDIA/stdexec P2300 reference implementation.
 
-   The callback retains the classic  void(uintptr_t* buf, const std::vector<uint32_t>& exIndex)
-   contract — loopDouble wraps it so that no callers outside Geno need to change.
+    The callback now uses zero-copy marker-index views
+    (void(uintptr_t* buf, std::span<const uint32_t> exIndex)).
 */
 #pragma once
 
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <vector>
 
 #include "mem.hpp"
@@ -43,7 +44,7 @@
 // --------------------------------------------------------------------------
 struct GenoBlock {
     std::vector<uintptr_t, AlignedAllocator<uintptr_t, 32>> buf;  ///< raw packed data, stride × numMarkers elements; 32-byte aligned for AVX2 vmovdqa
-    std::vector<uint32_t>  extractIndex; ///< marker extract-indices for this block
+    std::span<const uint32_t> extractIndex; ///< marker extract-indices view for this block
     uint32_t               numMarkers = 0;
     uint8_t                sexChromType   = 0; ///< 0=non-sex, 1=homogametic, 2=heterogametic
     int                    fileIndex  = 0; ///< which geno_file[] this block came from
@@ -84,6 +85,6 @@ public:
     virtual exec::task<void> stream(
         GenoScheduler               io_sched,
         GenoScheduler               cpu_sched,
-        const std::vector<uint32_t> &extractIndex,
+        std::vector<uint32_t>       extractIndex,
         Callback                    callback) = 0;
 };

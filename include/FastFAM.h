@@ -26,6 +26,7 @@
 #include "Marker.h" 
 #include "Eigen/Dense"
 #include "Eigen/Sparse"
+#include <span>
 #include <vector>
 #include <mutex>
 #include <omp.h>
@@ -53,18 +54,18 @@ public:
     FastFAM();
     ~FastFAM();
 
-    void calculate_fam(uintptr_t *buf, const vector<uint32_t> &markerIndex);
-    void calculate_grammar(uintptr_t *buf, const vector<uint32_t> &markerIndex);
-    void calculate_gwa(uintptr_t * geno, const vector<uint32_t> &markerIndex);
-    void calculate_gwa_2df(uintptr_t * geno, const vector<uint32_t> &markerIndex);
-    void calculate_gwa_2df_sandwich(uintptr_t * geno, const vector<uint32_t> &markerIndex);
-    void calculate_mixed_2df(uintptr_t *geno, const vector<uint32_t> &markerIndex);
-    void calculate_mixed_2df_sandwich(uintptr_t *geno, const vector<uint32_t> &markerIndex);
-    void output_res(const vector<uint8_t> &isValids, const vector<uint32_t> markerIndex);
-    void output_res_2df(const vector<uint8_t> &isValids, const vector<uint32_t> markerIndex);
+    void calculate_fam(uintptr_t *buf, std::span<const uint32_t> markerIndex);
+    void calculate_grammar(uintptr_t *buf, std::span<const uint32_t> markerIndex);
+    void calculate_gwa(uintptr_t * geno, std::span<const uint32_t> markerIndex);
+    void calculate_gwa_2df(uintptr_t * geno, std::span<const uint32_t> markerIndex);
+    void calculate_gwa_2df_sandwich(uintptr_t * geno, std::span<const uint32_t> markerIndex);
+    void calculate_mixed_2df(uintptr_t *geno, std::span<const uint32_t> markerIndex);
+    void calculate_mixed_2df_sandwich(uintptr_t *geno, std::span<const uint32_t> markerIndex);
+    void output_res(const vector<uint8_t> &isValids, std::span<const uint32_t> markerIndex);
+    void output_res_2df(const vector<uint8_t> &isValids, std::span<const uint32_t> markerIndex);
 
-    void genRandY(uintptr_t *buf, const std::vector<uint32_t> &markerIndex);
-    void estBeta(uintptr_t *buf, const std::vector<uint32_t> &markerIndex);
+    void genRandY(uintptr_t *buf, std::span<const uint32_t> markerIndex);
+    void estBeta(uintptr_t *buf, std::span<const uint32_t> markerIndex);
 
     //void output(string filename);
     //void initMarkerVars();
@@ -85,7 +86,7 @@ public:
     
     static int registerOption(map<string, vector<string>>& options_in);
     static void processMain();
-    void processFAM(vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks);
+    void processFAM(vector<function<void (uintptr_t *, std::span<const uint32_t>)>> callBacks);
     //void processFAM();
 
 
@@ -129,7 +130,7 @@ private:
     double c_inf;
     uint64_t finished_rand_marker = 0;
     Eigen::ConjugateGradient<SpMat, Eigen::Lower|Eigen::Upper> solver;
-    void grammar_func(uintptr_t *genobuf, const vector<uint32_t> &markerIndex);
+    void grammar_func(uintptr_t *genobuf, std::span<const uint32_t> markerIndex);
     vector<double> v_chisq;
     vector<double> v_c_infs;
     vector<uint8_t> bValids;
@@ -206,15 +207,15 @@ private:
     double taoVal;
     double spaCutOff = 2;
     void estBinGamma();
-    void binGrammar_func(uintptr_t *genobuf, const vector<uint32_t> &markerIndex);
-    void calculate_spa(uintptr_t *genobuf, const vector<uint32_t> &markerIndex);
-    void getX(uintptr_t *genobuf, const vector<uint32_t> &markerIndex);
+    void binGrammar_func(uintptr_t *genobuf, std::span<const uint32_t> markerIndex);
+    void calculate_spa(uintptr_t *genobuf, std::span<const uint32_t> markerIndex);
+    void getX(uintptr_t *genobuf, std::span<const uint32_t> markerIndex);
     //void conditionCovarRegBin(Eigen::Ref<VectorXd> pheno);
     bool binGridREML(const SpMat& fam, Ref<VectorXd> est_a, int maxIter, double threshold);
     double binLogL(double cur_tao, const SpMat& fam, const SpMat& W, const Ref<VectorXd> Y, const Ref<MatrixXd> X);
     SPARes saddleProb(double q, double var, const Ref<VectorXd> geno, double cutOff);
     SPARes saddleProbSP();
-    void output_res_spa(const vector<uint8_t> &isValids, const vector<uint32_t> markerIndex);
+    void output_res_spa(const vector<uint8_t> &isValids, std::span<const uint32_t> markerIndex);
     float *Tscore = NULL;
     float *Tse = NULL;
 

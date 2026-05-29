@@ -26,6 +26,7 @@
 #include <exec/static_thread_pool.hpp>
 
 #include <algorithm>
+#include <span>
 #include <vector>
 
 // --------------------------------------------------------------------------
@@ -36,7 +37,7 @@ public:
 
     exec::task<void> stream(GenoScheduler               io_sched,
                             GenoScheduler               cpu_sched,
-                            const std::vector<uint32_t> &extractIndex,
+                            std::vector<uint32_t>       extractIndex,
                             Callback                    callback) override;
 
 private:
@@ -83,7 +84,7 @@ PgenBackend::PgenBackend(Geno &geno) : g_(geno)
 // reference — it would dangle the moment the caller's scope is suspended.
 exec::task<void> PgenBackend::stream(GenoScheduler               io_sched,
                                      GenoScheduler               cpu_sched,
-                                     const std::vector<uint32_t> &extractIndex,
+                                     std::vector<uint32_t>       extractIndex,
                                      Callback                    callback)
 try {
     co_await stdexec::schedule(io_sched);
@@ -118,9 +119,9 @@ try {
         block.sexChromType   = sexChromType;
         block.fileIndex  = fileIndex;
         block.buf.resize(static_cast<std::size_t>(stride) * nextSize);
-        block.extractIndex.assign(
-            extractIndex.begin() + finishedMarker,
-            extractIndex.begin() + finishedMarker + nextSize);
+        block.extractIndex = std::span<const uint32_t>{
+            extractIndex.data() + finishedMarker,
+            static_cast<std::size_t>(nextSize)};
 
         if (preFileIndex != fileIndex) {
             reader.Load(g_.geno_files[fileIndex],

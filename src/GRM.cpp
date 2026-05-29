@@ -32,6 +32,7 @@
 #include "utils.hpp"
 #include <omp.h>
 #include "OptionIO.h"
+#include "third_party/plink-ng/2.0/include/plink2_bits.h"
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <sstream>
@@ -922,66 +923,7 @@ void GRM::output_id() {
 
 }
 
-void flip64(uintptr_t a[64]) {
-  int j, k;
-  uint64_t m, t;
-  for (j = 32, m = 0x00000000FFFFFFFF; j; j >>= 1, m ^= m << j) {
-    for (k = 0; k < 64; k = ((k | j) + 1) & ~j) {
-      t = (a[k] ^ (a[k | j] >> j)) & m;
-      a[k] ^= t;
-      a[k | j] ^= (t << j);
-    }
-  }
-}
-
-/*
- * Prefer compiler builtin bit-reverse when available for clarity and
- * potential codegen improvements. Fall back to the manual implementation
- * otherwise.
- */
-#ifndef __has_builtin
-#define __has_builtin(x) 0
-#endif
-
-#if __has_builtin(__builtin_bitreverse64)
-uint64_t revbits(uint64_t x) {
-    return __builtin_bitreverse64(x);
-}
-#elif __has_builtin(__builtin_bitreverse)
-uint64_t revbits(uint64_t x) {
-    return __builtin_bitreverse(x);
-}
-#else
-uint64_t revbits(uint64_t x) {
-    uint64_t t;
-    x = (x << 32) | (x >> 32); // Swap register halves.
-    x = (x & 0x0001FFFF0001FFFFLL) << 15 | // Rotate left
-        (x & 0xFFFE0000FFFE0000LL) >> 17; // 15.
-    t = (x ^ (x >> 10)) & 0x003F801F003F801FLL;
-    x = (t | (t << 10)) ^ x;
-    t = (x ^ (x >> 4)) & 0x0E0384210E038421LL;
-    x = (t | (t << 4)) ^ x;
-    t = (x ^ (x >> 2)) & 0x2248884222488842LL;
-    x = (t | (t << 2)) ^ x;
-    return x;
-}
-#endif
-
-/*
-void flip64(uint64_t a[64]) {
-  uint64_t m = 0x00000000FFFFFFFF;
-  for (int j = 32; j; j >>= 1, m ^= m << j) {
-    for (int k = 0; k < 64; k = ((k | j) + 1) & ~j) {
-      uint64_t t = (a[k] ^ (a[k | j] >> j)) & m;
-      a[k] ^= t;
-      a[k | j] ^= (t << j);
-    }
-  }
-}
-*/
-
-
-void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex){
+void GRM::calculate_GRM_blas(uintptr_t *buf, std::span<const uint32_t> markerIndex){
     int num_marker = markerIndex.size();
 
     #pragma omp parallel for schedule(static)
@@ -1002,7 +944,12 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
 
     #pragma omp parallel for schedule(static)
     for(int i = 0; i < curNumValidMarkers; i++){
-        memcpy(stdGeno + i * stdGenoLD, gbufitems[validIndexBuf[i]].geno.data(), grm_bytes_std_geno);
+        const double *src = gbufitems[validIndexBuf[i]].geno.data();
+        double *dst = stdGeno + i * stdGenoLD;
+        #pragma omp simd
+        for (int j = 0; j < grm_n; ++j) {
+            dst[j] = src[j];
+        }
     }
     if(!grm_skip_global_state){
         for(int i = 0; i < curNumValidMarkers; i++){
@@ -1052,19 +999,36 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, const vector<uint32_t> &markerIndex
     const int numNblock = (curNumValidMarkers + markerPerN - 1) / markerPerN;
     const int numNSampleBlock = (grm_n + markerPerN - 1) / markerPerN;
     const int blockStride = numNSampleBlock * markerPerN;
+    std::array<uintptr_t, 64> transposeInput{};
+    std::vector<plink2::VecW> transposeScratch(plink2::kPglBitTransposeBufvecs);
     for(int i = 0; i < numNblock; i++){
         const int baseMarkerIndex = markerPerN * i;
         const int lastValidIndex  = std::min(markerPerN * (i + 1), curNumValidMarkers);
         uintptr_t *block_buf = sampleMissBuf.data() + i * blockStride;
         for(int j = 0; j < numNSampleBlock; j++){
             const int baseMissIndex = j * markerPerN;
-            for(int k = baseMarkerIndex; k < lastValidIndex; k++){
-                block_buf[baseMissIndex + k - baseMarkerIndex] = revbits(gbufitems[validIndexBuf[k]].missing[j]);
+            if (markerPerN == 64) {
+                for(int k = baseMarkerIndex; k < lastValidIndex; k++){
+                    transposeInput[static_cast<std::size_t>(k - baseMarkerIndex)] =
+                        gbufitems[validIndexBuf[k]].missing[j];
+                }
+                for(int k = lastValidIndex; k < markerPerN * (i + 1); k++){
+                    transposeInput[static_cast<std::size_t>(k - baseMarkerIndex)] = 0UL;
+                }
+                // Transpose [marker x sample] missing bits into [sample x marker].
+                // Bit order inside each word is irrelevant for downstream AND+popcount.
+                plink2::TransposeBitblock(
+                    transposeInput.data(), 1, 1,
+                    static_cast<uint32_t>(markerPerN), static_cast<uint32_t>(markerPerN),
+                    &block_buf[baseMissIndex], transposeScratch.data());
+            } else {
+                for(int k = baseMarkerIndex; k < lastValidIndex; k++){
+                    block_buf[baseMissIndex + k - baseMarkerIndex] = gbufitems[validIndexBuf[k]].missing[j];
+                }
+                for(int k = lastValidIndex; k < markerPerN * (i + 1); k++){
+                    block_buf[baseMissIndex + k - baseMarkerIndex] = 0UL;
+                }
             }
-            for(int k = lastValidIndex; k < markerPerN * (i + 1); k++){
-                block_buf[baseMissIndex + k - baseMarkerIndex] = 0UL;
-            }
-            flip64(&block_buf[baseMissIndex]);
             if(!grm_skip_global_state){
                 for(int k = baseMissIndex; k < baseMissIndex + markerPerN; k++){
                     sub_miss[k] += std::popcount(block_buf[k]);
@@ -2175,9 +2139,9 @@ void GRM::processMakeGRM(){
         LOGGER.e(0, "can't allocate enough memory for the genotype buffer.");
     }
     
-    vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks;
+    vector<function<void (uintptr_t *, std::span<const uint32_t>)>> callBacks;
     if(options.find("use_blas") != options.end()){
-        callBacks.push_back([this](uintptr_t *buf, const vector<uint32_t> &idx){
+        callBacks.push_back([this](uintptr_t *buf, std::span<const uint32_t> idx){
             calculate_GRM_blas(buf, idx);
         });
     }else{
@@ -2353,9 +2317,9 @@ void GRM::processMakeGRMX(){
         LOGGER.e(0, "can't allocate enough memory for the genotype buffer.");
     }
     
-    vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks;
+    vector<function<void (uintptr_t *, std::span<const uint32_t>)>> callBacks;
     if(options.find("use_blas") != options.end()){
-        callBacks.push_back([this](uintptr_t *buf, const vector<uint32_t> &idx){
+        callBacks.push_back([this](uintptr_t *buf, std::span<const uint32_t> idx){
             calculate_GRM_blas(buf, idx);
         });
     }else{

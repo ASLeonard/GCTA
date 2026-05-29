@@ -20,6 +20,7 @@
 #define GCTA2_GENO_H
 #include <string>
 #include <map>
+#include <span>
 #include <vector>
 #include "Pheno.h"
 #include "Marker.h"
@@ -115,7 +116,7 @@ public:
     // coroutine-based loop — pre/end now handled by GenoBackend RAII
     void getGenoDouble(uintptr_t *buf, int bufIndex, GenoBufItem* gbuf);
 
-    void loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf, bool bMakeGeno, bool bGenoCenter, bool bGenoStd, bool bMakeMiss, vector<function<void (uintptr_t *buf, const vector<uint32_t> &exIndex)>> callbacks = vector<function<void (uintptr_t *buf, const vector<uint32_t> &exIndex)>>(), bool showLog = true);
+    void loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf, bool bMakeGeno, bool bGenoCenter, bool bGenoStd, bool bMakeMiss, vector<function<void (uintptr_t *buf, std::span<const uint32_t> exIndex)>> callbacks = vector<function<void (uintptr_t *buf, std::span<const uint32_t> exIndex)>>(), bool showLog = true);
 
     bool getGenoHasInfo();
 
@@ -252,20 +253,20 @@ private:
     // main funcs
     void processRecodet();
     bool bRecodeSaveMiss = false;
-    void recode_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex);
+    void recode_func(uintptr_t* genobuf, std::span<const uint32_t> markerIndex);
 
     void processFreq();
-    void freq_func(uintptr_t * genobuf, const vector<uint32_t> &markerIndex);
+    void freq_func(uintptr_t * genobuf, std::span<const uint32_t> markerIndex);
 
     // make_bed: convert any supported genotype format to PLINK BED (non-BGEN path).
     // Uses a two-pass approach: pass 1 determines valid markers, pass 2 writes .bed.
     void processMakeBed();
-    void make_bed_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex);
+    void make_bed_func(uintptr_t* genobuf, std::span<const uint32_t> markerIndex);
 
     // sum_geno_x: per-sample genotype sum across homogametic chromosome markers.
     // Used for dosage compensation analysis (--sum-geno-x).
     void processSumGenoHomogametic();
-    void sum_geno_homogametic_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex);
+    void sum_geno_homogametic_func(uintptr_t* genobuf, std::span<const uint32_t> markerIndex);
     vector<double>   sumGenoHomogametic;    // per-sample accumulated genotype sum on homogametic chromosomes
     vector<uint32_t> nValidGenoHomogametic; // per-sample count of valid homogametic markers
 

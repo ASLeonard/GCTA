@@ -291,7 +291,7 @@ bool Geno::filterMAF(){
         min_maf = 0.0; max_maf = 1.0; dFilterMiss = 0.0;
 
         loopDouble(extractIdx, Constants::NUM_MARKER_READ, false, false, false, false,
-            {[this](uintptr_t *buf, const vector<uint32_t> &exIdx) {
+            {[this](uintptr_t *buf, std::span<const uint32_t> exIdx) {
                 int n = static_cast<int>(exIdx.size());
                 #pragma omp parallel for schedule(static)
                 for(int i = 0; i < n; ++i){
@@ -954,7 +954,7 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
 
 void Geno::loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf,
                       bool bMakeGeno, bool bGenoCenter, bool bGenoStd, bool bMakeMiss,
-                      vector<function<void(uintptr_t *buf, const vector<uint32_t> &exIndex)>> callbacks,
+                      vector<function<void(uintptr_t *buf, std::span<const uint32_t> exIndex)>> callbacks,
                       bool showLog)
 {
     // ── Common pre-logic (was in preGenoDouble) ──────────────────────────
@@ -1051,11 +1051,15 @@ void Geno::loopDouble(const vector<uint32_t> &extractIndex, int numMarkerBuf,
         }
     };
 
+    // Backend takes extractIndex by value so block metadata can safely
+    // hold spans/slices without caller lifetime coupling.
+    auto streamExtractIndex = extractIndex;
+
     // ── Run coroutine pipeline (blocks until all markers processed) ───────
     stdexec::sync_wait(backend->stream(
         io_pool.get_scheduler(),
         cpu_pool.get_scheduler(),
-        extractIndex,
+        std::move(streamExtractIndex),
         std::move(blockCallback)));
 
     if (showLog) {
@@ -1861,7 +1865,7 @@ void Geno::processFreq(){
     vector<uint32_t> extractIndex(marker->count_extract());
     std::iota(extractIndex.begin(), extractIndex.end(), 0);
     
-    vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks;
+    vector<function<void (uintptr_t *, std::span<const uint32_t>)>> callBacks;
     callBacks.push_back(bind(&Geno::freq_func, this, _1, _2));
 
     numMarkerOutput = 0;
@@ -1914,7 +1918,7 @@ void Geno::processRecodet(){
     vector<uint32_t> extractIndex(marker->count_extract());
     std::iota(extractIndex.begin(), extractIndex.end(), 0);
     
-    vector<function<void (uintptr_t *, const vector<uint32_t> &)>> callBacks;
+    vector<function<void (uintptr_t *, std::span<const uint32_t>)>> callBacks;
     callBacks.push_back(bind(&Geno::recode_func, this, _1, _2));
 
     numMarkerOutput = 0;
@@ -1926,7 +1930,7 @@ void Geno::processRecodet(){
 
 }
 
-void Geno::freq_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex){
+void Geno::freq_func(uintptr_t* genobuf, std::span<const uint32_t> markerIndex){
     int num_marker = markerIndex.size();
     vector<uint8_t> isValids(num_marker);
     vector<double> af(num_marker);
@@ -1966,7 +1970,7 @@ void Geno::freq_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex){
 
 }
 
-void Geno::recode_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex){
+void Geno::recode_func(uintptr_t* genobuf, std::span<const uint32_t> markerIndex){
     int num_marker = markerIndex.size();
     //vector<uint8_t> isValids(num_marker);
     /*
@@ -2030,7 +2034,7 @@ void Geno::processMakeBed() {
 
     loopDouble(extractIndex, Constants::NUM_MARKER_READ,
                /*bMakeGeno*/false, /*bGenoCenter*/false, /*bGenoStd*/false, /*bMakeMiss*/false,
-        {[this, &validIdx](uintptr_t *buf, const vector<uint32_t> &exIdx) {
+        {[this, &validIdx](uintptr_t *buf, std::span<const uint32_t> exIdx) {
             for (int i = 0; i < static_cast<int>(exIdx.size()); ++i) {
                 GenoBufItem item;
                 item.extractedMarkerIndex = exIdx[i];
@@ -2059,7 +2063,7 @@ void Geno::processMakeBed() {
 
     loopDouble(extractIndex, Constants::NUM_MARKER_READ,
                /*bMakeGeno*/true, /*bGenoCenter*/false, /*bGenoStd*/false, /*bMakeMiss*/true,
-        {[this](uintptr_t *buf, const vector<uint32_t> &exIdx) {
+        {[this](uintptr_t *buf, std::span<const uint32_t> exIdx) {
             make_bed_func(buf, exIdx);
         }});
 
@@ -2075,7 +2079,7 @@ void Geno::processMakeBed() {
 //   0b11 = 3 → homozygous A2   (GCTA dosage 2)
 static constexpr uint8_t kGenoToBed[3] = {0u, 2u, 3u};
 
-void Geno::make_bed_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex) {
+void Geno::make_bed_func(uintptr_t* genobuf, std::span<const uint32_t> markerIndex) {
     const int num_marker = static_cast<int>(markerIndex.size());
     const uint32_t bytesPerMarker = (keepSampleCT + 3) / 4;
     vector<uint8_t> bedBuf(bytesPerMarker);
@@ -2124,7 +2128,7 @@ void Geno::processSumGenoHomogametic() {
 
     loopDouble(extractIndex, Constants::NUM_MARKER_READ,
                /*bMakeGeno*/true, /*bGenoCenter*/false, /*bGenoStd*/false, /*bMakeMiss*/false,
-        {[this](uintptr_t *buf, const vector<uint32_t> &exIdx) {
+        {[this](uintptr_t *buf, std::span<const uint32_t> exIdx) {
             sum_geno_homogametic_func(buf, exIdx);
         }});
 
@@ -2148,7 +2152,7 @@ void Geno::processSumGenoHomogametic() {
     LOGGER.i(0, "Results saved to [" + outFile + "].");
 }
 
-void Geno::sum_geno_homogametic_func(uintptr_t* genobuf, const vector<uint32_t> &markerIndex) {
+void Geno::sum_geno_homogametic_func(uintptr_t* genobuf, std::span<const uint32_t> markerIndex) {
     const int num_marker = static_cast<int>(markerIndex.size());
     const int nS = static_cast<int>(keepSampleCT);
     const int nThreads = omp_get_max_threads();
