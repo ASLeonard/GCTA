@@ -42,6 +42,18 @@
   #define EIGEN_USE_MKL_ALL
   #endif
   #include <mkl.h>
+#elif defined(GCTA_USE_ACCELERATE)
+  #include <cblas.h>
+  #include <lapack.h>
+  extern "C" {
+    void dsyrk_(const char* uplo, const char* trans, const int* n, const int* k,
+                const double* alpha, const double* a, const int* lda,
+                const double* beta, double* c, const int* ldc);
+    void dgemm_(const char* transa, const char* transb, const int* m, const int* n, const int* k,
+                const double* alpha, const double* a, const int* lda,
+                const double* b, const int* ldb, const double* beta,
+                double* c, const int* ldc);
+  }
 #else
   #include <f77blas.h>
 #endif

@@ -27,22 +27,13 @@ bool _LLT(MatrixType &A, double &logdet){
     //auto diag = A.diagonal();
 
     int info, cols = (int)A.cols();
-    char uplo = 'L';
     LOGGER.ts("LLT");
-#if GCTA_CPU_x86
-    dpotrf(&uplo, &cols, vi, &cols, &info);
-#else
-    dpotrf_(&uplo, &cols, vi, &cols, &info);
-#endif    
+    info = gcta_dpotrf(cols, vi, cols);
     //LOGGER << "  LLT time: " << LOGGER.tp("LLT") << std::endl;
     if(info == 0){
         logdet = A.diagonal().array().square().log().sum();
         //LOGGER.ts("LLT_INV");
-#if GCTA_CPU_x86        
-        dpotri(&uplo, &cols, vi, &cols, &info);
-#else
-        dpotri_(&uplo, &cols, vi, &cols, &info);
-#endif
+        info = gcta_dpotri(cols, vi, cols);
         //LOGGER << "  LLT inverse time: " << LOGGER.tp("LLT_INV") << std::endl;
         if(info == 0){
             A.template triangularView<Eigen::Upper>() = A.transpose();
