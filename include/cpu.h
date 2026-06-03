@@ -31,8 +31,8 @@
   typedef lapack_int gcta_blas_int;
 
 #elif defined(GCTA_USE_ACCELERATE)
-  #include <cblas_new.h>
-  #include <lapack.h>
+  #include <veclib/cblas_new.h>
+  #include <veclib/lapack.h>
   typedef __LAPACK_int gcta_blas_int;
 #endif
 

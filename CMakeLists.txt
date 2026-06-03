@@ -19,7 +19,7 @@ project(GCTAg LANGUAGES C CXX)
 
 # Prevent CMake from finding stale configs in build-tree or user package registries.
 # This is especially important on HPC clusters where previous partial builds can
-# leave broken ZLIBConfig.cmake / zstd-config.cmake files in the build directory.
+# leave broken zstd-config.cmake or other config files in the build directory.
 set(CMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY        TRUE)
 set(CMAKE_FIND_PACKAGE_NO_SYSTEM_PACKAGE_REGISTRY TRUE)
 
@@ -74,12 +74,8 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13.0)
         message(FATAL_ERROR "GCTA requires GCC >= 13 for reliable C++23 support (found ${CMAKE_CXX_COMPILER_VERSION})")
     endif()
-    # For GCC LTO builds, gcc-ar/gcc-ranlib use the LTO plugin to make archiving
-    # LTO-aware (enables cross-archive inlining).  CMake auto-sets
-    # CMAKE_CXX_COMPILER_AR for the gcta64 executable when IPO is ON, but static
-    # libraries (Pgenlib, sqlite3) use CMAKE_AR — so we need to set it here too.
-    # Probe next to the compiler binary so a non-default GCC install is handled
-    # correctly even if the system PATH points at a different gcc-ar.
+    # Use gcc-ar/gcc-ranlib so static libs (Pgenlib, sqlite3) also get LTO-aware
+    # archiving. CMake only sets CMAKE_CXX_COMPILER_AR for executables when IPO is ON.
     get_filename_component(_gcc_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
     gcta_configure_binutils_from_dir("${_gcc_bin}" "GNU" "GCC" TRUE)
     if(LINUX)
@@ -96,6 +92,21 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
             list(APPEND CMAKE_INSTALL_RPATH "${_gcc_gomp_dir}")
             message(STATUS "GCC: libgomp.so.1 -> ${_gcc_gomp_real}")
         endif()
+        foreach(_gcc_rtlib IN ITEMS libstdc++.so.6 libgcc_s.so.1)
+            execute_process(
+                COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=${_gcc_rtlib}
+                OUTPUT_VARIABLE _gcc_rtlib_path
+                OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+            if(_gcc_rtlib_path AND NOT _gcc_rtlib_path STREQUAL "${_gcc_rtlib}")
+                file(REAL_PATH "${_gcc_rtlib_path}" _gcc_rtlib_real)
+                get_filename_component(_gcc_rtlib_dir "${_gcc_rtlib_real}" DIRECTORY)
+                list(APPEND CMAKE_BUILD_RPATH   "${_gcc_rtlib_dir}")
+                list(APPEND CMAKE_INSTALL_RPATH "${_gcc_rtlib_dir}")
+                message(STATUS "GCC: ${_gcc_rtlib} -> ${_gcc_rtlib_real}")
+            else()
+                message(WARNING "GCC: -print-file-name=${_gcc_rtlib} did not resolve")
+            endif()
+        endforeach()
     endif()
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(STATUS "Compiling with Clang ${CMAKE_CXX_COMPILER_VERSION}")
@@ -146,6 +157,13 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND LINUX)
             message(WARNING "AOCC: llvm-ar not found under ${GCTA_AOCC_ROOT}/bin — static library builds may fail")
         endif()
         gcta_configure_binutils_from_dir("${GCTA_AOCC_ROOT}/bin" "LLVM" "AOCC" FALSE)
+
+        # AOCC (Clang 17) does not define __cpp_concepts when using libstdc++ headers,
+        # which gates <expected> and other C++23 headers. Explicitly define both macros
+        # as belt-and-suspenders; suppress the resulting -Wbuiltin-macro-redefined.
+        add_compile_definitions(__cpp_concepts=202002L __cpp_lib_expected=202211L)
+        add_compile_options(-Wno-builtin-macro-redefined)
+        message(STATUS "AOCC: applied libstdc++ C++23 compatibility shims (__cpp_concepts, __cpp_lib_expected)")
     endif()
 endif()
 
@@ -161,14 +179,39 @@ endif()
 #   -DGCTA_GCC_TOOLCHAIN=/path/to/gcc-13-or-14-root
 # The path should be the GCC prefix — the directory containing bin/gcc.
 set(GCTA_GCC_TOOLCHAIN "" CACHE PATH
-    "GCC installation root for AOCC to use as its C++ header/sysroot provider. \
-Required when the system GCC is >= 15 (AOCC/Clang 17 cannot parse GCC 15+ libstdc++ headers). \
-Example: /opt/gcc-13  (must contain bin/gcc)")
+    "GCC installation root for AOCC (required when system GCC >= 15). Must contain bin/gcc.")
 if(GCTA_COMPILER_IS_AOCC AND GCTA_GCC_TOOLCHAIN)
     if(NOT IS_DIRECTORY "${GCTA_GCC_TOOLCHAIN}")
         message(FATAL_ERROR "GCTA_GCC_TOOLCHAIN does not exist: ${GCTA_GCC_TOOLCHAIN}")
     endif()
     message(STATUS "AOCC: using GCC toolchain at ${GCTA_GCC_TOOLCHAIN}")
+
+    # Validate the toolchain GCC version: AOCC (Clang 17) requires GCC 12–14.
+    # GCC < 12 lacks C++23 <expected>; GCC >= 15 has headers Clang 17 cannot parse.
+    find_program(_aocc_tc_gcc NAMES gcc HINTS "${GCTA_GCC_TOOLCHAIN}/bin" NO_DEFAULT_PATH)
+    if(_aocc_tc_gcc)
+        execute_process(
+            COMMAND ${_aocc_tc_gcc} --version
+            OUTPUT_VARIABLE _aocc_tc_gcc_ver
+            ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(_aocc_tc_gcc_ver MATCHES "([0-9]+)\\.[0-9]+\\.[0-9]+")
+            set(_aocc_tc_gcc_major "${CMAKE_MATCH_1}")
+            if(_aocc_tc_gcc_major LESS 12)
+                message(FATAL_ERROR
+                    "GCTA_GCC_TOOLCHAIN GCC ${_aocc_tc_gcc_major} is too old — AOCC requires GCC 12–14.")
+            elseif(_aocc_tc_gcc_major GREATER_EQUAL 15)
+                message(FATAL_ERROR
+                    "GCTA_GCC_TOOLCHAIN GCC ${_aocc_tc_gcc_major} is too new — AOCC (Clang 17) cannot parse GCC 15+ headers.")
+            else()
+                message(STATUS "AOCC: GCC toolchain version ${_aocc_tc_gcc_major} (OK, range 12–14)")
+            endif()
+        else()
+            message(WARNING "AOCC: could not parse GCC version from ${_aocc_tc_gcc} — proceeding without version check")
+        endif()
+    else()
+        message(WARNING "AOCC: gcc not found under ${GCTA_GCC_TOOLCHAIN}/bin — cannot validate toolchain version")
+    endif()
+
     add_compile_options(--gcc-toolchain=${GCTA_GCC_TOOLCHAIN})
     add_link_options(--gcc-toolchain=${GCTA_GCC_TOOLCHAIN})
 
@@ -196,9 +239,8 @@ if(GCTA_COMPILER_IS_AOCC AND GCTA_GCC_TOOLCHAIN)
             message(STATUS "AOCC: ${_tc_lib} -> ${_tc_lib_real}")
         else()
             message(WARNING
-                "AOCC: -print-file-name=${_tc_lib} did not resolve to a path "
-                "in ${GCTA_GCC_TOOLCHAIN} — runtime may load the system library. "
-                "Use -DGCTA_STATIC_STDCXX=ON to avoid the runtime dependency.")
+                "AOCC: -print-file-name=${_tc_lib} did not resolve in ${GCTA_GCC_TOOLCHAIN} — "
+                "runtime may load the system library.")
         endif()
     endforeach()
     message(STATUS "AOCC: added GCC toolchain lib dirs to rpath")
@@ -219,9 +261,8 @@ elseif(GCTA_COMPILER_IS_AOCC AND NOT GCTA_GCC_TOOLCHAIN)
     if(_gcc_ver_str MATCHES "([0-9]+)\\.[0-9]+\\.[0-9]+")
         if(CMAKE_MATCH_1 GREATER_EQUAL 15)
             message(WARNING
-                "AOCC detected but GCC ${CMAKE_MATCH_1} (${_gcc_probe_cmd}) is too new — "
-                "AOCC (Clang 17) cannot parse GCC 15+ libstdc++ headers.\n"
-                "Set -DGCTA_GCC_TOOLCHAIN=/path/to/gcc-13-or-14 to fix compile errors.")
+                "AOCC detected but ambient GCC ${CMAKE_MATCH_1} is too new — "
+                "set -DGCTA_GCC_TOOLCHAIN=/path/to/gcc-13-or-14.")
         endif()
     endif()
 endif()
@@ -236,20 +277,16 @@ endif()
 
 set(GCTA_BLAS_BACKEND "" CACHE STRING "BLAS/LAPACK backend (required): OpenBLAS, MKL, Accelerate, or AOCL")
 set_property(CACHE GCTA_BLAS_BACKEND PROPERTY STRINGS OpenBLAS MKL Accelerate AOCL)
-set(GCTA_BLAS_LIBRARY "" CACHE FILEPATH "Primary BLAS library (OpenBLAS/MKL only). E.g. /usr/lib/x86_64-linux-gnu/libopenblas.so or /opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so")
-set(GCTA_LAPACKE_LIBRARY "" CACHE FILEPATH "Separate LAPACKE library, if needed (e.g. /usr/lib/x86_64-linux-gnu/liblapacke.so for apt OpenBLAS). Leave empty if your BLAS library bundles LAPACKE (MKL, conda OpenBLAS).")
-set(GCTA_BLAS_INCLUDE_DIR "" CACHE PATH "Directory containing BLAS/LAPACK headers (OpenBLAS/MKL only). E.g. /usr/include/x86_64-linux-gnu/openblas or /opt/intel/oneapi/mkl/latest/include")
-set(Boost_DIR "" CACHE PATH "Exact Boost CMake config directory containing BoostConfig.cmake. If set, Boost will be used from this location instead of fetching it.")
+set(GCTA_BLAS_LIBRARY "" CACHE FILEPATH "Primary BLAS .so/.a for the selected backend (OpenBLAS/MKL/AOCL).")
+set(GCTA_LAPACKE_LIBRARY "" CACHE FILEPATH "Separate LAPACKE .so/.a, if not bundled in GCTA_BLAS_LIBRARY (e.g. apt OpenBLAS). Leave empty for MKL/conda.")
+set(GCTA_BLAS_INCLUDE_DIR "" CACHE PATH "Directory containing cblas.h / mkl.h / blis.h for the selected backend.")
+set(Boost_DIR "" CACHE PATH "Boost CMake config dir (BoostConfig.cmake). If set, uses system Boost instead of fetching.")
 option(GCTA_LIST_TARGETS "List imported and local targets during configure" OFF)
 option(GCTA_UNITY_BUILD "Enable unity builds for faster compilation" ON)
 option(GCTA_ENABLE_IPO "Enable IPO/LTO in Release builds" ON)
 option(GCTA_VERBOSE_BLAS "Print verbose BLAS detection information during configure" OFF)
 option(BGEN_SUPPORT "Enable BGEN file format support (requires SQLite)" OFF)
-option(GCTA_STATIC_STDCXX
-    "Statically link libstdc++ and libgcc into the binary (AOCC/Clang on Linux). \
-Avoids runtime dependency on the toolchain's shared libstdc++.so.6 / libgcc_s.so.1. \
-Recommended when deploying to nodes that do not have the build toolchain's GCC modules loaded."
-    OFF)
+
 
 # Initialize plink-ng submodule if needed
 if(EXISTS "${CMAKE_SOURCE_DIR}/.git" AND NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include/pgenlib_ffi_support.h")
@@ -286,11 +323,6 @@ else()
 endif()
 
 FetchContent_Declare(
-    zlib
-    URL https://github.com/madler/zlib/archive/refs/tags/v1.3.2.tar.gz
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    EXCLUDE_FROM_ALL)
-FetchContent_Declare(
     eigen
     URL https://github.com/eigen-mirror/eigen/archive/refs/tags/5.0.1.tar.gz
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
@@ -323,31 +355,19 @@ FetchContent_Declare(
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     EXCLUDE_FROM_ALL)
 
-# zlib must be fetched before Boost so Boost iostreams can find it at configure time.
-# Kept outside block() so zlib_POPULATED and zlib_SOURCE_DIR are visible in parent scope.
-set(ZLIB_BUILD_EXAMPLES OFF)
-FetchContent_MakeAvailable(zlib)
-
-# Only use Boost when explicitly provided via Boost_DIR; otherwise fall back to
-# fetching Boost with FetchContent. Do NOT probe for a system Boost.
-
-# After zlib is available, set hints so Boost iostreams links against it correctly.
-# The target-based hints below (ZLIB_LIBRARY = ZLIB::ZLIB) are the authoritative
-# version; this block is intentionally removed to avoid a stale path-based override.
+# Always use the system shared zlib — it is a base system library with a stable
+# ABI (libz.so.1 since 1997) and is always present on HPC clusters. This avoids
+# the CMAKE_SKIP_INSTALL_RULES / alias dance required by a fetched static zlib.
+find_package(ZLIB REQUIRED)
 
 block()
     set(ZSTD_BUILD_PROGRAMS OFF)
     set(ZSTD_BUILD_TESTS    OFF)
-    set(ZSTD_BUILD_SHARED   ON)
+    set(ZSTD_BUILD_SHARED   OFF)
+    set(ZSTD_BUILD_STATIC   ON)
     set(SPECTRA_BUILD_TESTS OFF)
     set(BUILD_TESTING       OFF)
     set(BOOST_IOSTREAMS_ENABLE_ZLIB ON)
-    if(zlib_POPULATED AND TARGET ZLIB::ZLIB)
-        set(ZLIB_ROOT        "${zlib_BINARY_DIR}"                    CACHE PATH   "" FORCE)
-        set(ZLIB_LIBRARY     ZLIB::ZLIB                              CACHE STRING "" FORCE)
-        set(ZLIB_INCLUDE_DIRS "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}" CACHE PATH   "" FORCE)
-    endif()
-
     if(Boost_DIR)
         FetchContent_MakeAvailable(zstd)
     else()
@@ -379,36 +399,6 @@ if(Boost_DIR)
         CONFIG
         PATHS "${Boost_DIR}"
         NO_DEFAULT_PATH)
-    find_package(ZLIB REQUIRED)
-endif()
-
-# Ensure a consistent ZLIB::ZLIB target exists for downstream linking.
-# zlib is always built from source by FetchContent; alias whichever static
-# target its CMakeLists creates ('zlibstatic' on all platforms, or 'zlib' on UNIX).
-if(zlib_POPULATED)
-    set(GCTA_ZLIB_INCLUDE_DIRS "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
-    if(NOT TARGET ZLIB::ZLIB)
-        # zlib's CMakeLists creates 'zlib' (shared) and 'zlibstatic' on all platforms,
-        # and 'zlib' (static, same name) on UNIX. Alias whichever is available.
-        if(TARGET zlibstatic)
-            add_library(ZLIB::ZLIB ALIAS zlibstatic)
-        elseif(TARGET zlib)
-            add_library(ZLIB::ZLIB ALIAS zlib)
-        endif()
-    endif()
-else()
-    # System zlib — find_package already created ZLIB::ZLIB
-    set(GCTA_ZLIB_INCLUDE_DIRS "${ZLIB_INCLUDE_DIRS}")
-endif()
-
-# Extra hints so Boost's internal find_package(ZLIB) also picks up the fetched zlib.
-# Using the target directly avoids the configure-time / build-time ordering problem
-# (libz.a does not exist yet when CMake configures Boost, but the target does).
-if(zlib_POPULATED AND TARGET ZLIB::ZLIB)
-    set(ZLIB_ROOT         "${zlib_BINARY_DIR}"                     CACHE PATH   "" FORCE)
-    set(ZLIB_LIBRARY      ZLIB::ZLIB                               CACHE STRING "" FORCE)
-    set(ZLIB_INCLUDE_DIRS "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}"  CACHE PATH   "" FORCE)
-    set(ZLIB_USE_STATIC_LIBS ON                                    CACHE BOOL   "" FORCE)
 endif()
 
 # Resolve zstd link target.
@@ -428,8 +418,7 @@ elseif(TARGET zstd::libzstd_static)
     set(GCTA_ZSTD_LIBS zstd::libzstd_static)
 else()
     message(FATAL_ERROR
-        "zstd is not available: FetchContent did not create a libzstd target "
-        "and no system zstd:: targets were found.\n"
+        "zstd target not found — FetchContent may have failed. "
         "Try: module unload zstd && rm -rf build && cmake -B build ...")
 endif()
 
@@ -440,93 +429,52 @@ endif()
 
 find_package(Threads REQUIRED)
 
-# Find OpenMP
+# find_package(OpenMP) cannot locate libomp on macOS or steer away from libgomp
+# on AOCC, so we pre-populate its cache variables before the call.
 if(APPLE)
-    # Derive OpenMP from the selected compiler prefix when possible.
-    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-        get_filename_component(_omp_bin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
-        get_filename_component(_omp_prefix "${_omp_bin_dir}" DIRECTORY)
-        find_path(OpenMP_CXX_INCLUDE_DIR
-            NAMES omp.h
-            HINTS "${_omp_prefix}/include"
-            NO_DEFAULT_PATH)
-        find_library(OpenMP_omp_LIBRARY
-            NAMES omp libomp
-            HINTS "${_omp_prefix}/lib"
-            NO_DEFAULT_PATH)
-    endif()
-
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        if(NOT OpenMP_CXX_LIB_NAMES)
-            set(OpenMP_CXX_LIB_NAMES "gomp")
-        endif()
-        if(NOT OpenMP_CXX_FLAGS)
-            set(OpenMP_CXX_FLAGS "-fopenmp")
-        endif()
+    # AppleClang needs -Xpreprocessor; all other Clang variants use plain -fopenmp.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        set(OpenMP_CXX_FLAGS    "-Xpreprocessor -fopenmp" CACHE STRING "" FORCE)
     else()
-        if(NOT OpenMP_CXX_LIB_NAMES)
-            set(OpenMP_CXX_LIB_NAMES "omp")
-        endif()
-        if(NOT OpenMP_CXX_FLAGS)
-            if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-                set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp")
-            else()
-                set(OpenMP_CXX_FLAGS "-fopenmp")
-            endif()
-        endif()
+        set(OpenMP_CXX_FLAGS    "-fopenmp"                CACHE STRING "" FORCE)
     endif()
+    set(OpenMP_CXX_LIB_NAMES "omp" CACHE STRING "" FORCE)
 
-    if(NOT OpenMP_CXX_INCLUDE_DIR)
-        find_path(OpenMP_CXX_INCLUDE_DIR NAMES omp.h)
+    # Probe compiler prefix first (Homebrew Clang ships its own libomp),
+    # then fall back to a standalone Homebrew libomp install.
+    cmake_path(GET CMAKE_CXX_COMPILER PARENT_PATH _omp_bin_dir)
+    cmake_path(GET _omp_bin_dir       PARENT_PATH _omp_prefix)
+    find_path(OpenMP_CXX_INCLUDE_DIR NAMES omp.h
+        HINTS "${_omp_prefix}/include"
+              "/opt/homebrew/opt/libomp/include"
+              "/usr/local/opt/libomp/include")
+    find_library(OpenMP_omp_LIBRARY NAMES omp libomp
+        HINTS "${_omp_prefix}/lib"
+              "/opt/homebrew/opt/libomp/lib"
+              "/usr/local/opt/libomp/lib")
+
+    if(NOT OpenMP_omp_LIBRARY OR NOT OpenMP_CXX_INCLUDE_DIR)
+        message(FATAL_ERROR "OpenMP not found on macOS. Install with: brew install libomp")
     endif()
-    if(NOT OpenMP_omp_LIBRARY)
-        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-            find_library(OpenMP_omp_LIBRARY NAMES gomp)
-        else()
-            find_library(OpenMP_omp_LIBRARY NAMES omp libomp)
-        endif()
-    endif()
+    cmake_path(GET OpenMP_omp_LIBRARY PARENT_PATH _omp_lib_dir)
+    list(APPEND CMAKE_BUILD_RPATH   "${_omp_lib_dir}")
+    list(APPEND CMAKE_INSTALL_RPATH "${_omp_lib_dir}")
 endif()
 
-if(WIN32)
-    if(NOT OpenMP_CXX_FLAGS)
-        set(OpenMP_CXX_FLAGS "-fopenmp")
-    endif()
-    if(NOT OpenMP_CXX_LIB_NAMES)
-        set(OpenMP_CXX_LIB_NAMES "omp")
-    endif()
-    if(DEFINED LLVM_ROOT)
-        if(NOT OpenMP_omp_LIBRARY)
-            set(OpenMP_omp_LIBRARY "${LLVM_ROOT}/lib/libomp.lib")
-        endif()
-        if(NOT OpenMP_CXX_INCLUDE_DIR)
-            set(OpenMP_CXX_INCLUDE_DIR "${LLVM_ROOT}/include")
-        endif()
-    endif()
-endif()
-
-# AOCC ships its own libomp — steer CMake to it before it finds a system libgomp.
-# Without this, find_package(OpenMP) may pick up GCC's libgomp instead, which
-# causes runtime crashes when the binary was compiled with AOCC.
 if(GCTA_COMPILER_IS_AOCC)
-    set(OpenMP_CXX_LIB_NAMES "omp")
-    # Look for libomp.so under the AOCC root; AOCC 4.x puts it in lib/
-    find_library(_aocc_omp_lib
-        NAMES omp
-        HINTS "${GCTA_AOCC_ROOT}/lib"
-        NO_DEFAULT_PATH)
-    if(_aocc_omp_lib)
-        set(OpenMP_omp_LIBRARY "${_aocc_omp_lib}")
-        message(STATUS "AOCC OpenMP library: ${_aocc_omp_lib}")
-        # Ensure the AOCC lib dir is in the rpath so the binary finds libomp at runtime
-        get_filename_component(_aocc_omp_dir "${_aocc_omp_lib}" DIRECTORY)
+    # Pre-steer CMake to AOCC's libomp so it doesn't fall back to system libgomp.
+    set(OpenMP_CXX_LIB_NAMES "omp" CACHE STRING "" FORCE)
+    find_library(OpenMP_omp_LIBRARY NAMES omp
+        HINTS "${GCTA_AOCC_ROOT}/lib" NO_DEFAULT_PATH)
+    if(OpenMP_omp_LIBRARY)
+        message(STATUS "AOCC OpenMP library: ${OpenMP_omp_LIBRARY}")
+        cmake_path(GET OpenMP_omp_LIBRARY PARENT_PATH _aocc_omp_dir)
         list(APPEND CMAKE_BUILD_RPATH   "${_aocc_omp_dir}")
         list(APPEND CMAKE_INSTALL_RPATH "${_aocc_omp_dir}")
     else()
         message(WARNING
-            "AOCC detected but libomp.so not found under ${GCTA_AOCC_ROOT}/lib.\n"
-            "OpenMP detection may fall back to the system libgomp, which can cause "
-            "runtime crashes. Set OpenMP_omp_LIBRARY manually if needed.")
+            "AOCC: libomp.so not found under ${GCTA_AOCC_ROOT}/lib — "
+            "may fall back to system libgomp, causing runtime crashes.")
     endif()
 endif()
 
@@ -538,11 +486,9 @@ set(GCTA_BLAS_DEFINES "")
 
 if(NOT GCTA_BLAS_BACKEND)
     message(FATAL_ERROR
-        "GCTA_BLAS_BACKEND is required. Set one of: OpenBLAS, MKL, Accelerate, AOCL.\n"
-        "Examples:\n"
-        "  macOS (Apple Silicon): -DGCTA_BLAS_BACKEND=Accelerate\n"
-        "  Linux OpenBLAS:        -DGCTA_BLAS_BACKEND=OpenBLAS -DGCTA_BLAS_LIBRARY=<...> -DGCTA_BLAS_INCLUDE_DIR=<...> [-DGCTA_LAPACKE_LIBRARY=<...>]\n"
-        "  Linux MKL:             -DGCTA_BLAS_BACKEND=MKL -DGCTA_BLAS_LIBRARY=<...> -DGCTA_BLAS_INCLUDE_DIR=<...>")
+        "GCTA_BLAS_BACKEND is required. Choose: OpenBLAS, MKL, Accelerate, or AOCL.\n"
+        "Linux:  -DGCTA_BLAS_BACKEND=OpenBLAS -DGCTA_BLAS_LIBRARY=<...> -DGCTA_BLAS_INCLUDE_DIR=<...>\n"
+        "macOS:  -DGCTA_BLAS_BACKEND=Accelerate")
 endif()
 if(GCTA_BLAS_BACKEND STREQUAL "Auto")
     message(FATAL_ERROR "GCTA_BLAS_BACKEND=Auto is no longer supported; choose OpenBLAS, MKL, Accelerate, or AOCL explicitly.")
@@ -550,11 +496,6 @@ endif()
 set(_GCTA_BLAS "${GCTA_BLAS_BACKEND}")
 
 # Validate platform constraints
-if(APPLE AND NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-    message(WARNING
-        "Non-arm64 macOS is not officially supported and may fail to build or run.\n"
-        "Continuing in best-effort mode.")
-endif()
 if(APPLE AND _GCTA_BLAS STREQUAL "MKL")
     message(FATAL_ERROR "MKL is not supported on macOS. Use Accelerate or OpenBLAS.")
 endif()
@@ -571,24 +512,21 @@ if(_GCTA_BLAS STREQUAL "Accelerate")
     find_package(BLAS   REQUIRED)
     find_package(LAPACK REQUIRED)
 
+    # Default to 13.3 (minimum for ACCELERATE_NEW_LAPACK) if not already set.
+    if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS deployment target")
+    endif()
+
     if(NOT CMAKE_OSX_SYSROOT)
         execute_process(
             COMMAND xcrun --sdk macosx --show-sdk-path
             OUTPUT_VARIABLE CMAKE_OSX_SYSROOT
             OUTPUT_STRIP_TRAILING_WHITESPACE)
     endif()
-    find_path(GCTA_ACCELERATE_INCLUDE_DIR
-        NAMES Accelerate.h cblas.h
-        HINTS "${CMAKE_OSX_SYSROOT}/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework/Headers"
-              "${CMAKE_OSX_SYSROOT}/System/Library/Frameworks/vecLib.framework/Headers"
-        NO_DEFAULT_PATH
-        DOC "vecLib / Accelerate headers directory")
-    if(NOT GCTA_ACCELERATE_INCLUDE_DIR)
-        message(FATAL_ERROR "Accelerate/vecLib headers not found inside SDK: ${CMAKE_OSX_SYSROOT}")
-    endif()
-    message(STATUS "Accelerate include dir: ${GCTA_ACCELERATE_INCLUDE_DIR}")
+    message(STATUS "Accelerate SDK: ${CMAKE_OSX_SYSROOT}")
 
-    list(APPEND GCTA_BLAS_INCLUDE_DIRS "${GCTA_ACCELERATE_INCLUDE_DIR}")
+    # Framework headers (e.g. <vecLib/cblas_new.h>) are resolved via -F.
+    list(APPEND GCTA_BLAS_INCLUDE_DIRS "-F${CMAKE_OSX_SYSROOT}/System/Library/Frameworks")
     list(APPEND GCTA_BLAS_LIBS         ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
     list(APPEND GCTA_BLAS_DEFINES      GCTA_USE_ACCELERATE ACCELERATE_NEW_LAPACK EIGEN_USE_BLAS)
     set(GCTA_BLAS_PROVIDER "Accelerate" CACHE INTERNAL "")
@@ -602,24 +540,13 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL" OR _GCTA_BLAS
     # For AOCL, use the gcc/ library variant with GCC and the clang/ variant with AOCC.
     if(NOT GCTA_BLAS_LIBRARY)
         message(FATAL_ERROR
-            "GCTA_BLAS_LIBRARY must be set for the ${_GCTA_BLAS} backend.\n"
-            "Examples:\n"
-            "  OpenBLAS: -DGCTA_BLAS_LIBRARY=/usr/lib/x86_64-linux-gnu/libopenblas.so\n"
-            "            -DGCTA_LAPACKE_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapacke.so\n"
-            "  MKL:      -DGCTA_BLAS_LIBRARY=/opt/intel/oneapi/mkl/latest/lib/libmkl_rt.so\n"
-            "  AOCL (GCC):  -DGCTA_BLAS_LIBRARY=/opt/AMD/aocl/aocl-linux-gcc-5.0.0/gcc/lib/libblis.so\n"
-            "               -DGCTA_LAPACKE_LIBRARY=/opt/AMD/aocl/aocl-linux-gcc-5.0.0/gcc/lib/libflame.so\n"
-            "  AOCL (AOCC): -DGCTA_BLAS_LIBRARY=/opt/AMD/aocl/aocl-linux-clang-5.0.0/clang/lib/libblis.so\n"
-            "               -DGCTA_LAPACKE_LIBRARY=/opt/AMD/aocl/aocl-linux-clang-5.0.0/clang/lib/libflame.so")
+            "GCTA_BLAS_LIBRARY must be set for the ${_GCTA_BLAS} backend "
+            "(path to the primary .so/.a, e.g. libopenblas.so, libmkl_rt.so, libblis-mt.so).")
     endif()
     if(NOT GCTA_BLAS_INCLUDE_DIR)
         message(FATAL_ERROR
-            "GCTA_BLAS_INCLUDE_DIR must be set for the ${_GCTA_BLAS} backend.\n"
-            "Examples:\n"
-            "  OpenBLAS:    -DGCTA_BLAS_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/openblas\n"
-            "  MKL:         -DGCTA_BLAS_INCLUDE_DIR=/opt/intel/oneapi/mkl/latest/include\n"
-            "  AOCL (GCC):  -DGCTA_BLAS_INCLUDE_DIR=/opt/AMD/aocl/aocl-linux-gcc-5.0.0/gcc/include\n"
-            "  AOCL (AOCC): -DGCTA_BLAS_INCLUDE_DIR=/opt/AMD/aocl/aocl-linux-clang-5.0.0/clang/include")
+            "GCTA_BLAS_INCLUDE_DIR must be set for the ${_GCTA_BLAS} backend "
+            "(directory containing cblas.h / mkl.h / blis.h).")
     endif()
     if(NOT EXISTS "${GCTA_BLAS_LIBRARY}")
         message(FATAL_ERROR "GCTA_BLAS_LIBRARY does not exist: ${GCTA_BLAS_LIBRARY}")
@@ -638,14 +565,16 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL" OR _GCTA_BLAS
         get_filename_component(_blas_lib_dir "${GCTA_BLAS_LIBRARY}" DIRECTORY)
         list(APPEND CMAKE_BUILD_RPATH   "${_blas_lib_dir}")
         list(APPEND CMAKE_INSTALL_RPATH "${_blas_lib_dir}")
-        # --rpath-link lets the linker resolve DT_NEEDED entries of your .so deps
-        # without those libs needing to be explicit link targets themselves
-        add_link_options("LINKER:-rpath-link,${_blas_lib_dir}")
+        if(NOT GCTA_COMPILER_IS_AOCC)
+            add_link_options("LINKER:-rpath-link,${_blas_lib_dir}")
+        endif()
         if(GCTA_LAPACKE_LIBRARY)
             get_filename_component(_lapack_lib_dir "${GCTA_LAPACKE_LIBRARY}" DIRECTORY)
             list(APPEND CMAKE_BUILD_RPATH   "${_lapack_lib_dir}")
             list(APPEND CMAKE_INSTALL_RPATH "${_lapack_lib_dir}")
-            add_link_options("LINKER:-rpath-link,${_lapack_lib_dir}")
+            if(NOT GCTA_COMPILER_IS_AOCC)
+                add_link_options("LINKER:-rpath-link,${_lapack_lib_dir}")
+            endif()
         endif()
     endif()
 
@@ -674,22 +603,14 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL" OR _GCTA_BLAS
         get_filename_component(_aocl_lib_dir "${GCTA_BLAS_LIBRARY}" DIRECTORY)
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND EXISTS "${_aocl_lib_dir}/libomp.so")
             message(FATAL_ERROR
-                "AOCL compiler/variant mismatch: you are using GCC but the AOCL "
-                "library at\n  ${_aocl_lib_dir}\nwas built for AOCC (it contains "
-                "libomp.so, LLVM OpenMP).\n"
-                "Use the GCC-built AOCL variant instead, e.g.:\n"
-                "  -DGCTA_BLAS_LIBRARY=<aocl-root>/gcc/MT/lib/libblis-mt.so\n"
-                "  -DGCTA_LAPACKE_LIBRARY=<aocl-root>/gcc/MT/lib/libflame.so\n"
-                "  -DGCTA_BLAS_INCLUDE_DIR=<aocl-root>/gcc/MT/include")
+                "AOCL variant mismatch: GCC compiler but AOCC-built AOCL (libomp.so present) at ${_aocl_lib_dir}. "
+                "Use the gcc/ AOCL variant.")
         endif()
         if(GCTA_COMPILER_IS_AOCC AND NOT EXISTS "${_aocl_lib_dir}/libomp.so"
                                  AND EXISTS "${_aocl_lib_dir}/libgomp.so")
             message(WARNING
-                "AOCL compiler/variant mismatch: you are using AOCC but the AOCL "
-                "library at\n  ${_aocl_lib_dir}\nappears to be the GCC-built variant "
-                "(no libomp.so found).\nConsider using the AOCC-built variant for "
-                "best performance:\n"
-                "  -DGCTA_BLAS_LIBRARY=<aocl-root>/aocc/MT/lib/libblis-mt.so")
+                "AOCL variant mismatch: AOCC compiler but GCC-built AOCL (no libomp.so) at ${_aocl_lib_dir}. "
+                "Consider using the aocc/ variant for best performance.")
         endif()
 
         # AOCL transitive dependencies: libflame needs libaoclutils and libblis-mt.
@@ -698,11 +619,15 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL" OR _GCTA_BLAS
         get_filename_component(_aocl_lib_dir "${GCTA_BLAS_LIBRARY}" DIRECTORY)
         foreach(_aocl_dep IN ITEMS libaoclutils.so libblis-mt.so)
             set(_aocl_dep_path "${_aocl_lib_dir}/${_aocl_dep}")
+            set(_aocl_dep_path64 "${_aocl_lib_dir}/../lib64/${_aocl_dep}")
             if("${_aocl_dep_path}" IN_LIST GCTA_BLAS_LIBS)
                 message(STATUS "AOCL: skipping ${_aocl_dep} (already linked as primary library)")
             elseif(EXISTS "${_aocl_dep_path}")
                 list(APPEND GCTA_BLAS_LIBS "${_aocl_dep_path}")
                 message(STATUS "AOCL: found transitive dep ${_aocl_dep}")
+            elseif(EXISTS "${_aocl_dep_path64}")
+                list(APPEND GCTA_BLAS_LIBS "${_aocl_dep_path64}")
+                message(STATUS "AOCL: found transitive dep ${_aocl_dep} (lib64)")
             else()
                 message(WARNING "AOCL: transitive dep not found: ${_aocl_dep_path}")
             endif()
@@ -734,59 +659,73 @@ if(CMAKE_VERBOSE_MAKEFILE OR GCTA_VERBOSE_BLAS)
     message(STATUS "---- end BLAS detection details ----")
 endif()
 
-set(COMMON_INCLUDES ${CMAKE_SOURCE_DIR}/include)
-set(MAIN_SOURCE "${CMAKE_SOURCE_DIR}/src/main.cpp")
+add_executable(gcta64)
 
-set(SRCS
-    ${CMAKE_SOURCE_DIR}/src/Covar.cpp
-    ${CMAKE_SOURCE_DIR}/src/FastFAM.cpp
-    ${CMAKE_SOURCE_DIR}/src/MLMA_stream.cpp
-    ${CMAKE_SOURCE_DIR}/src/MLMA_loco.cpp
-    ${CMAKE_SOURCE_DIR}/src/RemlEngine.cpp
-    ${CMAKE_SOURCE_DIR}/src/GRM.cpp
-    ${CMAKE_SOURCE_DIR}/src/Geno.cpp
-    ${CMAKE_SOURCE_DIR}/src/BedBackend.cpp
-    ${CMAKE_SOURCE_DIR}/src/BgenBackend.cpp
-    ${CMAKE_SOURCE_DIR}/src/PgenBackend.cpp
-    ${CMAKE_SOURCE_DIR}/src/LD.cpp
-    ${CMAKE_SOURCE_DIR}/src/Logger.cpp
-    ${CMAKE_SOURCE_DIR}/src/Marker.cpp
-    ${CMAKE_SOURCE_DIR}/src/OptionIO.cpp
-    ${CMAKE_SOURCE_DIR}/src/Pheno.cpp
-    ${CMAKE_SOURCE_DIR}/src/StatLib.cpp
-    ${CMAKE_SOURCE_DIR}/src/ThreadPool.cpp
-    ${CMAKE_SOURCE_DIR}/src/mem.cpp
-    ${CMAKE_SOURCE_DIR}/src/tables.cpp
-    ${CMAKE_SOURCE_DIR}/src/utils.cpp)
-
-add_executable(gcta64 ${MAIN_SOURCE})
-
-target_sources(gcta64 PRIVATE ${SRCS})
+target_sources(gcta64 PRIVATE
+            # entry point
+        src/main.cpp
+        # src/ module
+        src/Covar.cpp
+        src/FastFAM.cpp
+        src/MLMA_stream.cpp
+        src/MLMA_loco.cpp
+        src/RemlEngine.cpp
+        src/GRM.cpp
+        src/Geno.cpp
+        src/BedBackend.cpp
+        src/BgenBackend.cpp
+        src/PgenBackend.cpp
+        src/LD.cpp
+        src/Logger.cpp
+        src/Marker.cpp
+        src/OptionIO.cpp
+        src/Pheno.cpp
+        src/StatLib.cpp
+        src/ThreadPool.cpp
+        src/mem.cpp
+        src/tables.cpp
+        src/utils.cpp
+        # main/ legacy module
+        main/CommFunc.cpp
+        main/StatFunc.cpp
+        main/StrFunc.cpp
+        main/bivar_reml.cpp
+        main/data.cpp
+        main/edata.cpp
+        main/ejma.cpp
+        main/est_hsq.cpp
+        main/gbat.cpp
+        main/grm.cpp
+        main/gsmr.cpp
+        main/gwas_simu.cpp
+        main/joint_meta.cpp
+        main/ld.cpp
+        main/LinAlg.cpp
+        main/mbat.cpp
+        main/mlm_assoc.cpp
+        main/mtcojo.cpp
+        main/option.cpp
+        main/pc_adjust.cpp
+        main/popu_genet.cpp
+        main/raw_geno.cpp
+        main/reml_within_family.cpp
+        main/sbat.cpp)
 
 target_include_directories(gcta64 PRIVATE
     ${CMAKE_SOURCE_DIR}
-    ${COMMON_INCLUDES}
+    include
     ${GCTA_BLAS_INCLUDE_DIRS}
-    "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/include"
-    "${CMAKE_SOURCE_DIR}/third_party/plink-ng/2.0/simde")
+    third_party/plink-ng/2.0/include
+    third_party/plink-ng/2.0/simde
+    # module-mode FindBoost.cmake fallback (empty when using config-mode Boost targets)
+    ${Boost_INCLUDE_DIRS})
 
-set(_GCTA_BOOST_LINKS "")
-if(TARGET Boost::iostreams)
-    list(APPEND _GCTA_BOOST_LINKS Boost::iostreams)
-endif()
-if(TARGET Boost::headers)
-    list(APPEND _GCTA_BOOST_LINKS Boost::headers)
-endif()
-# Fallback for module-mode find_package (old FindBoost.cmake)
-if(DEFINED Boost_LIBRARIES AND NOT "${Boost_LIBRARIES}" STREQUAL "")
-    list(APPEND _GCTA_BOOST_LINKS ${Boost_LIBRARIES})
-endif()
-if(DEFINED Boost_INCLUDE_DIRS)
-    target_include_directories(gcta64 PRIVATE ${Boost_INCLUDE_DIRS})
-endif()
-
+# Boost: prefer modern config-mode targets; fall back to module-mode Boost_LIBRARIES.
+# $<TARGET_EXISTS:...> (3.27) avoids the imperative if(TARGET)/list(APPEND) pattern.
 target_link_libraries(gcta64 PRIVATE
-    ${_GCTA_BOOST_LINKS}
+    $<$<TARGET_EXISTS:Boost::iostreams>:Boost::iostreams>
+    $<$<TARGET_EXISTS:Boost::headers>:Boost::headers>
+    $<$<BOOL:${Boost_LIBRARIES}>:${Boost_LIBRARIES}>
     $<$<BOOL:${Boost_DIR}>:ZLIB::ZLIB>   # system Boost::iostreams needs system zlib
     Eigen3::Eigen
     Spectra
@@ -798,36 +737,8 @@ target_precompile_headers(gcta64 PRIVATE
     <boost/algorithm/string.hpp>
     <boost/math/distributions.hpp>)
 
-target_sources(gcta64 PRIVATE
-    main/CommFunc.cpp
-    main/StatFunc.cpp
-    main/StrFunc.cpp
-    main/bivar_reml.cpp
-    main/data.cpp
-    main/edata.cpp
-    main/ejma.cpp
-    main/est_hsq.cpp
-    main/gbat.cpp
-    main/grm.cpp
-    main/gsmr.cpp
-    main/gwas_simu.cpp
-    main/joint_meta.cpp
-    main/ld.cpp
-    main/LinAlg.cpp
-    main/mbat.cpp
-    main/mlm_assoc.cpp
-    main/mtcojo.cpp
-    main/option.cpp
-    main/pc_adjust.cpp
-    main/popu_genet.cpp
-    main/raw_geno.cpp
-    main/reml_within_family.cpp
-    main/sbat.cpp)
-
-set(GCTA_TARGETS gcta64)
-
-# Default OFF; enabled below only after check_ipo_supported passes in Release builds.
-# Leaving this ON would incorrectly set INTERPROCEDURAL_OPTIMIZATION on Debug targets.
+# ── gcta64 target properties ───────────────────────────────────────────────
+# IPO check must run before set_target_properties.
 set(GCTA_IPO_ENABLED OFF)
 if(GCTA_ENABLE_IPO AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
     include(CheckIPOSupported)
@@ -839,90 +750,82 @@ if(GCTA_ENABLE_IPO AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
     endif()
 endif()
 
-foreach(target IN LISTS GCTA_TARGETS)
-    set_target_properties(${target} PROPERTIES
-        UNITY_BUILD ${GCTA_UNITY_BUILD}
-        INTERPROCEDURAL_OPTIMIZATION ${GCTA_IPO_ENABLED})
-    target_include_directories(${target} PRIVATE
-        ${GCTA_ZSTD_INCLUDE_DIRS}
-        ${GCTA_ZLIB_INCLUDE_DIRS}
-        ${GCTA_BLAS_INCLUDE_DIRS})
-    target_compile_definitions(${target} PRIVATE
-        ${GCTA_BLAS_DEFINES}
-        GCTA_BLAS_BACKEND_STR="${GCTA_BLAS_PROVIDER}")
-    target_compile_options(${target} PRIVATE
-        $<$<BOOL:${APPLE}>:-Wno-nullability-completeness>
-        -pipe
-        # -march=native / -mcpu=native tune for the machine being compiled on.
-        # Always correct here since we build natively on each target machine.
-        $<$<CONFIG:Release>:$<IF:$<BOOL:${APPLE}>,-mcpu=native,-march=native>>
-        $<$<CONFIG:Release>:-O3>)
-    target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
-endforeach()
+set_target_properties(gcta64 PROPERTIES
+    UNITY_BUILD                   ${GCTA_UNITY_BUILD}
+    INTERPROCEDURAL_OPTIMIZATION  ${GCTA_IPO_ENABLED})
 
-# Explicit LTO flags per compiler (supplements INTERPROCEDURAL_OPTIMIZATION)
-if(GCTA_IPO_ENABLED AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
+target_include_directories(gcta64 PRIVATE
+    ${GCTA_ZSTD_INCLUDE_DIRS}
+    ${GCTA_BLAS_INCLUDE_DIRS})
+
+target_compile_definitions(gcta64 PRIVATE
+    ${GCTA_BLAS_DEFINES}
+    GCTA_BLAS_BACKEND_STR="${GCTA_BLAS_PROVIDER}")
+
+# LTO flavour: AOCC requires full LTO; upstream Clang prefers ThinLTO; GCC uses auto.
+# Folded into the same target_compile/link_options calls so all flags are co-located.
+set(_lto_compile_flag "")
+set(_lto_link_flag    "")
+if(GCTA_IPO_ENABLED)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        # AOCC only supports full LTO; upstream Clang/clang++ supports ThinLTO
-        # which gives most of the benefit at a fraction of the link time.
         if(GCTA_COMPILER_IS_AOCC)
-            target_compile_options(gcta64 PRIVATE -flto=full)
-            target_link_options(gcta64    PRIVATE -flto=full)
+            set(_lto_compile_flag -flto=full)
+            set(_lto_link_flag    -flto=full)
         else()
-            target_compile_options(gcta64 PRIVATE -flto=thin)
-            target_link_options(gcta64    PRIVATE -flto=thin)
+            set(_lto_compile_flag -flto=thin)
+            set(_lto_link_flag    -flto=thin)
         endif()
     elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        # -flto=auto uses the same job count as make, no need to query core count
-        target_compile_options(gcta64 PRIVATE -flto=auto)
-        target_link_options(gcta64 PRIVATE -flto=auto)
+        set(_lto_compile_flag -flto=auto)
+        set(_lto_link_flag    -flto=auto)
     endif()
 endif()
 
-# Force DT_RPATH instead of DT_RUNPATH for all AOCC builds on Linux.
-# AOCC/lld defaults to --enable-new-dtags which writes DT_RUNPATH.  Unlike
-# DT_RPATH, DT_RUNPATH is searched *after* LD_LIBRARY_PATH — so if the HPC
-# module system has prepended system lib dirs to LD_LIBRARY_PATH (which is
-# very common), system libraries win even though the RPATH is correct.
-# This applies to all AOCC-embedded RPATH entries: libomp, libstdc++, BLAS, etc.
-# --disable-new-dtags reverts to DT_RPATH which is searched *before* LD_LIBRARY_PATH.
-if(GCTA_COMPILER_IS_AOCC AND LINUX)
+target_compile_options(gcta64 PRIVATE
+    $<$<BOOL:${APPLE}>:-Wno-nullability-completeness>
+    -pipe
+    $<$<CONFIG:Release>:$<IF:$<BOOL:${APPLE}>,-mcpu=native,-march=native>>
+    $<$<CONFIG:Release>:-O3>
+    $<$<AND:$<CONFIG:Release>,$<BOOL:${_lto_compile_flag}>>:${_lto_compile_flag}>)
+
+target_link_options(gcta64 PRIVATE
+    $<$<AND:$<CONFIG:Release>,$<BOOL:${_lto_link_flag}>>:${_lto_link_flag}>)
+
+target_link_libraries(gcta64 PRIVATE OpenMP::OpenMP_CXX)
+
+# Both GCC (GNU ld) and Clang (lld or GNU ld) default to DT_RUNPATH (--enable-new-dtags).
+# DT_RUNPATH is searched *after* LD_LIBRARY_PATH, so HPC module paths prepended
+# to LD_LIBRARY_PATH win over the baked-in RPATH, breaking libstdc++/BLAS pinning.
+# --disable-new-dtags writes DT_RPATH instead, searched *before* LD_LIBRARY_PATH.
+# Applied to all Linux builds regardless of Clang variant (AOCC or upstream).
+if(LINUX)
     target_link_options(gcta64 PRIVATE "LINKER:--disable-new-dtags")
     message(STATUS "gcta64: using DT_RPATH (--disable-new-dtags) for HPC library pinning")
 endif()
 
-# Static C++ runtime: embed libstdc++ and libgcc into the binary so it does not
-# depend on the toolchain's shared .so files at runtime.  Useful on HPC clusters
-# where the GCC module used at build time may not be available on compute nodes.
-if(GCTA_STATIC_STDCXX AND LINUX)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_link_options(gcta64 PRIVATE -static-libstdc++ -static-libgcc)
-        message(STATUS "gcta64: linking libstdc++ and libgcc statically")
-    else()
-        message(WARNING "GCTA_STATIC_STDCXX=ON is only supported with GCC or Clang/AOCC on Linux")
-    endif()
-endif()
 
-add_library(Pgenlib
-    third_party/Pgenlib/PgenReader.cpp
-    third_party/plink-ng/2.0/include/pgenlib_ffi_support.cc
-    third_party/plink-ng/2.0/include/pgenlib_misc.cc
-    third_party/plink-ng/2.0/include/pgenlib_read.cc
-    third_party/plink-ng/2.0/include/pgenlib_write.cc
-    third_party/plink-ng/2.0/include/plink2_base.cc
-    third_party/plink-ng/2.0/include/plink2_simd.cc
-    third_party/plink-ng/2.0/include/plink2_bgzf.cc
-    third_party/plink-ng/2.0/include/plink2_bitmap.cc
-    third_party/plink-ng/2.0/include/plink2_bits.cc
-    third_party/plink-ng/2.0/include/plink2_fmath.cc
-    third_party/plink-ng/2.0/include/plink2_htable.cc
-    third_party/plink-ng/2.0/include/plink2_memory.cc
-    third_party/plink-ng/2.0/include/plink2_stats.cc
-    third_party/plink-ng/2.0/include/plink2_string.cc
-    third_party/plink-ng/2.0/include/plink2_text.cc
-    third_party/plink-ng/2.0/include/plink2_thread.cc
-    third_party/plink-ng/2.0/include/plink2_zstfile.cc
-    third_party/plink-ng/2.0/include/pvar_ffi_support.cc)
+add_library(Pgenlib STATIC)
+
+target_sources(Pgenlib PRIVATE
+            third_party/Pgenlib/PgenReader.cpp
+        third_party/plink-ng/2.0/include/pgenlib_ffi_support.cc
+        third_party/plink-ng/2.0/include/pgenlib_misc.cc
+        third_party/plink-ng/2.0/include/pgenlib_read.cc
+        third_party/plink-ng/2.0/include/pgenlib_write.cc
+        third_party/plink-ng/2.0/include/plink2_base.cc
+        third_party/plink-ng/2.0/include/plink2_simd.cc
+        third_party/plink-ng/2.0/include/plink2_bgzf.cc
+        third_party/plink-ng/2.0/include/plink2_bitmap.cc
+        third_party/plink-ng/2.0/include/plink2_bits.cc
+        third_party/plink-ng/2.0/include/plink2_fmath.cc
+        third_party/plink-ng/2.0/include/plink2_htable.cc
+        third_party/plink-ng/2.0/include/plink2_memory.cc
+        third_party/plink-ng/2.0/include/plink2_stats.cc
+        third_party/plink-ng/2.0/include/plink2_string.cc
+        third_party/plink-ng/2.0/include/plink2_text.cc
+        third_party/plink-ng/2.0/include/plink2_thread.cc
+        third_party/plink-ng/2.0/include/plink2_zstfile.cc
+        third_party/plink-ng/2.0/include/pvar_ffi_support.cc)
 # Unity builds must be disabled for Pgenlib: it is a separate static library
 # with its own include paths and must never be merged into a gcta64 unity TU.
 # Without this, CMake can concatenate PgenReader.cpp and PgenBackend.cpp into
@@ -935,7 +838,6 @@ if(NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_compile_options(Pgenlib PRIVATE -mavx2 -mfma -mbmi -mbmi2 -mlzcnt)
 endif()
 
-target_include_directories(Pgenlib PRIVATE ${GCTA_ZLIB_INCLUDE_DIRS})
 
 if(BGEN_SUPPORT)
     target_link_libraries(gcta64 PRIVATE sqlite3)
@@ -996,19 +898,6 @@ if(LINUX)
     install(FILES
         ${CMAKE_SOURCE_DIR}/resources/gcta64.svg
         DESTINATION share/icons/hicolor/scalable/apps)
-elseif(WIN32)
-    install(TARGETS gcta64 DESTINATION bin)
-
-    file(GLOB RUNTIME_DLLS "${CMAKE_BINARY_DIR}/*.dll")
-    install(FILES
-        ${RUNTIME_DLLS}
-        ${zlib_BINARY_DIR}/zlib.dll
-        # Intel MKL
-        ${MKL_ROOT}/bin/mkl_intel_thread.2.dll
-        ${MKL_ROOT}/bin/mkl_avx2.2.dll
-        ${MKL_ROOT}/bin/mkl_core.2.dll
-        ${MKL_ROOT}/../../compiler/latest/bin/libiomp5md.dll
-        DESTINATION bin)
 endif()
 
 # Build configuration summary
@@ -1029,11 +918,22 @@ message(STATUS "  Ranlib:            ${CMAKE_RANLIB}")
 message(STATUS "  NM:                ${CMAKE_NM}")
 if(GCTA_COMPILER_IS_AOCC)
     message(STATUS "  GCC toolchain:     ${GCTA_GCC_TOOLCHAIN} (--gcc-toolchain)")
+    message(STATUS "  libstdc++ shims:   __cpp_concepts=202002L, __cpp_lib_expected=202211L")
 endif()
 message(STATUS "  IPO/LTO:           ${GCTA_IPO_ENABLED}")
 message(STATUS "  Install prefix:    ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "  OpenMP:            ${OpenMP_CXX_VERSION}")
 message(STATUS "  BGEN support:      ${BGEN_SUPPORT}")
+if(LINUX)
+    message(STATUS "  RPATH type:        DT_RPATH (--disable-new-dtags, all Linux)")
+    message(STATUS "  Build RPATH:       ${CMAKE_BUILD_RPATH}")
+endif()
+if(GCTA_BLAS_PROVIDER STREQUAL "MKL")
+    message(STATUS "")
+    message(STATUS "  NOTE (MKL): set MKL_THREADING_LAYER at runtime:")
+    message(STATUS "    GCC:  export MKL_THREADING_LAYER=GNU")
+    message(STATUS "    AOCC: export MKL_THREADING_LAYER=IOMP5")
+endif()
 
 message(STATUS "==========================================")
 message(STATUS "")
