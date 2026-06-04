@@ -21,7 +21,15 @@
   #include <mkl.h>
   typedef int gcta_blas_int;
 #elif defined(GCTA_USE_OPENBLAS)
+  // OpenBLAS typedef-s bfloat16 as uint16_t; "using namespace Eigen" in gcta.h
+  // also brings Eigen::bfloat16 (a struct) into global scope, causing ambiguity.
+  // Rename bfloat16 within cblas.h's scope to openblas_bfloat16 to avoid the clash.
+  #pragma push_macro("bfloat16")
+  #define bfloat16 openblas_bfloat16
+  #define BFLOAT16  // prevent openblas_config.h from typedef-ing the original name
+  typedef unsigned short openblas_bfloat16;
   #include <cblas.h>
+  #pragma pop_macro("bfloat16")
   #include <lapacke.h>
   typedef lapack_int gcta_blas_int;
 

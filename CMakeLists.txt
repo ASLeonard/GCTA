@@ -658,8 +658,8 @@ add_library(Pgenlib
     third_party/plink-ng/2.0/include/plink2_bits.cc
     third_party/plink-ng/2.0/include/plink2_fmath.cc
     third_party/plink-ng/2.0/include/plink2_htable.cc
-    third_party/plink-ng/2.0/include/plink2_simd.cc
     third_party/plink-ng/2.0/include/plink2_memory.cc
+    third_party/plink-ng/2.0/include/plink2_simd.cc
     third_party/plink-ng/2.0/include/plink2_stats.cc
     third_party/plink-ng/2.0/include/plink2_string.cc
     third_party/plink-ng/2.0/include/plink2_text.cc

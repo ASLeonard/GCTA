@@ -361,12 +361,7 @@ bool gcta::comput_inverse_logdet_LDLT_mkl(eigenMatrix &Vi, double &logdet)
 
     // MKL's Cholesky decomposition
     int info = 0, int_n = (int) n;
-    char uplo = 'L';
-#if GCTA_CPU_x86
-    dpotrf(&uplo, &int_n, Vi_mkl, &int_n, &info);
-#else
-    dpotrf_(&uplo, &int_n, Vi_mkl, &int_n, &info);
-#endif
+    info = gcta_dpotrf(int_n, Vi_mkl, int_n);
     //LOGGER << "Finished decompose" << endl;
     //spotrf( &uplo, &n, Vi_mkl, &n, &info );
     if (info < 0){
@@ -383,11 +378,7 @@ bool gcta::comput_inverse_logdet_LDLT_mkl(eigenMatrix &Vi, double &logdet)
 
         //LOGGER << "start inverse" << endl;
         // Calcualte V inverse
-#if GCTA_CPU_x86
-        dpotri(&uplo, &int_n, Vi_mkl, &int_n, &info);
-#else
-        dpotri_(&uplo, &int_n, Vi_mkl, &int_n, &info);
-#endif
+        info = gcta_dpotri(int_n, Vi_mkl, int_n);
         //LOGGER << "Inverse finished" << endl;
         //spotri( &uplo, &n, Vi_mkl, &n, &info );
         if (info < 0){
@@ -425,19 +416,12 @@ bool gcta::comput_inverse_logdet_LU_mkl(eigenMatrix &Vi, double &logdet)
 
     int N = (int) n;
     int *IPIV = new int[n + 1];
-    int LWORK = N*N;
-    double *WORK = new double[n * n];
     int INFO;
-#if GCTA_CPU_x86
-    dgetrf(&N, &N, Vi_mkl, &N, IPIV, &INFO);
-#else
-    dgetrf_(&N, &N, Vi_mkl, &N, IPIV, &INFO);
-#endif
+    INFO = gcta_dgetrf(N, Vi_mkl, N, IPIV);
     if (INFO < 0) LOGGER.e(0, "LU decomposition failed. Invalid values found in the matrix.\n");
     else if (INFO > 0) {
         delete[] Vi_mkl;
         delete[] IPIV;
-        delete[] WORK;
         return false;
     } else {
         logdet = 0.0;
@@ -447,17 +431,12 @@ bool gcta::comput_inverse_logdet_LU_mkl(eigenMatrix &Vi, double &logdet)
         }
 
         // Calcualte V inverse
-#if GCTA_CPU_x86
-        dgetri(&N, Vi_mkl, &N, IPIV, WORK, &LWORK, &INFO);
-#else
-        dgetri_(&N, Vi_mkl, &N, IPIV, WORK, &LWORK, &INFO);
-#endif
+        INFO = gcta_dgetri(N, Vi_mkl, N, IPIV);
         if (INFO < 0){
             LOGGER.e(0, "invalid values found in the variance-covariance (V) matrix.\n");
         }else if (INFO > 0){
             delete[] Vi_mkl;
             delete[] IPIV;
-            delete[] WORK;
             return false;
         }else {
             #pragma omp parallel for
@@ -470,7 +449,6 @@ bool gcta::comput_inverse_logdet_LU_mkl(eigenMatrix &Vi, double &logdet)
     // free memory
     delete[] Vi_mkl;
     delete[] IPIV;
-    delete[] WORK;
 
     return true;
 }
@@ -487,20 +465,13 @@ bool gcta::comput_inverse_logdet_LU_mkl_array(int n, float *Vi, double &logdet) 
 
     int N = (int) n;
     int *IPIV = new int[n + 1];
-    int LWORK = N*N;
-    double *WORK = new double[n * n];
     int INFO;
-#if GCTA_CPU_x86
-    dgetrf(&N, &N, Vi_mkl, &N, IPIV, &INFO);
-#else
-    dgetrf_(&N, &N, Vi_mkl, &N, IPIV, &INFO);    
-#endif
+    INFO = gcta_dgetrf(N, Vi_mkl, N, IPIV);
     if (INFO < 0) LOGGER.e(0, "LU decomposition failed. Invalid values found in the matrix.\n");
     else if (INFO > 0) {
         // free memory
         delete[] Vi_mkl;
         delete[] IPIV;
-        delete[] WORK;
 
         return (false); //Vi.diagonal()=Vi.diagonal().array()+Vi.diagonal().mean()*1e-3;
     }else {
@@ -511,17 +482,12 @@ bool gcta::comput_inverse_logdet_LU_mkl_array(int n, float *Vi, double &logdet) 
         }
 
         // Calcualte V inverse
-#if GCTA_CPU_x86
-        dgetri(&N, Vi_mkl, &N, IPIV, WORK, &LWORK, &INFO);
-#else
-        dgetri_(&N, Vi_mkl, &N, IPIV, WORK, &LWORK, &INFO);
-#endif
+        INFO = gcta_dgetri(N, Vi_mkl, N, IPIV);
         if (INFO < 0) LOGGER.e(0, "invalid values found in the variance-covariance (V) matrix.\n");
         else if (INFO > 0) {
             // free memory
             delete[] Vi_mkl;
             delete[] IPIV;
-            delete[] WORK;
             return (false); // Vi.diagonal()=Vi.diagonal().array()+Vi.diagonal().mean()*1e-3;
         }else {
             #pragma omp parallel for
@@ -534,7 +500,6 @@ bool gcta::comput_inverse_logdet_LU_mkl_array(int n, float *Vi, double &logdet) 
     // free memory
     delete[] Vi_mkl;
     delete[] IPIV;
-    delete[] WORK;
 
     return true;
 }
