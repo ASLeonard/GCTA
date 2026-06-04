@@ -15,7 +15,7 @@ if(GCTA_GCC_TOOLCHAIN AND DEFINED CMAKE_CXX_COMPILER)
     endif()
 endif()
 
-project(GCTAg LANGUAGES C CXX)
+project(GCTA LANGUAGES C CXX)
 
 # Prevent CMake from finding stale configs in build-tree or user package registries.
 set(CMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY        TRUE)
@@ -243,7 +243,11 @@ FetchContent_Declare(
     URL https://github.com/boostorg/boost/releases/download/boost-1.91.0/boost-1.91.0-cmake.tar.xz
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     EXCLUDE_FROM_ALL)
-
+FetchContent_Declare(
+    sqlite
+    URL https://www.sqlite.org/2026/sqlite-amalgamation-3510200.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    EXCLUDE_FROM_ALL)
 set(ZLIB_BUILD_EXAMPLES OFF)
 FetchContent_MakeAvailable(zlib)
 
@@ -272,6 +276,9 @@ endblock()
 set(CMAKE_SKIP_INSTALL_RULES ON)
 FetchContent_MakeAvailable(eigen spectra)
 set(CMAKE_SKIP_INSTALL_RULES OFF)
+FetchContent_MakeAvailable(sqlite)
+
+message(STATUS "sqlite_SOURCE_DIR = ${sqlite_SOURCE_DIR}")
 
 if(Boost_DIR)
     message(STATUS "Using external Boost from ${Boost_DIR}")
@@ -321,7 +328,10 @@ if(NOT WIN32)
     find_package(GSL REQUIRED)
 endif()
 
-find_package(SQLite3 REQUIRED)
+add_library(sqlite3 STATIC ${sqlite_SOURCE_DIR}/sqlite3.c)
+target_include_directories(sqlite3 PUBLIC ${sqlite_SOURCE_DIR})
+get_target_property(_inc sqlite3 INTERFACE_INCLUDE_DIRECTORIES)
+message(STATUS "sqlite3 interface includes = ${_inc}")
 
 # Find OpenMP (Require CXX component)
 if(APPLE)
@@ -543,6 +553,10 @@ endforeach(lib_src)
 
 add_executable(gcta64 ${MAIN_SOURCE})
 
+if(_GCTA_BLAS STREQUAL "MKL")
+  target_compile_definitions(gcta64 PRIVATE GCTA_USE_MKL=1)
+endif()
+
 add_subdirectory(main)
 target_include_directories(mainV1 PUBLIC ${COMMON_INCLUDES})
 
@@ -626,6 +640,7 @@ foreach(target IN LISTS GCTA_TARGETS)
         $<$<BOOL:${Boost_DIR}>:ZLIB::ZLIB>
         Eigen3::Eigen
         Spectra
+        sqlite3
         ${GCTA_ZSTD_LIBS}
         ZLIB::ZLIB)
 endforeach()
@@ -638,12 +653,12 @@ add_library(Pgenlib
     third_party/plink-ng/2.0/include/pgenlib_read.cc
     third_party/plink-ng/2.0/include/pgenlib_write.cc
     third_party/plink-ng/2.0/include/plink2_base.cc
-    third_party/plink-ng/2.0/include/plink2_simd.cc
     third_party/plink-ng/2.0/include/plink2_bgzf.cc
     third_party/plink-ng/2.0/include/plink2_bitmap.cc
     third_party/plink-ng/2.0/include/plink2_bits.cc
     third_party/plink-ng/2.0/include/plink2_fmath.cc
     third_party/plink-ng/2.0/include/plink2_htable.cc
+    third_party/plink-ng/2.0/include/plink2_simd.cc
     third_party/plink-ng/2.0/include/plink2_memory.cc
     third_party/plink-ng/2.0/include/plink2_stats.cc
     third_party/plink-ng/2.0/include/plink2_string.cc
@@ -672,7 +687,7 @@ if(NOT WIN32)
     target_link_libraries(gcta64 PRIVATE GSL::gsl GSL::gslcblas)
 endif()
 
-target_link_libraries(gcta64 PRIVATE SQLite3::SQLite3)
+target_link_libraries(gcta64 PRIVATE sqlite3)
 
 if(LINUX)
     list(PREPEND CMAKE_INSTALL_RPATH "$ORIGIN/../lib")

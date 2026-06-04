@@ -16,7 +16,7 @@
    If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include "cpu_f77blas.h"
+#include "cpu.h"
 #include "GRM.h"
 #include "Logger.h"
 #include <iterator>

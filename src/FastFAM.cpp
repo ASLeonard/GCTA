@@ -22,7 +22,7 @@
 #include <algorithm>
 #include <Eigen/SparseCholesky>
 
-#if GCTA_CPU_x86
+#ifdef GCTA_USE_MKL
 #include <Eigen/PardisoSupport>
 #endif
 

@@ -7,7 +7,7 @@
 #include <string>
 #include <functional>
 #include <omp.h>
-#include "cpu_f77blas.h"
+#include "cpu.h"
 #include <cstdio>
 #include <algorithm>
 
