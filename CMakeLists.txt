@@ -590,8 +590,7 @@ foreach(target IN LISTS GCTA_TARGETS)
         $<$<CONFIG:Release>:$<IF:$<BOOL:${APPLE}>,-mcpu=native,-march=native>>
         $<$<CONFIG:Release>:-O3>)
     target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX
-        $<$<NOT:$<BOOL:${WIN32}>>:GSL::gsl>
-        $<$<NOT:$<BOOL:${WIN32}>>:GSL::gslcblas>)
+        $<$<NOT:$<BOOL:${WIN32}>>:GSL::gsl>)
 endforeach()
 
 if(GCTA_IPO_ENABLED AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
@@ -680,7 +679,7 @@ target_link_libraries(gcta64 PRIVATE
     ${GCTA_ZSTD_LIBS})
 
 if(NOT WIN32)
-    target_link_libraries(gcta64 PRIVATE GSL::gsl GSL::gslcblas)
+    target_link_libraries(gcta64 PRIVATE GSL::gsl)
 endif()
 
 target_link_libraries(gcta64 PRIVATE sqlite3)

@@ -34,6 +34,10 @@
   typedef lapack_int gcta_blas_int;
 
 #elif defined(GCTA_USE_AOCL)
+  #  undef EIGEN_USE_MKL_ALL
+  #  undef EIGEN_USE_MKL_VML
+  #  undef MKL_DIRECT_CALL
+  #  undef MKL_DIRECT_CALL_SEQ
   #include <cblas.h>
   #include <lapacke.h>
   typedef lapack_int gcta_blas_int;
