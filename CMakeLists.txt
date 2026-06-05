@@ -516,7 +516,7 @@ elseif(_GCTA_BLAS STREQUAL "OpenBLAS" OR _GCTA_BLAS STREQUAL "MKL" OR _GCTA_BLAS
                 list(APPEND GCTA_BLAS_LIBS "${_aocl_dep_path}")
             endif()
         endforeach()
-    else()
+    elseif(_GCTA_BLAS STREQUAL "MKL")
         list(APPEND GCTA_BLAS_DEFINES GCTA_USE_MKL EIGEN_USE_MKL_ALL)
         set(GCTA_BLAS_PROVIDER "MKL" CACHE INTERNAL "")
     endif()
@@ -548,10 +548,6 @@ foreach(lib_src ${SRCS})
 endforeach(lib_src)
 
 add_executable(gcta64 ${MAIN_SOURCE})
-
-if(_GCTA_BLAS STREQUAL "MKL")
-  target_compile_definitions(gcta64 PRIVATE GCTA_USE_MKL=1)
-endif()
 
 add_subdirectory(main)
 target_include_directories(mainV1 PUBLIC ${COMMON_INCLUDES})

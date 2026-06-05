@@ -10,7 +10,7 @@
 
 #include "eigen_func.h"
 
-void eigen_func::rank(VectorXf &x, VectorXf &rank)
+void eigen_func::rank(Eigen::VectorXf &x, Eigen::VectorXf &rank)
 {
     int size = x.size();
     if(size < 1) return;
@@ -29,12 +29,12 @@ void eigen_func::rank(VectorXf &x, VectorXf &rank)
     }
 }
 
-void eigen_func::inverse_norm_rank_transform(VectorXf &x)
+void eigen_func::inverse_norm_rank_transform(Eigen::VectorXf &x)
 {
     int size = x.size();
     if(size < 1) return;
 
-    VectorXf rank;
+    Eigen::VectorXf rank;
     eigen_func::rank(x, rank);
 
     int i = 0;

@@ -22,25 +22,24 @@
 #endif
 
 
-using namespace Eigen;
 using namespace std;
 
 
 
-void gcta::mbat_calcu_lambda(vector<int> &snp_indx, MatrixXf &rval, VectorXd &eigenval, int &snp_count, double sbat_ld_cutoff, vector<int> &sub_indx)
+void gcta::mbat_calcu_lambda(vector<int> &snp_indx, Eigen::MatrixXf &rval, Eigen::VectorXd &eigenval, int &snp_count, double sbat_ld_cutoff, vector<int> &sub_indx)
 {
     int i = 0, j = 0, k = 0, n = _keep.size(), m = snp_indx.size();
 
-    MatrixXf X;
+    Eigen::MatrixXf X;
     make_XMat_subset(X, snp_indx, false);
     vector<int> rm_ID1;
     double R_cutoff = sbat_ld_cutoff;
     int qi = 0; //alternate index
 
-    VectorXd sumsq_x(m);
+    Eigen::VectorXd sumsq_x(m);
     for (j = 0; j < m; j++) sumsq_x[j] = X.col(j).dot(X.col(j));
 
-    MatrixXf C = X.transpose() * X;
+    Eigen::MatrixXf C = X.transpose() * X;
     X.resize(0,0);
     #pragma omp parallel for private(j)
     for (i = 0; i < m; i++) {
@@ -63,7 +62,7 @@ void gcta::mbat_calcu_lambda(vector<int> &snp_indx, MatrixXf &rval, VectorXd &ei
         }
         snp_count = sub_indx.size();
         if (sub_indx.size() < C.size()) { //Build new matrix
-            MatrixXf D(sub_indx.size(),sub_indx.size());
+            Eigen::MatrixXf D(sub_indx.size(),sub_indx.size());
             for (i = 0 ; i < sub_indx.size() ; i++) {
                for (j = 0 ; j < sub_indx.size() ; j++) {
                    D(i,j) = C(sub_indx[i],sub_indx[j]);
@@ -72,15 +71,15 @@ void gcta::mbat_calcu_lambda(vector<int> &snp_indx, MatrixXf &rval, VectorXd &ei
             C = D; 
         }
     
-    SelfAdjointEigenSolver<MatrixXf> saes(C);
+    SelfAdjointEigenSolver<Eigen::MatrixXf> saes(C);
     eigenval = saes.eigenvalues().cast<double>();
 }
 
 
 void gcta::mbat_ACATO(double &mbat_svd_pvalue,double &fastbat_pvalue, double &P_mBATcombo){
     double cctStat =0;
-    Vector2d combinedPvalue(mbat_svd_pvalue ,fastbat_pvalue);
-    Vector2i isSmall(0,0);
+    Eigen::Vector2d combinedPvalue(mbat_svd_pvalue ,fastbat_pvalue);
+    Eigen::Vector2i isSmall(0,0);
     for (int k =0;k <2; k++)
     {
         if(combinedPvalue[k] ==1 ) combinedPvalue[k] = 1 - 1e-16;
@@ -100,12 +99,12 @@ void gcta::mbat_ACATO(double &mbat_svd_pvalue,double &fastbat_pvalue, double &P_
     else P_mBATcombo = 1- (((1.0L / M_PI) * atan((cctStat - 0L)/1.0L) + 0.5L));
 }
 
-void gcta::svdDecomposition( MatrixXf &X,double &prop, int &eigenvalueNum, VectorXd &eigenvalueUsed,MatrixXd &U_prop){
-    VectorXd cumsumNonNeg; // cumulative sums of non-negative values
+void gcta::svdDecomposition( Eigen::MatrixXf &X,double &prop, int &eigenvalueNum, Eigen::VectorXd &eigenvalueUsed,MatrixXd &U_prop){
+    Eigen::VectorXd cumsumNonNeg; // cumulative sums of non-negative values
     double sumNonNeg;
 
-    SelfAdjointEigenSolver<MatrixXf> eigensolver(X);
-    VectorXd eigenVal = eigensolver.eigenvalues().cast<double>();
+    SelfAdjointEigenSolver<Eigen::MatrixXf> eigensolver(X);
+    Eigen::VectorXd eigenVal = eigensolver.eigenvalues().cast<double>();
     MatrixXd eigenVec = eigensolver.eigenvectors().cast<double>();
     int revIdx = eigenVal.size();
     cumsumNonNeg.resize(revIdx);
@@ -250,7 +249,7 @@ void gcta::mbat_gene(string mbat_sAssoc_file, string mbat_gAnno_file, int mbat_w
         // rogoodsnp << "gene\tsnp" << endl;
     }
     ////////////////////////////////////////////////////
-    VectorXd P_mBATcombo, P_mbat_svd_prop, fastbat_gene_pvalue, Chisq_mBAT,chisq_o;
+    Eigen::VectorXd P_mBATcombo, P_mbat_svd_prop, fastbat_gene_pvalue, Chisq_mBAT,chisq_o;
     P_mBATcombo.resize(mapped);
     P_mbat_svd_prop.resize(mapped);
     fastbat_gene_pvalue.resize(mapped);
@@ -389,16 +388,16 @@ void gcta::mbat_gene(string mbat_sAssoc_file, string mbat_gAnno_file, int mbat_w
 
         } else {
             snp_count=snp_num_in_gene[j];
-            VectorXd eigenval;
+            Eigen::VectorXd eigenval;
             vector<int> sub_indx;
-            MatrixXf rval(snp_indx.size(), snp_indx.size());;
+            Eigen::MatrixXf rval(snp_indx.size(), snp_indx.size());;
             mbat_calcu_lambda(snp_include_gene, rval, eigenval, snp_count, sbat_ld_cutoff, sub_indx);
             ///////////////////////////////////////////////////////////////////////////////
             // Step 3.1 run mBAT analysis
             MatrixXd U_prop;
-            VectorXd eigenvalueUsed;
+            Eigen::VectorXd eigenvalueUsed;
             svdDecomposition(rval, mbat_svd_gamma,eigenvalueNum_mBAT[j],eigenvalueUsed, U_prop);
-            VectorXd zscore_in_gene;
+            Eigen::VectorXd zscore_in_gene;
             zscore_in_gene.resize(snp_indx.size());
             min_snp_pval[j]=2;
             min_snp_name[j]="na";
@@ -523,7 +522,7 @@ void gcta::mbat(string mbat_sAssoc_file, string snpset_file, double mbat_svd_gam
     }
     for (i = 0; i < snp_name.size(); i++) snp_name_map.insert(pair<string,int>(snp_name[i], i));
     ////////////////////////////////////////////////////
-    VectorXd P_mBATcombo, P_mbat_svd_prop, fastbat_set_pvalue, Chisq_mBAT,chisq_o;
+    Eigen::VectorXd P_mBATcombo, P_mbat_svd_prop, fastbat_set_pvalue, Chisq_mBAT,chisq_o;
     P_mBATcombo.resize(set_num);
     P_mbat_svd_prop.resize(set_num);
     fastbat_set_pvalue.resize(set_num);
@@ -631,16 +630,16 @@ void gcta::mbat(string mbat_sAssoc_file, string snpset_file, double mbat_svd_gam
             P_mbat_svd_prop[i] = StatFunc::pchisq(Chisq_mBAT[i], eigenvalueNum_mBAT[i]);
         } else {
             snp_count=snp_num_in_set[i];
-            VectorXd eigenval;
+            Eigen::VectorXd eigenval;
             vector<int> sub_indx;
-            MatrixXf rval(snp_indx.size(), snp_indx.size());;
+            Eigen::MatrixXf rval(snp_indx.size(), snp_indx.size());;
             // extract eigenval for fastbat
             mbat_calcu_lambda(snp_indx, rval, eigenval, snp_count, sbat_ld_cutoff, sub_indx);
             ///////////////////////////////////////////////////////////////////////////////
             // Step 3.1 run mBAT analysis
             MatrixXd U_prop;
-            VectorXd eigenvalueUsed;
-            VectorXd zscore_in_set;
+            Eigen::VectorXd eigenvalueUsed;
+            Eigen::VectorXd zscore_in_set;
             MatrixXd Uprop_z;
             MatrixXd lambda_prop_diag_inv;
             svdDecomposition(rval, mbat_svd_gamma,eigenvalueNum_mBAT[i],eigenvalueUsed, U_prop);

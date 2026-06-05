@@ -44,19 +44,20 @@ typedef Eigen::SparseMatrix<double, Eigen::ColMajor, long long> eigenSparseMat;
 #endif
 //To avoid potential alignment problem. 
 EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(eigenSparseMat);
-using namespace Eigen;
+
 using namespace std;
+using namespace Eigen;
 
 #ifdef SINGLE_PRECISION
-typedef DiagonalMatrix<float, Dynamic, Dynamic> eigenDiagMat;
-typedef MatrixXf eigenMatrix;
-typedef VectorXf eigenVector;
-typedef SparseMatrix<float> eigenDynSparseMat;
+typedef Eigen::DiagonalMatrix<float, Eigen::Dynamic, Eigen::Dynamic> eigenDiagMat;
+typedef Eigen::MatrixXf eigenMatrix;
+typedef Eigen::VectorXf eigenVector;
+typedef Eigen::SparseMatrix<float> eigenDynSparseMat;
 #else
-typedef DiagonalMatrix<double, Dynamic, Dynamic> eigenDiagMat;
-typedef MatrixXd eigenMatrix;
-typedef VectorXd eigenVector;
-typedef SparseMatrix<double> eigenDynSparseMat;
+typedef Eigen::DiagonalMatrix<double, Eigen::Dynamic, Eigen::Dynamic> eigenDiagMat;
+typedef Eigen::MatrixXd eigenMatrix;
+typedef Eigen::VectorXd eigenVector;
+typedef Eigen::SparseMatrix<double> eigenDynSparseMat;
 #endif
 
 class gcta {

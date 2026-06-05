@@ -22,7 +22,6 @@
 #include <Eigen/Sparse>
 #include <unsupported/Eigen/SparseExtra>
 
-using namespace Eigen;
 using namespace std;
 
 namespace StatFunc
@@ -104,14 +103,14 @@ namespace StatFunc
     double qchisq(double q, double df);
     
     // sum of chisq distribution
-    double pchisqsum(double x, VectorXd lambda);
-    double psadd(double x, VectorXd lambda);
-    double psatt(double x, VectorXd lambda);
-    double K(double zeta, VectorXd &lambda);
-    double Kp(double zeta, VectorXd &lambda);
-    double Kpp(double zeta, VectorXd &lambda);
-    double Kp_min_x(double zeta, VectorXd &lambda, double x);
-    double Brents_Kp_min_x(VectorXd &lambda, double x, double lowerLimit, double upperLimit, double errorTol);
+    double pchisqsum(double x, Eigen::VectorXd lambda);
+    double psadd(double x, Eigen::VectorXd lambda);
+    double psatt(double x, Eigen::VectorXd lambda);
+    double K(double zeta, Eigen::VectorXd &lambda);
+    double Kp(double zeta, Eigen::VectorXd &lambda);
+    double Kpp(double zeta, Eigen::VectorXd &lambda);
+    double Kp_min_x(double zeta, Eigen::VectorXd &lambda, double x);
+    double Brents_Kp_min_x(Eigen::VectorXd &lambda, double x, double lowerLimit, double upperLimit, double errorTol);
     vector<size_t> sort_re_index(const vector<double> &x);
 }
 
