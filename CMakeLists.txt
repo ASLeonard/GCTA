@@ -278,8 +278,6 @@ FetchContent_MakeAvailable(eigen spectra)
 set(CMAKE_SKIP_INSTALL_RULES OFF)
 FetchContent_MakeAvailable(sqlite)
 
-message(STATUS "sqlite_SOURCE_DIR = ${sqlite_SOURCE_DIR}")
-
 if(Boost_DIR)
     message(STATUS "Using external Boost from ${Boost_DIR}")
     find_package(Boost REQUIRED COMPONENTS iostreams
@@ -330,8 +328,6 @@ endif()
 
 add_library(sqlite3 STATIC ${sqlite_SOURCE_DIR}/sqlite3.c)
 target_include_directories(sqlite3 PUBLIC ${sqlite_SOURCE_DIR})
-get_target_property(_inc sqlite3 INTERFACE_INCLUDE_DIRECTORIES)
-message(STATUS "sqlite3 interface includes = ${_inc}")
 
 # Find OpenMP (Require CXX component)
 if(APPLE)
