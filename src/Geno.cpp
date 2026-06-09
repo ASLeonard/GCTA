@@ -464,11 +464,16 @@ void Geno::setHeterogameticWeight(double &weight, bool &needWeight){
 void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
     SNPInfo snpinfo;
     uintptr_t *cur_buf = buf + idx * pgenGenoBuf1PtrSize;
-    uintptr_t *geno_buf = cur_buf;
     uintptr_t *dosage_present = cur_buf + pgenGenoPtrSize;
     uint16_t *dosage_main = reinterpret_cast<uint16_t*>(cur_buf + pgenGenoPtrSize + pgenDosagePresentPtrSize);
-    uint32_t dosage_ct = cur_buf[pgenGenoBuf1PtrSize - 1];
+    uint32_t dosage_ct = static_cast<uint32_t>(cur_buf[pgenGenoBuf1PtrSize - 1]);
     uint8_t sexChromType = markerSexChromTypes[curBufferIndex];
+
+    gbuf->valid = false;
+    if (dosage_ct > keepSampleCT) {
+        LOGGER.e(0, "invalid pgen dosage count " + to_string(dosage_ct)
+                    + " (expected <= " + to_string(keepSampleCT) + ").");
+    }
 
     const vector<uint32_t> *curHeterogameticIndex = NULL;
     if(sexChromType == 1){
@@ -496,6 +501,46 @@ void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
         gbuf->sd = std;
 
         if(bMakeGeno){
+            const double mu = gbuf->mean;
+            if(std < 1.0e-50){
+                gbuf->valid = false;
+                return;
+            }
+
+            double center_value = 0.0;
+            double rdev = 1.0;
+            if(!bGRMDom){
+                if(bGenoCenter) center_value = mu;
+                if(bGenoStd) rdev = sqrt(1.0 / std);
+
+                // PGEN dosage_main uses 14-bit fractional scaling of allele
+                // dosage in [0, 2].
+                static constexpr double kDosageScale = 1.0 / 16384.0;
+                gbuf->geno.resize(keepSampleCT);
+                for(uint32_t j = 0; j < keepSampleCT; ++j){
+                    const double dos = static_cast<double>(dosage_main[j]) * kDosageScale;
+                    gbuf->geno[j] = (dos - center_value) * rdev;
+                }
+            }else{
+                // Keep dominance coding consistent with other backends.
+                const double psq = 0.5 * mu * mu;
+                if(bGenoCenter) center_value = psq;
+                if(bGenoStd) rdev = 1.0 / std;
+
+                const double a0 = (0.0 - center_value) * rdev;
+                const double a1 = (mu  - center_value) * rdev;
+                const double a2 = (2.0 * mu - 2.0 - center_value) * rdev;
+
+                static constexpr double kDosageScale = 1.0 / 16384.0;
+                gbuf->geno.resize(keepSampleCT);
+                for(uint32_t j = 0; j < keepSampleCT; ++j){
+                    const double dos = static_cast<double>(dosage_main[j]) * kDosageScale;
+                    if(dos < 0.5) gbuf->geno[j] = a0;
+                    else if(dos < 1.5) gbuf->geno[j] = a1;
+                    else gbuf->geno[j] = a2;
+                }
+            }
+
             if(sexChromType == 1){
                 double weight;
                 bool needWeight;
