@@ -14,9 +14,43 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <type_traits>
 #include <span>
 #include <string>
 #include <vector>
+
+template <typename T, typename IndexT,
+          typename = std::enable_if_t<std::is_integral_v<IndexT>>>
+inline std::vector<T> compact_sample_vector(const std::vector<T>& values,
+                                            const std::vector<IndexT>& keep)
+{
+    std::vector<T> compacted;
+    compacted.reserve(keep.size());
+    for (IndexT index : keep) compacted.push_back(values[static_cast<size_t>(index)]);
+    return compacted;
+}
+
+template <typename IndexT,
+          typename = std::enable_if_t<std::is_integral_v<IndexT>>>
+inline Eigen::VectorXd compact_sample_vector(const Eigen::VectorXd& values,
+                                             const std::vector<IndexT>& keep)
+{
+    Eigen::VectorXd compacted(keep.size());
+    for (size_t i = 0; i < keep.size(); ++i)
+        compacted[static_cast<Eigen::Index>(i)] = values[static_cast<Eigen::Index>(keep[i])];
+    return compacted;
+}
+
+template <typename IndexT,
+          typename = std::enable_if_t<std::is_integral_v<IndexT>>>
+inline Eigen::MatrixXd compact_sample_rows(const Eigen::MatrixXd& values,
+                                           const std::vector<IndexT>& keep)
+{
+    Eigen::MatrixXd compacted(keep.size(), values.cols());
+    for (size_t i = 0; i < keep.size(); ++i)
+        compacted.row(static_cast<Eigen::Index>(i)) = values.row(static_cast<Eigen::Index>(keep[i]));
+    return compacted;
+}
 
 inline void run_mlma_stream_association(RemlState& state,
                                         const Eigen::VectorXf& y_adj,
@@ -72,11 +106,23 @@ inline void run_mlma_stream_association(RemlState& state,
     // Batch output buffer to reduce write() syscall overhead.
     std::vector<char> io_buf(4 << 20);  // 4 MiB
     size_t io_pos = 0;
+    std::vector<char> line_scratch;
     auto flush_io = [&]() {
         if (io_pos > 0) {
             ofile.write(io_buf.data(), static_cast<std::streamsize>(io_pos));
             io_pos = 0;
         }
+    };
+    auto append_io = [&](const char* data, size_t len) {
+        if (len == 0) return;
+        if (len > io_buf.size()) {
+            flush_io();
+            ofile.write(data, static_cast<std::streamsize>(len));
+            return;
+        }
+        if (io_pos + len > io_buf.size()) flush_io();
+        std::memcpy(io_buf.data() + io_pos, data, len);
+        io_pos += len;
     };
 
     auto callback = [&](uintptr_t* buf, std::span<const uint32_t> exIdx) {
@@ -89,11 +135,17 @@ inline void run_mlma_stream_association(RemlState& state,
             item.extractedMarkerIndex = exIdx[i];  // MUST be set before getGenoDouble
             geno->getGenoDouble(buf, i, &item);
             if (!item.valid) { X_block.col(i).setZero(); continue; }
+            if (static_cast<int>(item.geno.size()) != n) {
+                LOGGER.e(0, "internal error: SNP " + std::to_string(exIdx[i])
+                            + " returned geno.size=" + std::to_string(item.geno.size())
+                            + " but expected " + std::to_string(n) + ".");
+            }
             valid_v[i] = 1;
             af_v[i]    = static_cast<float>(item.af);
             X_block.col(i) =
                 Eigen::Map<const Eigen::VectorXd>(item.geno.data(), n).cast<float>();
         }
+
 
         // Xt_Vi_y = X^T Vi y  (computed BEFORE STRMM overwrites X_block)
         Xt_Vi_y.head(bs).noalias() =
@@ -119,6 +171,7 @@ inline void run_mlma_stream_association(RemlState& state,
             xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
         }
 
+
         // Write per-SNP results into batch output buffer to minimise write() overhead.
         for (int i = 0; i < bs; ++i) {
             const uint32_t raw = marker->getRawIndex(exIdx[i]);
@@ -129,28 +182,43 @@ inline void run_mlma_stream_association(RemlState& state,
             const std::string& a2   = marker->getRawA2(raw);
 
             char line[512];
-            int len;
-            float beta_val, se_val;
-            double pval_val;
-            if (!valid_v[i] || !mlma_snp_stat(Xt_Vi_y[i], xvx_diag[i], log_pval,
-                                               beta_val, se_val, pval_val)) {
-                len = std::snprintf(line, sizeof(line),
-                                    "%s\t%s\t%u\t%s\t%s\tNA\tNA\tNA\tNA\n",
-                                    chr.c_str(), name.c_str(), bp,
-                                    a1.c_str(), a2.c_str());
-            } else {
-                len = std::snprintf(line, sizeof(line),
-                                    "%s\t%s\t%u\t%s\t%s\t%.6g\t%.6g\t%.6g\t%.6g\n",
-                                    chr.c_str(), name.c_str(), bp,
-                                    a1.c_str(), a2.c_str(),
-                                    static_cast<double>(af_v[i]),
-                                    static_cast<double>(beta_val),
-                                    static_cast<double>(se_val),
-                                    pval_val);
+            float beta_val = 0.0f, se_val = 0.0f;
+            double pval_val = 0.0;
+            const bool stat_ok = valid_v[i] &&
+                mlma_snp_stat(Xt_Vi_y[i], xvx_diag[i], log_pval,
+                              beta_val, se_val, pval_val);
+
+            auto format_line = [&](char* dst, size_t cap) {
+                if (!stat_ok) {
+                    return std::snprintf(dst, cap,
+                                         "%s\t%s\t%u\t%s\t%s\tNA\tNA\tNA\tNA\n",
+                                         chr.c_str(), name.c_str(), bp,
+                                         a1.c_str(), a2.c_str());
+                }
+                return std::snprintf(dst, cap,
+                                     "%s\t%s\t%u\t%s\t%s\t%.6g\t%.6g\t%.6g\t%.6g\n",
+                                     chr.c_str(), name.c_str(), bp,
+                                     a1.c_str(), a2.c_str(),
+                                     static_cast<double>(af_v[i]),
+                                     static_cast<double>(beta_val),
+                                     static_cast<double>(se_val),
+                                     pval_val);
+            };
+
+            const int len = format_line(line, sizeof(line));
+            if (len < 0) {
+                LOGGER.e(0, "failed to format output line for SNP " + std::to_string(exIdx[i]) + ".");
             }
-            if (static_cast<size_t>(len) + io_pos > io_buf.size()) flush_io();
-            std::memcpy(io_buf.data() + io_pos, line, static_cast<size_t>(len));
-            io_pos += static_cast<size_t>(len);
+            const size_t need = static_cast<size_t>(len);
+            if (need < sizeof(line)) {
+                append_io(line, need);
+            } else {
+                line_scratch.resize(need + 1);
+                const int len2 = format_line(line_scratch.data(), line_scratch.size());
+                if (len2 < 0)
+                    LOGGER.e(0, "failed to format long output line for SNP " + std::to_string(exIdx[i]) + ".");
+                append_io(line_scratch.data(), static_cast<size_t>(len2));
+            }
         }
 
         snp_done += bs;

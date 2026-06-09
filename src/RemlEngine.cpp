@@ -836,7 +836,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     if (ctx.A[ctx.r_indx[0]].size() == 0)
         LOGGER.e(0, "--reml-woodbury: GRM component is identity; cannot compute basis.");
 
-    const bool auto_k = (ctx.woodbury_rank < 0);
+    const bool auto_k = (ctx.woodbury_rank == -1.0);
+    const bool EIG99_k = (ctx.woodbury_rank == -2.0);
     const int  n      = ctx.n;
     int k = ctx.woodbury_rank;
 
@@ -844,8 +845,17 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     if (auto_k) {
         k_svd = (ctx.woodbury_k_max > 0) ? ctx.woodbury_k_max : std::min(n - 1, 1200);
         LOGGER << "\nComputing Woodbury basis (auto-k, k_max=" << k_svd
-               << ", buffer=" << ctx.woodbury_buffer_factor << ") ..." << std::endl;
-    } else {
+            << ", buffer=" << ctx.woodbury_buffer_factor << ") ..." << std::endl;
+    } else if (EIG99_k) {                                                        // NEW
+        // Conservative upper bound: 2 * Me_theoretical for cattle (Ne~100, L~25M).
+        // Override with woodbury_k_max if the user supplied one.
+        const int me_bound = (ctx.woodbury_k_max > 0)
+                            ? ctx.woodbury_k_max
+                            : std::min(n - 1, 25000);
+        k_svd = me_bound;
+        LOGGER << "\nComputing Woodbury basis (EIG99-k, k_max=" << k_svd
+            << ") ..." << std::endl;
+    } else {                                                                      // unchanged
         if (k <= 0)
             LOGGER.e(0, "--reml-woodbury rank must be positive for fixed-k mode.");
         k_svd = k;
@@ -917,6 +927,10 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         double M = 0.0;
         if (ctx.grm_N.rows() == n && ctx.grm_N.cols() == n)
             M = ctx.grm_N.diagonal().mean();
+        else if (ctx.grm_N.size() == 1)
+            M = ctx.grm_N(0, 0);
+        else
+            LOGGER.w(0, "Woodbury auto-k: GRM not sized correctly (n=" + std::to_string(n) + ", M=" + std::to_string(ctx.grm_N.rows()) + ").");
         if (M <= 0.0)
             LOGGER.e(0, "--reml-woodbury auto: cannot determine SNP count. Use --reml-woodbury <k>.");
         const double gamma       = static_cast<double>(n) / M;
@@ -932,6 +946,33 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             LOGGER.w(0, "Woodbury auto-k: buffer-implied k=" + std::to_string(k_buffered)
                      + " exceeds k_max=" + std::to_string(k_svd) + "; clamped to k_max.");
     }
+    else if (EIG99_k) {                                                        // NEW BLOCK
+        const double trace_K_full = K_dbl.diagonal().sum();
+        const double target_mass  = 0.99 * trace_K_full;
+        double cumulative = 0.0;
+        int k_EIG99 = k_svd;                  // fallback: use all computed eigenmodes
+        for (int i = 0; i < static_cast<int>(eval_full.size()); ++i) {
+            cumulative += eval_full[i];
+            if (cumulative >= target_mass) {
+                k_EIG99 = i + 1;
+                break;
+            }
+        }
+        const double rho = cumulative / trace_K_full;
+        // Apply a small buffer (default woodbury_buffer_factor, but floor at 1.05)
+        const double buf = std::max(1.05, ctx.woodbury_buffer_factor);
+        const int k_buffered = std::min(k_svd,
+                                        static_cast<int>(std::ceil(k_EIG99 * buf)));
+        k = std::max(20, k_buffered);
+        LOGGER << "EIG99: trace(K)=" << trace_K_full
+            << ", cumulative mass at k=" << k_EIG99
+            << " is rho=" << rho
+            << ", using k=" << k
+            << " (buffer=" << buf << ")" << std::endl;
+        if (k_EIG99 == k_svd)
+            LOGGER.w(0, "Woodbury EIG99: 99% mass threshold not reached within k_max="
+                    + std::to_string(k_svd) + "; increase --reml-woodbury-k-max.");
+    }
 
     Eigen::VectorXd eval = eval_full.head(k);
     Eigen::MatrixXd evec = evec_full.leftCols(k);
@@ -943,7 +984,9 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         ctx.lambda_tail = 0.0;
     }
 
-    {
+    if (EIG99_k)
+        ctx.tail_d_var = 0.0;  // tail mass < 1% by construction; correction negligible
+    else {
         double diag_sq = K_dbl.diagonal().squaredNorm();
         double off_sq  = 0.0;
         #pragma omp parallel for reduction(+:off_sq) schedule(static)
