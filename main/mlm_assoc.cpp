@@ -553,7 +553,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
 
     int k = 0, l = 0;
     // The STRMM/STRSM overwrites X_block in-place after all operations using the
-    // original genotype data are complete (~600 MB savings vs a separate UX_block).
+    // original genotype data are complete.
     Eigen::MatrixXf X_block(n, max_block_size);
     std::vector<int> indx;
     indx.reserve(max_block_size);
