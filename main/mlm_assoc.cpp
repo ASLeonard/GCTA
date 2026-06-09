@@ -105,6 +105,7 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     
     std::vector<std::string> uni_id;
     std::map<std::string, int> uni_id_map;
+    compact_indi_data();
     make_uni_id(uni_id, uni_id_map);
     _n=_keep.size();
     if(_n<1) LOGGER.e(0, "no individual is in common in the input files.");

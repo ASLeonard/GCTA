@@ -1954,7 +1954,6 @@ void gcta::calcu_maf()
     }
 }
 
-//TODO: better name?
 void gcta::mu_func(int j, std::vector<double> &fac) {
     int i = 0;
     double fcount = 0.0, f_buf = 0.0;
@@ -1962,8 +1961,9 @@ void gcta::mu_func(int j, std::vector<double> &fac) {
     const double mu_acc = 0.0;
     if (_dosage_flag) {
         for (i = 0; i < _keep.size(); i++) {
-            if (_geno_dose(i, j) < DOSAGE_NA) {
-                _mu[snp_idx] += fac[i] * _geno_dose(i, j);
+            const int ki = _keep[i];
+            if (_geno_dose(ki, j) < DOSAGE_NA) {
+                _mu[snp_idx] += fac[i] * _geno_dose(ki, j);
                 fcount += fac[i];
             }
         }
