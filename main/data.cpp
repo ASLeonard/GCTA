@@ -2338,14 +2338,16 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
             }
         }
 
-        // After compact_dosage_data(): _keep[i]==i, _include[j]==j; direct access.
+        // compact_dosage_data() compacts SNP columns only; _keep can still be a
+        // non-identity subset after phenotype/covariate intersection.
         #pragma omp parallel for schedule(static)
         for (int i = 0; i < n; i++) {
+            const int ki = _keep[i];
             for (int j = 0; j < m; j++) {
                 const int k = snp_indx[j];
-                if (_geno_dose(i, k) < DOSAGE_NA) {
-                    const float v = (_allele1[k] == _ref_A[k]) ? _geno_dose(i, k)
-                                                                : 2.0f - _geno_dose(i, k);
+                if (_geno_dose(ki, k) < DOSAGE_NA) {
+                    const float v = (_allele1[k] == _ref_A[k]) ? _geno_dose(ki, k)
+                                                                : 2.0f - _geno_dose(ki, k);
                     X(i,j) = (v - static_cast<float>(_mu[k])) * sd_inv[j];
                 } else {
                     X(i,j) = 0.0f;
@@ -2353,8 +2355,8 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
             }
         }
     } else {
-        // After compact_snp_data(): _include[j]==j and _keep[i]==i, so snp_indx[j]
-        // is the raw _snp_1 index directly.
+        // After compact_snp_data(): _include[j]==j, while _keep can still be a
+        // non-identity subset. Always remap row i through _keep[i].
         // When _make_XMat_no_compact=true (LOCO loop), compaction is skipped and
         // _snp_1 retains its original BIM order; snp_indx values are positions
         // within _include, so we must map through _include to get the raw index.
@@ -2387,8 +2389,9 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
             const auto& s2    = _snp_2[k];
             auto col = X.col(j);
             for (int i = 0; i < n; i++) {
-                if (!s1[i] || s2[i]) {
-                    float geno = static_cast<float>(s1[i]) + static_cast<float>(s2[i]);
+                const int ki = _keep[i];
+                if (!s1[ki] || s2[ki]) {
+                    float geno = static_cast<float>(s1[ki]) + static_cast<float>(s2[ki]);
                     if (flip) geno = 2.0f - geno;
                     col(i) = (geno - mu_k) * scale;
                 } else {
@@ -2431,10 +2434,11 @@ bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bo
         const float psq  = snp_psq[j];
         auto col = X.col(j);
         if (_dosage_flag) {
-            // After compact_dosage_data(): _keep[i]==i; direct access.
+            // compact_dosage_data() compacts SNP columns only; keep row remapping.
             for (int i = 0; i < n; i++) {
-                if (_geno_dose(i, k) < DOSAGE_NA) {
-                    float g = flip ? 2.0f - _geno_dose(i, k) : _geno_dose(i, k);
+                const int ki = _keep[i];
+                if (_geno_dose(ki, k) < DOSAGE_NA) {
+                    float g = flip ? 2.0f - _geno_dose(ki, k) : _geno_dose(ki, k);
                     if      (g < 0.5f) g = 0.0f;
                     else if (g < 1.5f) g = mu_k;
                     else               g = 2.0f * mu_k - 2.0f;
@@ -2444,12 +2448,13 @@ bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bo
                 }
             }
         } else {
-            // After compaction: _keep[i]==i, direct sequential access
+            // After compaction SNP indices are dense; individual rows still map via _keep.
             const auto& s1 = _snp_1[k];
             const auto& s2 = _snp_2[k];
             for (int i = 0; i < n; i++) {
-                if (!s1[i] || s2[i]) {
-                    float g = static_cast<float>(s1[i]) + static_cast<float>(s2[i]);
+                const int ki = _keep[i];
+                if (!s1[ki] || s2[ki]) {
+                    float g = static_cast<float>(s1[ki]) + static_cast<float>(s2[ki]);
                     if (flip) g = 2.0f - g;
                     if      (g < 0.5f) g = 0.0f;
                     else if (g < 1.5f) g = mu_k;

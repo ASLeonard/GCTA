@@ -109,6 +109,7 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     _n=_keep.size();
     if(_n<1) LOGGER.e(0, "no individual is in common in the input files.");
     LOGGER<<_n<<" individuals are in common in these files."<<std::endl;
+    //for (auto i : _keep) LOGGER << "\t" << _fid[i] << "\t" << _pid[i] << std::endl;
     
     // construct model terms
     _y.setZero(_n);
