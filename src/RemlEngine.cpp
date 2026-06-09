@@ -929,8 +929,6 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             M = ctx.grm_N.diagonal().mean();
         else if (ctx.grm_N.size() == 1)
             M = ctx.grm_N(0, 0);
-        else
-            LOGGER.w(0, "Woodbury auto-k: GRM not sized correctly (n=" + std::to_string(n) + ", M=" + std::to_string(ctx.grm_N.rows()) + ").");
         if (M <= 0.0)
             LOGGER.e(0, "--reml-woodbury auto: cannot determine SNP count. Use --reml-woodbury <k>.");
         const double gamma       = static_cast<double>(n) / M;
