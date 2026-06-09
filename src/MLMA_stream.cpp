@@ -218,10 +218,18 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options["grm"] = options_in["--grm"][0];
         options_in.erase("--grm");
 
-        // Optional REML tuning flags
+        // --reml-woodbury [k]  (k optional; -1 = auto-k, -2 = EIG99)
         if (options_in.find("--reml-woodbury") != options_in.end()) {
-            const auto& v = options_in["--reml-woodbury"];
-            options_d["woodbury_rank"] = (!v.empty() && !v[0].empty()) ? std::stod(v[0]) : -1.0;
+            const auto& vals = options_in["--reml-woodbury"];
+            if (!vals.empty() && !vals[0].empty()) {
+                if (vals[0] == "EIG99")
+                    options_d["woodbury_rank"] = -2.0;  // Eigenvalue mass k
+                else if (vals[0] == "auto")
+                    options_d["woodbury_rank"] = -1.0;  // auto-k
+                else
+                    options_d["woodbury_rank"] = std::stod(vals[0]);
+            } else
+                options_d["woodbury_rank"] = -1.0;   // auto-k
             options_in.erase("--reml-woodbury");
         }
         if (options_in.find("--reml-trace-approx") != options_in.end()) {
@@ -321,12 +329,8 @@ void MLMA::processMain()
                 std::iota(remain_index.begin(), remain_index.end(), 0u);
             }
 
-            // Reorder phenotype vector to match filtered index_keep order
-            const int n_new = static_cast<int>(remain_index.size());
-            vector<double> phenos2(n_new);
-            for (int i = 0; i < n_new; ++i)
-                phenos2[i] = phenos_vec[remain_index[i]];
-            phenos_vec = std::move(phenos2);
+            // Compact phenotype values to the kept sample order.
+            phenos_vec = compact_sample_vector(phenos_vec, remain_index);
         }
 
         const int n = static_cast<int>(pheno->count_keep());
@@ -454,6 +458,8 @@ void MLMA::processMain()
             }
             ctx.A.resize(2);
             ctx.A[0] = std::move(G_n);
+            ctx.grm_N.resize(1, 1);
+            ctx.grm_N(0, 0) = m_all;
             // ctx.A[1] left default (size 0 == identity convention for residual)
             ctx.r_indx   = {0, 1};
             ctx.var_name = {"V(G)", "V(e)"};
