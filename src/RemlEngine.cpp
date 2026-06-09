@@ -1045,7 +1045,9 @@ void compute(RemlCtx& ctx,
     RemlVec varcmp;
     init_varcomp(ctx, priors_var, priors, varcmp);
 
-    /*double lgL =*/ reml_iteration(ctx, Vi_X_out, Xt_Vi_X_i_out, Hi, Py, varcmp, priors_flag, no_constrain);
+    const double lgL = reml_iteration(ctx, Vi_X_out, Xt_Vi_X_i_out, Hi, Py, varcmp, priors_flag, no_constrain);
+    ctx.logL = lgL;
+    ctx.has_logL = true;
 
     // Compute fixed effects: b = (X'V^{-1}X)^{-1} X'V^{-1}y
     ctx.b = Xt_Vi_X_i_out * (Vi_X_out.transpose() * ctx.y);
@@ -1053,6 +1055,34 @@ void compute(RemlCtx& ctx,
     // Store variance components as a std::vector
     ctx.varcmp.resize(ctx.r_indx.size());
     for (int i = 0; i < (int)ctx.r_indx.size(); i++) ctx.varcmp[i] = varcmp[i];
+
+    // Export a minimal non-bivariate REML summary used by MLMA-style .hsq output.
+    const int m = static_cast<int>(ctx.r_indx.size());
+    ctx.varcmp_se.assign(m, 0.0);
+    for (int i = 0; i < m; ++i)
+        ctx.varcmp_se[i] = std::sqrt(std::max(0.0, Hi(i, i)));
+
+    const Eigen::Index me = static_cast<Eigen::Index>(m);
+    const double Vp = varcmp.head(me).sum();
+    const double VarVp = Hi.topLeftCorner(me, me).sum();
+    ctx.Vp = Vp;
+    ctx.Vp_se = std::sqrt(std::max(0.0, VarVp));
+
+    const int ngen = std::max(0, m - 1);
+    ctx.hsq.assign(ngen, 0.0);
+    ctx.hsq_se.assign(ngen, 0.0);
+    for (int i = 0; i < ngen; ++i) {
+        const double V1 = varcmp[i];
+        const double VarV1 = Hi(i, i);
+        const double cov12 = Hi.row(i).head(me).sum();
+        if (Vp > 0.0 && V1 > 0.0) {
+            const double ratio = V1 / Vp;
+            const double var_hsq = ratio * ratio *
+                (VarV1 / (V1 * V1) + VarVp / (Vp * Vp) - (2.0 * cov12) / (V1 * Vp));
+            ctx.hsq[i] = ratio;
+            ctx.hsq_se[i] = std::sqrt(std::max(0.0, var_hsq));
+        }
+    }
 
     // Ensure V^{-1} is available for downstream MLMA streaming.
     // If neither Woodbury nor Hutch++ path: calcu_Vi with factorize_only=true so
@@ -1072,6 +1102,9 @@ RemlState build_reml_state(const RemlCtx& ctx) {
 
     // Fixed-effects vector (double → float)
     rs.b = ctx.b.cast<float>();
+    rs.varcmp = Eigen::Map<const Eigen::VectorXd>(ctx.varcmp.data(),
+                                                  static_cast<Eigen::Index>(ctx.varcmp.size()))
+                    .cast<float>();
 
     if (ctx.Vi_use_woodbury) {
         // WoodburyMLMACache stores Uk_f as k×n (transposed) for GEMM efficiency.
@@ -1080,6 +1113,8 @@ RemlState build_reml_state(const RemlCtx& ctx) {
         rs.wb.ck_f         = ctx.ck.cast<float>();
         rs.wb.sqrt_ck_f    = rs.wb.ck_f.cwiseSqrt();
         rs.wb.sigma2_eff_f = static_cast<float>(ctx.sigma2_eff);
+        rs.dk_f            = ctx.dk.cast<float>();
+        rs.lambda_tail_f   = static_cast<float>(ctx.lambda_tail);
     } else if (ctx.Vi_use_llt) {
         // Vi_L holds the lower Cholesky factor L of V (from dpotrf).
         // Store it as float — the streaming code uses STRSV/STRSM directly,

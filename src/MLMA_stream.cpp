@@ -32,6 +32,9 @@
 #include <algorithm>
 #include <numeric>
 #include <cmath>
+#include <array>
+#include <charconv>
+#include <limits>
 #include <cstdio>
 #include <cstring>
 
@@ -57,6 +60,18 @@ namespace {
 // Shared GRM I/O helpers from include/grm_binary_io.hpp.
 using gcta_grm_io::read_grm_binary;
 using gcta_grm_io::match_ids_to_grm;
+
+template <typename T>
+string to_text(T x)
+{
+    std::array<char, 128> buf{};
+    auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(),
+                                   x, std::chars_format::general,
+                                   std::numeric_limits<T>::max_digits10);
+    if (ec == std::errc())
+        return string(buf.data(), static_cast<size_t>(ptr - buf.data()));
+    return to_string(x);
+}
 
 // RemlState is now defined in include/RemlState.hpp (shared with MLMA_loco).
 // The readRemlState() function below remains file-local (only MLMA_stream needs it).
@@ -99,6 +114,7 @@ RemlState readRemlState(const string& filename, bool no_adj_covar)
 
         double lambda_tail = 0.0;
         must_read(&lambda_tail, sizeof(double));
+        st.lambda_tail_f = static_cast<float>(lambda_tail);
 
         // Store as k×n (transposed) for cache-efficient GEMM in the hot MLMA loop.
         Eigen::MatrixXf Uk(k, hdr.n);
@@ -107,6 +123,7 @@ RemlState readRemlState(const string& filename, bool no_adj_covar)
 
         Eigen::VectorXf dk(k);
         must_read(dk.data(), static_cast<std::streamsize>(k * sizeof(float)));
+        st.dk_f = dk;
 
         if (!no_adj_covar) {
             st.b.resize(hdr.x_c);
@@ -118,6 +135,7 @@ RemlState readRemlState(const string& filename, bool no_adj_covar)
         Eigen::VectorXf vc(hdr.num_varcmp);
         must_read(vc.data(),
                   static_cast<std::streamsize>(hdr.num_varcmp * sizeof(float)));
+        st.varcmp = vc;
 
         const double sg2    = static_cast<double>(vc[0]);
         const double se2    = static_cast<double>(vc[hdr.num_varcmp - 1]);
@@ -157,7 +175,135 @@ RemlState readRemlState(const string& filename, bool no_adj_covar)
         must_read(st.b.data(),
                   static_cast<std::streamsize>(hdr.x_c * sizeof(float)));
     }
+
+    st.varcmp.resize(hdr.num_varcmp);
+    must_read(st.varcmp.data(),
+              static_cast<std::streamsize>(hdr.num_varcmp * sizeof(float)));
     return st;
+}
+
+void writeRemlState(const string& filename, const RemlState& st, bool no_adj_covar)
+{
+    std::ofstream out(filename, std::ios::binary);
+    if (!out.is_open())
+        LOGGER.e(0, "cannot open [" + filename + "] for writing.");
+
+    if (st.is_woodbury) {
+        struct Header {
+            char    magic[4] = {'T', 'U', 'N', 'A'};
+            int32_t n = 0, x_c = 0, num_varcmp = 0, num_r_indx = 0;
+        } hdr;
+        hdr.n = st.n;
+        hdr.x_c = st.x_c;
+        hdr.num_varcmp = static_cast<int32_t>(st.varcmp.size());
+        hdr.num_r_indx = static_cast<int32_t>(st.varcmp.size());
+        out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+
+        const int32_t k = static_cast<int32_t>(st.wb.ck_f.size());
+        out.write(reinterpret_cast<const char*>(&k), sizeof(int32_t));
+
+        const double lambda_tail = static_cast<double>(st.lambda_tail_f);
+        out.write(reinterpret_cast<const char*>(&lambda_tail), sizeof(double));
+
+        if (st.wb.Uk_f.rows() != k || st.wb.Uk_f.cols() != st.n)
+            LOGGER.e(0, "invalid Woodbury REML state dimensions before save.");
+        if (st.dk_f.size() != k)
+            LOGGER.e(0, "invalid Woodbury eigenvalue vector before save.");
+
+        out.write(reinterpret_cast<const char*>(st.wb.Uk_f.data()),
+                  static_cast<std::streamsize>(static_cast<size_t>(st.n) * k * sizeof(float)));
+        out.write(reinterpret_cast<const char*>(st.dk_f.data()),
+                  static_cast<std::streamsize>(k * sizeof(float)));
+
+        if (!no_adj_covar) {
+            if (st.b.size() != st.x_c)
+                LOGGER.e(0, "invalid fixed-effect vector length before save.");
+            out.write(reinterpret_cast<const char*>(st.b.data()),
+                      static_cast<std::streamsize>(st.x_c * sizeof(float)));
+        }
+
+        out.write(reinterpret_cast<const char*>(st.varcmp.data()),
+                  static_cast<std::streamsize>(hdr.num_varcmp * sizeof(float)));
+    } else {
+        struct Header {
+            char    magic[4] = {'G', 'O', 'B', 'Y'};
+            int32_t n = 0, x_c = 0, num_varcmp = 0, num_r_indx = 0;
+        } hdr;
+        hdr.n = st.n;
+        hdr.x_c = st.x_c;
+        hdr.num_varcmp = static_cast<int32_t>(st.varcmp.size());
+        hdr.num_r_indx = static_cast<int32_t>(st.varcmp.size());
+        out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+
+        Eigen::MatrixXf Vi_f;
+        if (st.is_llt) {
+            if (st.Vi_L_f.rows() != st.n || st.Vi_L_f.cols() != st.n)
+                LOGGER.e(0, "invalid LLT REML state dimensions before save.");
+            Vi_f = Eigen::MatrixXf::Identity(st.n, st.n);
+            st.Vi_L_f.triangularView<Eigen::Lower>().solveInPlace(Vi_f);
+            st.Vi_L_f.triangularView<Eigen::Lower>().transpose().solveInPlace(Vi_f);
+        } else {
+            Vi_f = st.Vi;
+        }
+
+        const size_t tri = static_cast<size_t>(st.n) * (st.n + 1) / 2;
+        vector<float> packed(tri);
+        size_t idx = 0;
+        for (int32_t j = 0; j < st.n; ++j)
+            for (int32_t i = j; i < st.n; ++i)
+                packed[idx++] = Vi_f(i, j);
+        out.write(reinterpret_cast<const char*>(packed.data()),
+                  static_cast<std::streamsize>(tri * sizeof(float)));
+
+        if (!no_adj_covar) {
+            if (st.b.size() != st.x_c)
+                LOGGER.e(0, "invalid fixed-effect vector length before save.");
+            out.write(reinterpret_cast<const char*>(st.b.data()),
+                      static_cast<std::streamsize>(st.x_c * sizeof(float)));
+        }
+
+        out.write(reinterpret_cast<const char*>(st.varcmp.data()),
+                  static_cast<std::streamsize>(hdr.num_varcmp * sizeof(float)));
+    }
+
+    out.flush();
+    if (!out)
+        LOGGER.e(0, "write error on [" + filename + "] — disk full or I/O failure.");
+}
+
+void write_hsq_from_ctx(const string& out_prefix, const RemlCtx& ctx)
+{
+    const string hsq_file = out_prefix + ".hsq";
+    std::ofstream o_hsq(hsq_file);
+    if (!o_hsq) LOGGER.e(0, "cannot open [" + hsq_file + "] for writing.");
+
+    o_hsq << "Source\tVariance\tSE\n";
+    const int m = static_cast<int>(ctx.varcmp.size());
+    for (int i = 0; i < m; ++i) {
+        const string name = (i < static_cast<int>(ctx.var_name.size()))
+            ? ctx.var_name[i]
+            : (i + 1 == m ? "V(e)" : ("V(G" + to_string(i + 1) + ")"));
+        const double se = (i < static_cast<int>(ctx.varcmp_se.size())) ? ctx.varcmp_se[i] : 0.0;
+        o_hsq << name << "\t" << to_text(ctx.varcmp[i]) << "\t" << to_text(se) << "\n";
+    }
+
+    o_hsq << "Vp\t" << to_text(ctx.Vp) << "\t" << to_text(ctx.Vp_se) << "\n";
+
+    const int ngen = static_cast<int>(ctx.hsq.size());
+    for (int i = 0; i < ngen; ++i) {
+        const string hname = (i < static_cast<int>(ctx.hsq_name.size()))
+            ? ctx.hsq_name[i]
+            : ("V(G" + to_string(i + 1) + ")/Vp");
+        const double hse = (i < static_cast<int>(ctx.hsq_se.size())) ? ctx.hsq_se[i] : 0.0;
+        o_hsq << hname << "\t" << to_text(ctx.hsq[i]) << "\t" << to_text(hse) << "\n";
+    }
+
+    if (ctx.has_logL)
+        o_hsq << "logL\t" << to_text(ctx.logL) << "\n";
+
+    o_hsq << "n\t" << ctx.n << "\n";
+    o_hsq.close();
+    LOGGER.i(0, "Summary REML results saved to [" + hsq_file + "].");
 }
 
 } // anonymous namespace
@@ -176,6 +322,8 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
     const bool has_mlma_stream = options_in.find("--mlma-stream") != options_in.end();
     const bool has_load_reml   = options_in.find("--load-reml")   != options_in.end()
                                   && !options_in["--load-reml"].empty();
+    const bool has_save_reml   = options_in.find("--save-reml")   != options_in.end()
+                                  && !options_in["--save-reml"].empty();
 
     auto capture_common_reml_flags = [&]() {
         if (options_in.find("--reml-alg") != options_in.end()
@@ -196,6 +344,14 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
 
     if (!has_mlma_stream)
         return 0;
+
+    if (has_load_reml && has_save_reml)
+        LOGGER.e(0, "--mlma-stream does not allow --load-reml with --save-reml.");
+
+    if (has_save_reml) {
+        options["save_reml"] = options_in["--save-reml"][0];
+        options_in.erase("--save-reml");
+    }
 
     capture_common_reml_flags();
 
@@ -481,7 +637,21 @@ void MLMA::processMain()
             for (size_t ci = 0; ci < ctx.varcmp.size(); ++ci)
                 LOGGER.i(0, "  " + ctx.var_name[ci] + " = " + to_string(ctx.varcmp[ci]));
 
+            // Reuse the already-computed REML summary to write .hsq (same feature as --mlma).
+            write_hsq_from_ctx(out_prefix, ctx);
+
             state = reml::build_reml_state(ctx);
+
+            if (options.count("save_reml")) {
+                const string save_reml_file = options.at("save_reml");
+                LOGGER.i(0, "Saving REML state to [" + save_reml_file + "] ...");
+                writeRemlState(save_reml_file, state, no_adj_covar);
+                LOGGER.i(0, "REML estimation completed. Use --load-reml to perform association tests.");
+                delete geno;
+                delete marker;
+                delete pheno;
+                continue;
+            }
 
             // y_adj = y - X*b
             {

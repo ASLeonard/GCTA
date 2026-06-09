@@ -24,5 +24,8 @@ struct RemlState {
     Eigen::MatrixXf Vi;      // GOBY: full n×n V^{-1}  (is_woodbury=false, is_llt=false)
     Eigen::MatrixXf Vi_L_f;  // LLT:  lower Cholesky of V (is_llt=true)
     WoodburyMLMACache wb;    // TUNA: Woodbury low-rank factors (is_woodbury=true)
+    Eigen::VectorXf dk_f;    // TUNA: top-k eigenvalues of K (needed for save-reml)
+    float lambda_tail_f = 0.0f; // TUNA: tail mean eigenvalue of K
     Eigen::VectorXf b;       // fixed-effect coefficients (x_c elements)
+    Eigen::VectorXf varcmp;  // variance components from REML state file
 };
