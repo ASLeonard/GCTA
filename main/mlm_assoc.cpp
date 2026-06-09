@@ -105,10 +105,12 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     
     std::vector<std::string> uni_id;
     std::map<std::string, int> uni_id_map;
+    compact_indi_data();
     make_uni_id(uni_id, uni_id_map);
     _n=_keep.size();
     if(_n<1) LOGGER.e(0, "no individual is in common in the input files.");
     LOGGER<<_n<<" individuals are in common in these files."<<std::endl;
+    //for (auto i : _keep) LOGGER << "\t" << _fid[i] << "\t" << _pid[i] << std::endl;
     
     // construct model terms
     _y.setZero(_n);
@@ -552,7 +554,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
 
     int k = 0, l = 0;
     // The STRMM/STRSM overwrites X_block in-place after all operations using the
-    // original genotype data are complete (~600 MB savings vs a separate UX_block).
+    // original genotype data are complete.
     Eigen::MatrixXf X_block(n, max_block_size);
     std::vector<int> indx;
     indx.reserve(max_block_size);

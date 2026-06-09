@@ -170,12 +170,17 @@ int MLMALoco::registerOption(map<string, vector<string>>& options_in)
         options_in.erase("--log-pval");
     }
 
-    // --reml-woodbury [k]  (k optional; -1 = auto-k)
+    // --reml-woodbury [k]  (k optional; -1 = auto-k, -2 = EIG99)
     if (options_in.find("--reml-woodbury") != options_in.end()) {
         const auto& vals = options_in["--reml-woodbury"];
-        if (!vals.empty() && !vals[0].empty())
-            options_d["woodbury_rank"] = std::stod(vals[0]);
-        else
+        if (!vals.empty() && !vals[0].empty()) {
+            if (vals[0] == "EIG99")
+                options_d["woodbury_rank"] = -2.0;  // Eigenvalue mass k
+            else if (vals[0] == "auto")
+                options_d["woodbury_rank"] = -1.0;  // auto-k
+            else
+                options_d["woodbury_rank"] = std::stod(vals[0]);
+        } else
             options_d["woodbury_rank"] = -1.0;   // auto-k
         options_in.erase("--reml-woodbury");
     }
@@ -279,11 +284,7 @@ void MLMALoco::processMain()
                 LOGGER.i(0, to_string(remain_index.size()) +
                             " overlapping individuals with non-missing covariate data.");
                 pheno->filter_keep_index(remain_index);
-                // reorder phenos_vec
-                vector<double> phenos2(remain_index.size());
-                for (size_t i = 0; i < remain_index.size(); ++i)
-                    phenos2[i] = phenos_vec[remain_index[i]];
-                phenos_vec = std::move(phenos2);
+                phenos_vec = compact_sample_vector(phenos_vec, remain_index);
             } else if (covar.hasCovar()) {
                 LOGGER.e(0, "no overlapping individuals with non-missing covariate data.");
             } else {
@@ -292,16 +293,7 @@ void MLMALoco::processMain()
             }
 
             const int n_new = static_cast<int>(pheno->count_keep());
-            // Rebuild pheno_ids after filtering
-            pheno_ids.clear();
-            phenos_vec.resize(n_new);
-            {
-                vector<string> all_ids_new;
-                vector<double> all_pheno_new;
-                pheno->get_pheno(all_ids_new, all_pheno_new);
-                pheno_ids = std::move(all_ids_new);
-                phenos_vec = std::move(all_pheno_new);
-            }
+            pheno->get_pheno(pheno_ids, phenos_vec);
 
             if (has_covar) {
                 vector<string> final_ids = pheno->get_id(0, n_new - 1, "\t");
@@ -339,6 +331,10 @@ void MLMALoco::processMain()
         const int n = static_cast<int>(final_keep.size());
         LOGGER << "[LOCO] After GRM intersection: " << n << " individuals for analysis." << std::endl;
 
+        pheno_ids  = compact_sample_vector(pheno_ids, final_keep);
+        phenos_vec = compact_sample_vector(phenos_vec, final_keep);
+        X_design_full = compact_sample_rows(X_design_full, final_keep);
+
         // Subset G_all to the n analysis individuals.
         // Fast path: if GRM sample == analysis sample (in order), move instead of copy.
         Eigen::MatrixXd G_all_n;
@@ -367,16 +363,14 @@ void MLMALoco::processMain()
 
         // Subset y and X
         Eigen::VectorXd y_vec(n);
-        Eigen::MatrixXd X_mat(n, x_c);
         for (int i = 0; i < n; ++i) {
-            y_vec[i] = phenos_vec[final_keep[i]];
-            X_mat.row(i) = X_design_full.row(final_keep[i]);
+            y_vec[i] = phenos_vec[i];
         }
+        Eigen::MatrixXd X_mat = X_design_full;
         X_design_full.resize(0, 0);  // free
 
         // Also build the final analysis IDs (for GRM subset matching per chr)
-        vector<string> analysis_ids(n);
-        for (int i = 0; i < n; ++i) analysis_ids[i] = pheno_ids[final_keep[i]];
+        vector<string> analysis_ids = pheno_ids;
 
         // ---- 6. Open output file ----
         const string out_file = out_prefix + ".loco.mlma";
@@ -487,6 +481,8 @@ void MLMALoco::processMain()
             ctx.y   = y_vec;
             ctx.A.resize(2);
             ctx.A[0] = std::move(G_chr);  // consumed by compute_woodbury_basis or used as-is
+            ctx.grm_N.resize(1, 1);
+            ctx.grm_N(0, 0) = m_loco;
             // ctx.A[1] left default (size 0 == identity convention for residual)
             ctx.r_indx = {0, 1};
             ctx.var_name = {"V(G)", "V(e)"};

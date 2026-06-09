@@ -99,4 +99,14 @@ struct RemlCtx {
     // ── Output (populated by reml::compute()) ────────────────────────────────
     std::vector<double> varcmp; // variance components in r_indx order
     RemlVec b;                  // fixed-effect estimates (X_c elements)
+
+    // Minimal REML summary for MLMA-style .hsq output.
+    // Mirrors the non-bivariate mlmassoc summary fields in main/est_hsq.cpp.
+    std::vector<double> varcmp_se; // SE for each variance component (sqrt(diag(Hi)))
+    double Vp = 0.0;               // total phenotypic variance
+    double Vp_se = 0.0;            // SE(Vp)
+    std::vector<double> hsq;       // V(G_i)/Vp for non-residual components
+    std::vector<double> hsq_se;    // SE for hsq entries
+    double logL = 0.0;             // converged REML log-likelihood
+    bool has_logL = false;
 };

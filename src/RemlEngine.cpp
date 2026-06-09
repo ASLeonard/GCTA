@@ -836,7 +836,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     if (ctx.A[ctx.r_indx[0]].size() == 0)
         LOGGER.e(0, "--reml-woodbury: GRM component is identity; cannot compute basis.");
 
-    const bool auto_k = (ctx.woodbury_rank < 0);
+    const bool auto_k = (ctx.woodbury_rank == -1.0);
+    const bool EIG99_k = (ctx.woodbury_rank == -2.0);
     const int  n      = ctx.n;
     int k = ctx.woodbury_rank;
 
@@ -844,8 +845,17 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     if (auto_k) {
         k_svd = (ctx.woodbury_k_max > 0) ? ctx.woodbury_k_max : std::min(n - 1, 1200);
         LOGGER << "\nComputing Woodbury basis (auto-k, k_max=" << k_svd
-               << ", buffer=" << ctx.woodbury_buffer_factor << ") ..." << std::endl;
-    } else {
+            << ", buffer=" << ctx.woodbury_buffer_factor << ") ..." << std::endl;
+    } else if (EIG99_k) {                                                        // NEW
+        // Conservative upper bound: 2 * Me_theoretical for cattle (Ne~100, L~25M).
+        // Override with woodbury_k_max if the user supplied one.
+        const int me_bound = (ctx.woodbury_k_max > 0)
+                            ? ctx.woodbury_k_max
+                            : std::min(n - 1, 25000);
+        k_svd = me_bound;
+        LOGGER << "\nComputing Woodbury basis (EIG99-k, k_max=" << k_svd
+            << ") ..." << std::endl;
+    } else {                                                                      // unchanged
         if (k <= 0)
             LOGGER.e(0, "--reml-woodbury rank must be positive for fixed-k mode.");
         k_svd = k;
@@ -917,6 +927,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         double M = 0.0;
         if (ctx.grm_N.rows() == n && ctx.grm_N.cols() == n)
             M = ctx.grm_N.diagonal().mean();
+        else if (ctx.grm_N.size() == 1)
+            M = ctx.grm_N(0, 0);
         if (M <= 0.0)
             LOGGER.e(0, "--reml-woodbury auto: cannot determine SNP count. Use --reml-woodbury <k>.");
         const double gamma       = static_cast<double>(n) / M;
@@ -932,6 +944,33 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             LOGGER.w(0, "Woodbury auto-k: buffer-implied k=" + std::to_string(k_buffered)
                      + " exceeds k_max=" + std::to_string(k_svd) + "; clamped to k_max.");
     }
+    else if (EIG99_k) {                                                        // NEW BLOCK
+        const double trace_K_full = K_dbl.diagonal().sum();
+        const double target_mass  = 0.99 * trace_K_full;
+        double cumulative = 0.0;
+        int k_EIG99 = k_svd;                  // fallback: use all computed eigenmodes
+        for (int i = 0; i < static_cast<int>(eval_full.size()); ++i) {
+            cumulative += eval_full[i];
+            if (cumulative >= target_mass) {
+                k_EIG99 = i + 1;
+                break;
+            }
+        }
+        const double rho = cumulative / trace_K_full;
+        // Apply a small buffer (default woodbury_buffer_factor, but floor at 1.05)
+        const double buf = std::max(1.05, ctx.woodbury_buffer_factor);
+        const int k_buffered = std::min(k_svd,
+                                        static_cast<int>(std::ceil(k_EIG99 * buf)));
+        k = std::max(20, k_buffered);
+        LOGGER << "EIG99: trace(K)=" << trace_K_full
+            << ", cumulative mass at k=" << k_EIG99
+            << " is rho=" << rho
+            << ", using k=" << k
+            << " (buffer=" << buf << ")" << std::endl;
+        if (k_EIG99 == k_svd)
+            LOGGER.w(0, "Woodbury EIG99: 99% mass threshold not reached within k_max="
+                    + std::to_string(k_svd) + "; increase --reml-woodbury-k-max.");
+    }
 
     Eigen::VectorXd eval = eval_full.head(k);
     Eigen::MatrixXd evec = evec_full.leftCols(k);
@@ -943,7 +982,9 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         ctx.lambda_tail = 0.0;
     }
 
-    {
+    if (EIG99_k)
+        ctx.tail_d_var = 0.0;  // tail mass < 1% by construction; correction negligible
+    else {
         double diag_sq = K_dbl.diagonal().squaredNorm();
         double off_sq  = 0.0;
         #pragma omp parallel for reduction(+:off_sq) schedule(static)
@@ -1004,7 +1045,9 @@ void compute(RemlCtx& ctx,
     RemlVec varcmp;
     init_varcomp(ctx, priors_var, priors, varcmp);
 
-    /*double lgL =*/ reml_iteration(ctx, Vi_X_out, Xt_Vi_X_i_out, Hi, Py, varcmp, priors_flag, no_constrain);
+    const double lgL = reml_iteration(ctx, Vi_X_out, Xt_Vi_X_i_out, Hi, Py, varcmp, priors_flag, no_constrain);
+    ctx.logL = lgL;
+    ctx.has_logL = true;
 
     // Compute fixed effects: b = (X'V^{-1}X)^{-1} X'V^{-1}y
     ctx.b = Xt_Vi_X_i_out * (Vi_X_out.transpose() * ctx.y);
@@ -1012,6 +1055,34 @@ void compute(RemlCtx& ctx,
     // Store variance components as a std::vector
     ctx.varcmp.resize(ctx.r_indx.size());
     for (int i = 0; i < (int)ctx.r_indx.size(); i++) ctx.varcmp[i] = varcmp[i];
+
+    // Export a minimal non-bivariate REML summary used by MLMA-style .hsq output.
+    const int m = static_cast<int>(ctx.r_indx.size());
+    ctx.varcmp_se.assign(m, 0.0);
+    for (int i = 0; i < m; ++i)
+        ctx.varcmp_se[i] = std::sqrt(std::max(0.0, Hi(i, i)));
+
+    const Eigen::Index me = static_cast<Eigen::Index>(m);
+    const double Vp = varcmp.head(me).sum();
+    const double VarVp = Hi.topLeftCorner(me, me).sum();
+    ctx.Vp = Vp;
+    ctx.Vp_se = std::sqrt(std::max(0.0, VarVp));
+
+    const int ngen = std::max(0, m - 1);
+    ctx.hsq.assign(ngen, 0.0);
+    ctx.hsq_se.assign(ngen, 0.0);
+    for (int i = 0; i < ngen; ++i) {
+        const double V1 = varcmp[i];
+        const double VarV1 = Hi(i, i);
+        const double cov12 = Hi.row(i).head(me).sum();
+        if (Vp > 0.0 && V1 > 0.0) {
+            const double ratio = V1 / Vp;
+            const double var_hsq = ratio * ratio *
+                (VarV1 / (V1 * V1) + VarVp / (Vp * Vp) - (2.0 * cov12) / (V1 * Vp));
+            ctx.hsq[i] = ratio;
+            ctx.hsq_se[i] = std::sqrt(std::max(0.0, var_hsq));
+        }
+    }
 
     // Ensure V^{-1} is available for downstream MLMA streaming.
     // If neither Woodbury nor Hutch++ path: calcu_Vi with factorize_only=true so
@@ -1031,6 +1102,9 @@ RemlState build_reml_state(const RemlCtx& ctx) {
 
     // Fixed-effects vector (double → float)
     rs.b = ctx.b.cast<float>();
+    rs.varcmp = Eigen::Map<const Eigen::VectorXd>(ctx.varcmp.data(),
+                                                  static_cast<Eigen::Index>(ctx.varcmp.size()))
+                    .cast<float>();
 
     if (ctx.Vi_use_woodbury) {
         // WoodburyMLMACache stores Uk_f as k×n (transposed) for GEMM efficiency.
@@ -1039,6 +1113,8 @@ RemlState build_reml_state(const RemlCtx& ctx) {
         rs.wb.ck_f         = ctx.ck.cast<float>();
         rs.wb.sqrt_ck_f    = rs.wb.ck_f.cwiseSqrt();
         rs.wb.sigma2_eff_f = static_cast<float>(ctx.sigma2_eff);
+        rs.dk_f            = ctx.dk.cast<float>();
+        rs.lambda_tail_f   = static_cast<float>(ctx.lambda_tail);
     } else if (ctx.Vi_use_llt) {
         // Vi_L holds the lower Cholesky factor L of V (from dpotrf).
         // Store it as float — the streaming code uses STRSV/STRSM directly,

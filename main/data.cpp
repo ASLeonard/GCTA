@@ -553,6 +553,85 @@ void gcta::update_fam(std::vector<int> &rindi) {
     }
 }
 
+// Compact individual-major data to the current _keep order and reset _keep to
+// identity. This physically discards samples outside _keep and enables dense
+// row access for downstream paths.
+void gcta::compact_indi_data() {
+    const int n_old = _indi_num;
+    const int n_new = static_cast<int>(_keep.size());
+    if (n_new < 1) return;
+
+    bool identity_keep = (n_new == n_old);
+    if (identity_keep) {
+        for (int i = 0; i < n_new; i++) {
+            if (_keep[i] != i) {
+                identity_keep = false;
+                break;
+            }
+        }
+    }
+    if (identity_keep) return;
+
+    const std::vector<int> keep_old(_keep);
+
+    auto compact_vec_string = [&](std::vector<std::string> &v) {
+        std::vector<std::string> out;
+        out.resize(n_new);
+        for (int i = 0; i < n_new; i++) out[i] = std::move(v[keep_old[i]]);
+        v = std::move(out);
+    };
+    auto compact_vec_int = [&](std::vector<int> &v) {
+        std::vector<int> out(n_new);
+        for (int i = 0; i < n_new; i++) out[i] = v[keep_old[i]];
+        v = std::move(out);
+    };
+    auto compact_vec_double = [&](std::vector<double> &v) {
+        std::vector<double> out(n_new);
+        for (int i = 0; i < n_new; i++) out[i] = v[keep_old[i]];
+        v = std::move(out);
+    };
+
+    compact_vec_string(_fid);
+    compact_vec_string(_pid);
+    compact_vec_string(_fa_id);
+    compact_vec_string(_mo_id);
+    compact_vec_int(_sex);
+    compact_vec_double(_pheno);
+
+    if (_varcmp_Py.size() > 0 && _varcmp_Py.rows() == n_old) {
+        eigenMatrix varcmp_buf(n_new, _varcmp_Py.cols());
+        for (int i = 0; i < n_new; i++) varcmp_buf.row(i) = _varcmp_Py.row(keep_old[i]);
+        _varcmp_Py.swap(varcmp_buf);
+    }
+
+    if (_dosage_flag && _geno_dose.size() > 0 && _geno_dose.rows() == n_old) {
+        Eigen::MatrixXf dose_buf(n_new, _geno_dose.cols());
+        for (int i = 0; i < n_new; i++) dose_buf.row(i) = _geno_dose.row(keep_old[i]);
+        _geno_dose = std::move(dose_buf);
+    }
+
+    if (!_dosage_flag && !_snp_1.empty()) {
+        for (size_t j = 0; j < _snp_1.size(); j++) {
+            if (static_cast<int>(_snp_1[j].size()) != n_old || static_cast<int>(_snp_2[j].size()) != n_old) continue;
+            std::vector<bool> s1_buf(n_new), s2_buf(n_new);
+            for (int i = 0; i < n_new; i++) {
+                s1_buf[i] = _snp_1[j][keep_old[i]];
+                s2_buf[i] = _snp_2[j][keep_old[i]];
+            }
+            _snp_1[j] = std::move(s1_buf);
+            _snp_2[j] = std::move(s2_buf);
+        }
+    }
+
+    _indi_num = n_new;
+    _keep.resize(n_new);
+    _id_map.clear();
+    for (int i = 0; i < n_new; i++) {
+        _keep[i] = i;
+        _id_map.insert({_fid[i] + ":" + _pid[i], i});
+    }
+}
+
 // Compact _geno_dose column (SNP) dimension so that _include[j]==j after this call.
 // All loaders store _geno_dose(dense_indi, dense_snp_within_include); after a
 // post-load MAF/Rsq filter _include becomes sparse.  This repacks columns to
@@ -1875,7 +1954,6 @@ void gcta::calcu_maf()
     }
 }
 
-//TODO: better name?
 void gcta::mu_func(int j, std::vector<double> &fac) {
     int i = 0;
     double fcount = 0.0, f_buf = 0.0;
@@ -1883,8 +1961,9 @@ void gcta::mu_func(int j, std::vector<double> &fac) {
     const double mu_acc = 0.0;
     if (_dosage_flag) {
         for (i = 0; i < _keep.size(); i++) {
-            if (_geno_dose(i, j) < DOSAGE_NA) {
-                _mu[snp_idx] += fac[i] * _geno_dose(i, j);
+            const int ki = _keep[i];
+            if (_geno_dose(ki, j) < DOSAGE_NA) {
+                _mu[snp_idx] += fac[i] * _geno_dose(ki, j);
                 fcount += fac[i];
             }
         }
@@ -2338,14 +2417,16 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
             }
         }
 
-        // After compact_dosage_data(): _keep[i]==i, _include[j]==j; direct access.
+        // compact_dosage_data() compacts SNP columns only; _keep can still be a
+        // non-identity subset after phenotype/covariate intersection.
         #pragma omp parallel for schedule(static)
         for (int i = 0; i < n; i++) {
+            const int ki = _keep[i];
             for (int j = 0; j < m; j++) {
                 const int k = snp_indx[j];
-                if (_geno_dose(i, k) < DOSAGE_NA) {
-                    const float v = (_allele1[k] == _ref_A[k]) ? _geno_dose(i, k)
-                                                                : 2.0f - _geno_dose(i, k);
+                if (_geno_dose(ki, k) < DOSAGE_NA) {
+                    const float v = (_allele1[k] == _ref_A[k]) ? _geno_dose(ki, k)
+                                                                : 2.0f - _geno_dose(ki, k);
                     X(i,j) = (v - static_cast<float>(_mu[k])) * sd_inv[j];
                 } else {
                     X(i,j) = 0.0f;
@@ -2353,8 +2434,8 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
             }
         }
     } else {
-        // After compact_snp_data(): _include[j]==j and _keep[i]==i, so snp_indx[j]
-        // is the raw _snp_1 index directly.
+        // After compact_snp_data(): _include[j]==j, while _keep can still be a
+        // non-identity subset. Always remap row i through _keep[i].
         // When _make_XMat_no_compact=true (LOCO loop), compaction is skipped and
         // _snp_1 retains its original BIM order; snp_indx values are positions
         // within _include, so we must map through _include to get the raw index.
@@ -2387,8 +2468,9 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
             const auto& s2    = _snp_2[k];
             auto col = X.col(j);
             for (int i = 0; i < n; i++) {
-                if (!s1[i] || s2[i]) {
-                    float geno = static_cast<float>(s1[i]) + static_cast<float>(s2[i]);
+                const int ki = _keep[i];
+                if (!s1[ki] || s2[ki]) {
+                    float geno = static_cast<float>(s1[ki]) + static_cast<float>(s2[ki]);
                     if (flip) geno = 2.0f - geno;
                     col(i) = (geno - mu_k) * scale;
                 } else {
@@ -2431,10 +2513,11 @@ bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bo
         const float psq  = snp_psq[j];
         auto col = X.col(j);
         if (_dosage_flag) {
-            // After compact_dosage_data(): _keep[i]==i; direct access.
+            // compact_dosage_data() compacts SNP columns only; keep row remapping.
             for (int i = 0; i < n; i++) {
-                if (_geno_dose(i, k) < DOSAGE_NA) {
-                    float g = flip ? 2.0f - _geno_dose(i, k) : _geno_dose(i, k);
+                const int ki = _keep[i];
+                if (_geno_dose(ki, k) < DOSAGE_NA) {
+                    float g = flip ? 2.0f - _geno_dose(ki, k) : _geno_dose(ki, k);
                     if      (g < 0.5f) g = 0.0f;
                     else if (g < 1.5f) g = mu_k;
                     else               g = 2.0f * mu_k - 2.0f;
@@ -2444,12 +2527,13 @@ bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bo
                 }
             }
         } else {
-            // After compaction: _keep[i]==i, direct sequential access
+            // After compaction SNP indices are dense; individual rows still map via _keep.
             const auto& s1 = _snp_1[k];
             const auto& s2 = _snp_2[k];
             for (int i = 0; i < n; i++) {
-                if (!s1[i] || s2[i]) {
-                    float g = static_cast<float>(s1[i]) + static_cast<float>(s2[i]);
+                const int ki = _keep[i];
+                if (!s1[ki] || s2[ki]) {
+                    float g = static_cast<float>(s1[ki]) + static_cast<float>(s2[ki]);
                     if (flip) g = 2.0f - g;
                     if      (g < 0.5f) g = 0.0f;
                     else if (g < 1.5f) g = mu_k;
