@@ -277,6 +277,7 @@ private:
 
     void update_bim(std::vector<int> &rsnp);
     void update_fam(std::vector<int> &rindi);
+    void compact_indi_data();
     void compact_snp_data();
     void compact_dosage_data();
 

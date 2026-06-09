@@ -553,6 +553,85 @@ void gcta::update_fam(std::vector<int> &rindi) {
     }
 }
 
+// Compact individual-major data to the current _keep order and reset _keep to
+// identity. This physically discards samples outside _keep and enables dense
+// row access for downstream paths.
+void gcta::compact_indi_data() {
+    const int n_old = _indi_num;
+    const int n_new = static_cast<int>(_keep.size());
+    if (n_new < 1) return;
+
+    bool identity_keep = (n_new == n_old);
+    if (identity_keep) {
+        for (int i = 0; i < n_new; i++) {
+            if (_keep[i] != i) {
+                identity_keep = false;
+                break;
+            }
+        }
+    }
+    if (identity_keep) return;
+
+    const std::vector<int> keep_old(_keep);
+
+    auto compact_vec_string = [&](std::vector<std::string> &v) {
+        std::vector<std::string> out;
+        out.resize(n_new);
+        for (int i = 0; i < n_new; i++) out[i] = std::move(v[keep_old[i]]);
+        v = std::move(out);
+    };
+    auto compact_vec_int = [&](std::vector<int> &v) {
+        std::vector<int> out(n_new);
+        for (int i = 0; i < n_new; i++) out[i] = v[keep_old[i]];
+        v = std::move(out);
+    };
+    auto compact_vec_double = [&](std::vector<double> &v) {
+        std::vector<double> out(n_new);
+        for (int i = 0; i < n_new; i++) out[i] = v[keep_old[i]];
+        v = std::move(out);
+    };
+
+    compact_vec_string(_fid);
+    compact_vec_string(_pid);
+    compact_vec_string(_fa_id);
+    compact_vec_string(_mo_id);
+    compact_vec_int(_sex);
+    compact_vec_double(_pheno);
+
+    if (_varcmp_Py.size() > 0 && _varcmp_Py.rows() == n_old) {
+        eigenMatrix varcmp_buf(n_new, _varcmp_Py.cols());
+        for (int i = 0; i < n_new; i++) varcmp_buf.row(i) = _varcmp_Py.row(keep_old[i]);
+        _varcmp_Py.swap(varcmp_buf);
+    }
+
+    if (_dosage_flag && _geno_dose.size() > 0 && _geno_dose.rows() == n_old) {
+        Eigen::MatrixXf dose_buf(n_new, _geno_dose.cols());
+        for (int i = 0; i < n_new; i++) dose_buf.row(i) = _geno_dose.row(keep_old[i]);
+        _geno_dose = std::move(dose_buf);
+    }
+
+    if (!_dosage_flag && !_snp_1.empty()) {
+        for (size_t j = 0; j < _snp_1.size(); j++) {
+            if (static_cast<int>(_snp_1[j].size()) != n_old || static_cast<int>(_snp_2[j].size()) != n_old) continue;
+            std::vector<bool> s1_buf(n_new), s2_buf(n_new);
+            for (int i = 0; i < n_new; i++) {
+                s1_buf[i] = _snp_1[j][keep_old[i]];
+                s2_buf[i] = _snp_2[j][keep_old[i]];
+            }
+            _snp_1[j] = std::move(s1_buf);
+            _snp_2[j] = std::move(s2_buf);
+        }
+    }
+
+    _indi_num = n_new;
+    _keep.resize(n_new);
+    _id_map.clear();
+    for (int i = 0; i < n_new; i++) {
+        _keep[i] = i;
+        _id_map.insert({_fid[i] + ":" + _pid[i], i});
+    }
+}
+
 // Compact _geno_dose column (SNP) dimension so that _include[j]==j after this call.
 // All loaders store _geno_dose(dense_indi, dense_snp_within_include); after a
 // post-load MAF/Rsq filter _include becomes sparse.  This repacks columns to
