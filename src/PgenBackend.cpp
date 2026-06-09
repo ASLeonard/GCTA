@@ -135,12 +135,17 @@ try {
             int rawIndex  = static_cast<int>(rawIndices[finishedMarker + i]);
             int lag_index = rawIndex - g_.baseIndexLookup[fileIndex];
             int al_idx    = g_.marker->isEffecRevRaw(rawIndex) ? 0 : 1;
+            uintptr_t* slot =
+                block.buf.data() + static_cast<std::size_t>(i) * stride;
             DosageBuf dbuf = DosageBuf::from(
-                block.buf.data() + static_cast<std::size_t>(i) * stride,
+                slot,
                 g_.pgenGenoPtrSize,
                 g_.pgenDosagePresentPtrSize,
                 g_.pgenDosageMainPtrSize);
             reader.ReadDosage(dbuf, lag_index, al_idx);
+            // Legacy getGenoDouble_pgen() still reads dosage_ct from the last
+            // uintptr_t of each flat marker slot.
+            slot[stride - 1] = static_cast<uintptr_t>(dbuf.dosage_ct);
         }
 
         co_await stdexec::schedule(cpu_sched);
