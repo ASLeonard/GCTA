@@ -624,6 +624,7 @@ void gcta::compact_indi_data() {
     }
 
     _indi_num = n_new;
+    _mu.clear();   // force recomputation on the compacted sample set
     _keep.resize(n_new);
     _id_map.clear();
     for (int i = 0; i < n_new; i++) {

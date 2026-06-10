@@ -395,16 +395,28 @@ void gcta::read_grm_bin(std::string grm_file, std::vector<std::string> &grm_id, 
         const float* buf = (const float*)mmap(nullptr, n_tri * sizeof(float), PROT_READ, MAP_PRIVATE, fd, 0);
         close(fd);
         if (buf == MAP_FAILED) LOGGER.e(0, "mmap failed for [" + grm_binfile + "].");
-        madvise((void*)buf, n_tri * sizeof(float), MADV_SEQUENTIAL);
-        #pragma omp parallel for schedule(dynamic, 64) private(j)
+        madvise((void*)buf, n_tri * sizeof(float), MADV_SEQUENTIAL | MADV_WILLNEED);
+
+        // Batch convert float→double: sequential read + sequential write,
+        // compiler-vectorisable (AVX2 vcvtps2pd). Decouples I/O stream
+        // from the scatter into _grm so neither fights the other's prefetch.
+        const size_t byte_len = static_cast<size_t>(n_tri) * sizeof(float);
+        std::vector<double> dbuf(static_cast<size_t>(n_tri));
+        std::transform(buf, buf + n_tri, dbuf.begin(),
+                       [](float f) noexcept { return static_cast<double>(f); });
+        munmap((void*)buf, byte_len);
+
+        // Fill lower triangle only from dbuf, then mirror via selfadjointView.
+        // Eliminates n²/2 cache-hostile scattered writes into upper triangle
+        // columns (column-major Eigen; upper-triangle writes stride by n doubles).
         for (i = 0; i < n; i++) {
-            const float* row = buf + (long long)i * (i + 1) / 2;
-            for (j = 0; j <= i; j++) {
-                _grm(j, i) = _grm(i, j) = row[j];
-            }
+            const double* row = dbuf.data() + (long long)i * (i + 1) / 2;
+            for (j = 0; j <= i; j++)
+                _grm(i, j) = row[j];
         }
-        munmap((void*)buf, n_tri * sizeof(float));
+        _grm = _grm.selfadjointView<Eigen::Lower>();
     }
+
 
     if(!dont_read_N){
         std::string grm_Nfile = grm_file + ".grm.N.bin";
