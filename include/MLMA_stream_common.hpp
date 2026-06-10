@@ -54,6 +54,7 @@ inline Eigen::MatrixXd compact_sample_rows(const Eigen::MatrixXd& values,
 
 inline void run_mlma_stream_association(RemlState& state,
                                         const Eigen::VectorXf& y_adj,
+                                        const Eigen::VectorXf& w_sqrt,
                                         Geno* geno,
                                         Marker* marker,
                                         int n,
@@ -83,6 +84,9 @@ inline void run_mlma_stream_association(RemlState& state,
             LOGGER.e(0, "REML state Vi matrix is not positive definite.");
         state.Vi.resize(0, 0);  // free RAM immediately
     }
+
+    // Apply sqrt(W) to Vi_y once; genotype columns are scaled per-SNP in the callback.
+    Vi_y.array() *= w_sqrt.array();
 
     const uint32_t total_m = marker->count_extract();
     LOGGER << "\nRunning association tests for " << total_m << " SNPs..." << std::endl;
@@ -144,6 +148,7 @@ inline void run_mlma_stream_association(RemlState& state,
             af_v[i]    = static_cast<float>(item.af);
             X_block.col(i) =
                 Eigen::Map<const Eigen::VectorXd>(item.geno.data(), n).cast<float>();
+            X_block.col(i).array() *= w_sqrt.array();
         }
 
 

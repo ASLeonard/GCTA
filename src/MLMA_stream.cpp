@@ -8,14 +8,9 @@
  * Mandatory flag: --load-reml <file>
  */
 
-#include "MLMA.h"
-#include "Pheno.h"
-#include "Marker.h"
+
 #include "MLMA_stream_common.hpp"
-#include "Geno.h"
 #include "Covar.h"
-#include "Logger.h"
-#include "cpu.h"          // cblas_strmm / cblas_strsv / cblas_strsm
 #include "main/StatFunc.h"
 #include "mlma_woodbury.hpp"
 #include "RemlState.hpp"
@@ -668,7 +663,8 @@ void MLMA::processMain()
               << (log_pval ? "log_p" : "p") << "\n";
 
         // ---- Stream SNPs ----
-        run_mlma_stream_association(state, y_vec, geno, marker, n, log_pval, ofile);
+        Eigen::VectorXf w_sqrt = pheno->get_sqrt_weight_keep();
+        run_mlma_stream_association(state, y_vec, w_sqrt, geno, marker, n, log_pval, ofile);
         LOGGER << "\nAssociation results saved to [" << out_file << "]." << std::endl;
         ofile.close();
 

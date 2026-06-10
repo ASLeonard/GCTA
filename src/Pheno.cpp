@@ -177,15 +177,22 @@ Pheno::Pheno() {
             }
         }
 
-        if(cur_pheno <= 0 || cur_pheno > phenos.size()){
+        if(cur_pheno <= 0 || cur_pheno > (int)phenos.size()){
             LOGGER.e(0, "the value specified for --mpheno can't be less than 0 or larger than the total number of columns in .pheno file.");
         }
 
         cur_pheno -= 1;
-
         update_pheno(pheno_subjects, phenos[cur_pheno]);
+
+        // phenos is 0-indexed over data columns (col 0 = first data col after FID/IID).
+        // Weight is expected in the column immediately after the selected pheno column.
+        int weight_col = cur_pheno + 1;
+        if(weight_col < (int)phenos.size()){
+            update_weight(pheno_subjects, phenos[weight_col]);
+            LOGGER.i(0, "Sample weights detected in phenotype file.");
+        }
+
         LOGGER.i(0, to_string(index_keep.size()) + " overlapping individuals with non-missing data to be included from the phenotype file.");
-        
     }
 
     if(options.find("sex_file") != options.end()){
@@ -858,6 +865,29 @@ void Pheno::update_pheno(vector<string>& indi_marks, vector<double>& phenos){
     */
 }
 
+void Pheno::update_weight(vector<string>& indi_marks, vector<double>& weights) {
+    if (weight.size() != num_ind)
+        weight.assign(num_ind, 1.0);   // default 1.0, not NaN
+    vector<uint32_t> pheno_index, update_index;
+    vector_commonIndex_sorted1(mark, indi_marks, pheno_index, update_index);
+    vector<uint32_t> common_index, pheno_index2;
+    vector_commonIndex(index_keep, pheno_index, common_index, pheno_index2);
+    for (int i = 0; i < (int)common_index.size(); i++) {
+        uint32_t raw_index = index_keep[common_index[i]];
+        double w = weights[update_index[pheno_index2[i]]];
+        if (std::isfinite(w) && w > 0.0)
+            weight[raw_index] = w;
+        // else leave as 1.0
+    }
+}
+
+Eigen::VectorXf Pheno::get_sqrt_weight_keep() const {
+    Eigen::VectorXf out = Eigen::VectorXf::Ones(index_keep.size());
+    if (weight.empty()) return out;
+    for (int i = 0; i < (int)index_keep.size(); i++)
+        out[i] = static_cast<float>(std::sqrt(weight[index_keep[i]]));
+    return out;
+}
 
 
 void Pheno::reinit_rm(vector<uint32_t> &keeps, vector<uint32_t> &rms, int total_sample_number) {
