@@ -429,6 +429,23 @@ bool Geno::getGenoHasInfo(){
 void Geno::setGRMMode(bool grm, bool dominace){
     this->bGRM = grm;
     this->bGRMDom = dominace;
+    if (dominace) {
+        genoCodingModel = GenoCodingModel::DOMINANCE;
+    } else if (genoCodingModel == GenoCodingModel::DOMINANCE) {
+        genoCodingModel = GenoCodingModel::ADDITIVE;
+    }
+}
+
+void Geno::setGenoCodingModel(const string& model_name){
+    if (model_name == "additive") {
+        genoCodingModel = GenoCodingModel::ADDITIVE;
+    } else if (model_name == "dominance") {
+        genoCodingModel = GenoCodingModel::DOMINANCE;
+    } else if (model_name == "nonadditive") {
+        genoCodingModel = GenoCodingModel::NONADDITIVE;
+    } else {
+        LOGGER.e(0, "Unknown genotype model '" + model_name + "'. Expected additive, nonadditive, or dominance.");
+    }
 }
 
 void Geno::setGenoItemSize(uint32_t &genoSize, uint32_t &missSize){
@@ -459,6 +476,63 @@ void Geno::setHeterogameticWeight(double &weight, bool &needWeight){
     }else{
         needWeight = false;
     }
+}
+
+Geno::GenoCodingModel Geno::getCodingModel() const {
+    return genoCodingModel;
+}
+
+double Geno::mapDosageToModel(double dosage, double mu, bool isEffRev, GenoCodingModel model) const {
+    if (model == GenoCodingModel::ADDITIVE) {
+        return isEffRev ? (2.0 - dosage) : dosage;
+    }
+
+    if (model == GenoCodingModel::DOMINANCE || model == GenoCodingModel::NONADDITIVE) {
+        if (dosage < 0.5) {
+            return isEffRev ? (2.0 * mu - 2.0) : 0.0;
+        }
+        if (dosage < 1.5) {
+            return mu;
+        }
+        return isEffRev ? 0.0 : (2.0 * mu - 2.0);
+    }
+
+    return isEffRev ? (2.0 - dosage) : dosage;
+}
+
+Geno::GenoCodingSpec Geno::buildCodingSpec(double mu, double sd, bool isEffRev) const {
+    GenoCodingSpec spec;
+    const GenoCodingModel model = getCodingModel();
+    if (model == GenoCodingModel::ADDITIVE) {
+        spec.centerValue = bGenoCenter ? mu : 0.0;
+        spec.rdev = bGenoStd ? sqrt(1.0 / sd) : 1.0;
+
+        const double raw0 = isEffRev ? 2.0 : 0.0;
+        const double raw1 = 1.0;
+        const double raw2 = isEffRev ? 0.0 : 2.0;
+        const double rawNa = mu;
+
+        spec.a0 = (raw0 - spec.centerValue) * spec.rdev;
+        spec.a1 = (raw1 - spec.centerValue) * spec.rdev;
+        spec.a2 = (raw2 - spec.centerValue) * spec.rdev;
+        spec.na = (rawNa - spec.centerValue) * spec.rdev;
+        return spec;
+    }
+
+    const double psq = 0.5 * mu * mu;
+    spec.centerValue = bGenoCenter ? psq : 0.0;
+    spec.rdev = bGenoStd ? (1.0 / sd) : 1.0;
+
+    const double raw0 = isEffRev ? (2.0 * mu - 2.0) : 0.0;
+    const double raw1 = mu;
+    const double raw2 = isEffRev ? 0.0 : (2.0 * mu - 2.0);
+    const double rawNa = psq;
+
+    spec.a0 = (raw0 - spec.centerValue) * spec.rdev;
+    spec.a1 = (raw1 - spec.centerValue) * spec.rdev;
+    spec.a2 = (raw2 - spec.centerValue) * spec.rdev;
+    spec.na = (rawNa - spec.centerValue) * spec.rdev;
+    return spec;
 }
 
 void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
@@ -506,39 +580,17 @@ void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                 gbuf->valid = false;
                 return;
             }
+            const GenoCodingModel model = getCodingModel();
+            const GenoCodingSpec spec = buildCodingSpec(mu, std, false);
 
-            double center_value = 0.0;
-            double rdev = 1.0;
-            if(!bGRMDom){
-                if(bGenoCenter) center_value = mu;
-                if(bGenoStd) rdev = sqrt(1.0 / std);
-
-                // PGEN dosage_main uses 14-bit fractional scaling of allele
-                // dosage in [0, 2].
-                static constexpr double kDosageScale = 1.0 / 16384.0;
-                gbuf->geno.resize(keepSampleCT);
-                for(uint32_t j = 0; j < keepSampleCT; ++j){
-                    const double dos = static_cast<double>(dosage_main[j]) * kDosageScale;
-                    gbuf->geno[j] = (dos - center_value) * rdev;
-                }
-            }else{
-                // Keep dominance coding consistent with other backends.
-                const double psq = 0.5 * mu * mu;
-                if(bGenoCenter) center_value = psq;
-                if(bGenoStd) rdev = 1.0 / std;
-
-                const double a0 = (0.0 - center_value) * rdev;
-                const double a1 = (mu  - center_value) * rdev;
-                const double a2 = (2.0 * mu - 2.0 - center_value) * rdev;
-
-                static constexpr double kDosageScale = 1.0 / 16384.0;
-                gbuf->geno.resize(keepSampleCT);
-                for(uint32_t j = 0; j < keepSampleCT; ++j){
-                    const double dos = static_cast<double>(dosage_main[j]) * kDosageScale;
-                    if(dos < 0.5) gbuf->geno[j] = a0;
-                    else if(dos < 1.5) gbuf->geno[j] = a1;
-                    else gbuf->geno[j] = a2;
-                }
+            // PGEN dosage_main uses 14-bit fractional scaling of allele
+            // dosage in [0, 2].
+            static constexpr double kDosageScale = 1.0 / 16384.0;
+            gbuf->geno.resize(keepSampleCT);
+            for(uint32_t j = 0; j < keepSampleCT; ++j){
+                const double dos = static_cast<double>(dosage_main[j]) * kDosageScale;
+                const double recoded = mapDosageToModel(dos, mu, false, model);
+                gbuf->geno[j] = (recoded - spec.centerValue) * spec.rdev;
             }
 
             if(sexChromType == 1){
@@ -558,6 +610,7 @@ void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
     }
 }
 
+//TODO: do we need to adjust here
 void Geno::getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf){
     SNPInfo snpinfo;
     uintptr_t *cur_buf = buf + idx * bedRawGenoBuf1PtrSize;
@@ -602,48 +655,9 @@ void Geno::getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                     gbuf->valid = false;
                     return;
                 }
-
-                double center_value = 0.0;
-                double rdev = 1.0;
-                double a0, a1, a2, na;
-
-                if(!bGRMDom){
-                    if(bGenoCenter){
-                        center_value = mu;
-                    }
-                    if(bGenoStd){
-                        rdev = sqrt(1.0 / sd);
-                    }
-                    double aa0 = 0.0, aa2 = 2.0;
-                    if(isEffRev){
-                        double temp = aa0;
-                        aa0 = aa2;
-                        aa2 = aa0;
-                    }
-
-                    a0 = (aa0 - center_value) * rdev;
-                    a1 = (1.0 - center_value) * rdev;
-                    a2 = (aa2 - center_value) * rdev;
-                    na = (mu - center_value) * rdev;
-               }else{
-                   double psq = 0.5 * mu * mu;
-                   if(bGenoCenter)center_value = psq;
-                   if(bGenoStd){
-                       rdev = 1.0 / sd;
-                   }
-                   double aa0 = 0.0, aa2 = 2.0 * mu - 2.0;
-                   if(isEffRev){
-                       double temp = aa0;
-                       aa0 = aa2;
-                       aa2 = temp;
-                   }
-                   a0 = (aa0 - center_value) * rdev;
-                   a1 = (mu - center_value) * rdev;
-                   a2 = (aa2 - center_value) * rdev;
-                   na = (psq - center_value)*rdev;
-                }
-
-                const double lookup[32] __attribute__ ((aligned (16))) = GET_TABLE16(a0, a1, a2, na);
+                const GenoCodingSpec spec = buildCodingSpec(mu, sd, isEffRev);
+                const double lookup[32] __attribute__ ((aligned (16))) =
+                    GET_TABLE16(spec.a0, spec.a1, spec.a2, spec.na);
                 gbuf->geno.resize(keepSampleCT);
                 uintptr_t * pmiss = NULL;
                 if(bMakeMiss){
@@ -661,7 +675,7 @@ void Geno::getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                                 gbuf->geno[keepHeterogameticExtractIndex[i]] *= weight;
                             }
                         }else{
-                            double correctWeight = (weight - 1) * rdev * center_value;
+                            double correctWeight = (weight - 1) * spec.rdev * spec.centerValue;
                             for(int i = 0 ; i < keepHeterogameticSampleCT; i++){
                                 uint32_t curIndex = keepHeterogameticExtractIndex[i];
                                 gbuf->geno[curIndex] *= weight;
@@ -913,50 +927,14 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                 }
 
                 double* dos_lookup = new double[max_dos + 2];
-                double center_value = 0.0;
-                double rdev = 1.0;
-                if(!bGRMDom){
-                    if(bGenoCenter){
-                        center_value = mu;
-                    }
-                    if(bGenoStd){
-                        rdev = sqrt(1.0 / std);
-                    }
-                    for(uint32_t i = 0; i < max_dos; i++){
-                        double tdos = (double)i / mask;
-                        tdos = bEffRev ? (2.0 - tdos) : tdos;
-                        dos_lookup[i] = (tdos - center_value) *rdev;
-                    }
-                    dos_lookup[max_dos] = ( mu - center_value) * rdev;
-                }else{
-                    uint32_t cut05 = ceil(0.5 * mask);
-                    uint32_t cut15 = ceil(1.5 * mask);
-                    double psq = 0.5 * mu * mu;
-                    double dos00 = bEffRev ? (2.0 * mu - 2.0) : 0.0;
-                    double dos01 = mu;
-                    double dos10 = bEffRev ? 0.0 : (2.0 * mu - 2.0);
-                    double dosna = psq;
-
-                    if(bGenoCenter)center_value = psq;
-                    if(bGenoStd){
-                        rdev = 1.0 / std;
-                    }
-                    double a0 = (dos00 - center_value) * rdev;
-                    double a1 = (dos01 - center_value) * rdev;
-                    double a2 = (dos10 - center_value) * rdev;
-                    double na = (dosna - center_value) * rdev;
-                    
-                    for(uint32_t i = 0; i < cut05; i++){
-                        dos_lookup[i] = a0;
-                    }
-                    for(uint32_t i = cut05; i < cut15; i++){
-                        dos_lookup[i] = a1;
-                    }
-                    for(uint32_t i = cut15; i < max_dos; i++){
-                        dos_lookup[i] = a2;
-                    }
-                    dos_lookup[max_dos] = (dosna - center_value) * rdev;
+                const GenoCodingModel model = getCodingModel();
+                const GenoCodingSpec spec = buildCodingSpec(mu, std, bEffRev);
+                for(uint32_t i = 0; i < max_dos; i++){
+                    const double tdos = static_cast<double>(i) / mask;
+                    const double recoded = mapDosageToModel(tdos, mu, bEffRev, model);
+                    dos_lookup[i] = (recoded - spec.centerValue) * spec.rdev;
                 }
+                dos_lookup[max_dos] = spec.na;
 
                 gbuf->geno.resize(curSampleCT);
                 for(int j = 0; j < curSampleCT; j++){
@@ -973,7 +951,7 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                                 gbuf->geno[keepHeterogameticExtractIndex[i]] *= weight;
                             }
                         }else{
-                            double correctWeight = (weight - 1) * rdev * center_value;
+                            double correctWeight = (weight - 1) * spec.rdev * spec.centerValue;
                             for(int i = 0 ; i < keepHeterogameticSampleCT; i++){
                                 uint32_t curIndex = keepHeterogameticExtractIndex[i];
                                 gbuf->geno[curIndex] *= weight;

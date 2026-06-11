@@ -121,6 +121,7 @@ public:
     bool getGenoHasInfo();
 
     void setGRMMode(bool grm, bool dominace);
+    void setGenoCodingModel(const string& model_name);
     void setGenoItemSize(uint32_t &genoSize, uint32_t &missSize);
  
 private:
@@ -198,6 +199,20 @@ private:
     int iDC = 1;
     bool f_std = false;
     void setHeterogameticWeight(double &weight, bool &needWeight); // set the heterogametic weight by bGRM, dc specity
+
+    enum class GenoCodingModel : uint8_t { ADDITIVE = 0, DOMINANCE = 1, NONADDITIVE = 2 };
+    struct GenoCodingSpec {
+        double centerValue = 0.0;
+        double rdev = 1.0;
+        double a0 = 0.0;
+        double a1 = 0.0;
+        double a2 = 0.0;
+        double na = 0.0;
+    };
+    GenoCodingModel getCodingModel() const;
+    double mapDosageToModel(double dosage, double mu, bool isEffRev, GenoCodingModel model) const;
+    GenoCodingSpec buildCodingSpec(double mu, double sd, bool isEffRev) const;
+    GenoCodingModel genoCodingModel = GenoCodingModel::ADDITIVE;
 
     int8_t alleModel = 1; // 1: add; 2: Dom; 3: Reces; 4: Het; //currently unused affect a0 a1 a2 na;
 
