@@ -105,7 +105,7 @@ int main(int argc, char *argv[]){
         "--acat", "--gene-list", "--snp-list", "--min-mac", "--max-maf", "--wind",
         "--envir", "--optimal-rho", "--noSandwich", "--grid-size",
         "--GRM-tile-size",
-        "--mlma-stream", "--load-reml", "--mlma-no-preadj-covar", "--log-pval",
+        "--mlma-stream", "--load-reml", "--mlma-no-preadj-covar", "--log-pval", "--model",
         "--reml-trace-approx", "--reml-maxit", "--reml-woodbury", "--reml-alg",
         "--reml-no-constrain", "--reml-priors", "--reml-priors-var", "--reml-diagV-adj",
         "--mlma-loco-stream", "--loco-manifest",

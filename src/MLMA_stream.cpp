@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <numeric>
 #include <cmath>
+#include <cctype>
 #include <array>
 #include <charconv>
 #include <limits>
@@ -422,6 +423,20 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options["log_pval"] = "1";
         options_in.erase("--log-pval");
     }
+    if (options_in.find("--model") != options_in.end()) {
+        const auto& vals = options_in["--model"];
+        if (vals.size() != 1 || vals[0].empty())
+            LOGGER.e(0, "--model expects exactly one value: additive, nonadditive, or dominance.");
+
+        string model = vals[0];
+        std::transform(model.begin(), model.end(), model.begin(),
+                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+        if (model != "additive" && model != "nonadditive" && model != "dominance") {
+            LOGGER.e(0, "Unsupported --model value [" + vals[0] + "]. Allowed values: additive, nonadditive, dominance.");
+        }
+        options["model"] = model;
+        options_in.erase("--model");
+    }
 
     processFunctions.push_back("MLMA");
     options_in.erase("--mlma-stream");
@@ -449,6 +464,9 @@ void MLMA::processMain()
         Pheno*  pheno  = new Pheno();
         Marker* marker = new Marker();
         Geno*   geno   = new Geno(pheno, marker);
+        const string model_name = options.count("model") ? options.at("model") : "additive";
+        geno->setGenoCodingModel(model_name);
+        LOGGER.i(0, "MLMA_stream genotype model: " + model_name + ".");
 
         // ---- Phenotype ----
         const uint32_t n_init = pheno->count_keep();
