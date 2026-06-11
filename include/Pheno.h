@@ -54,6 +54,8 @@ public:
     void getMaskBit(uint64_t *maskp);
     void getMaskBitHeterogametic(uint64_t *maskp);
     uint32_t getSeed();
+    void update_weight(vector<string>& indi_marks, vector<double>& weights);
+    Eigen::VectorXf get_sqrt_weight_keep() const;
 
     vector<uint32_t>& getSexValidRawIndex();
     vector<uint32_t>& getHeterogameticRawIndex();
@@ -76,6 +78,7 @@ private:
     vector<string> mo_id;
     vector<int8_t> sex;
     vector<double> pheno;
+    vector<double> weight;
     vector<uint32_t> index_keep;
     vector<uint32_t> index_rm;
 

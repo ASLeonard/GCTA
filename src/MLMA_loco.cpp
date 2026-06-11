@@ -568,8 +568,8 @@ void MLMALoco::processMain()
                     }
                 }
             }
-
-            run_mlma_stream_association(rs, y_adj, geno_chr, marker_chr, n, log_pval, ofile);
+            Eigen::VectorXf w_sqrt = pheno->get_sqrt_weight_keep();
+            run_mlma_stream_association(rs, y_adj, w_sqrt, geno_chr, marker_chr, n, log_pval, ofile);
             LOGGER << "[LOCO] Chr " << row.chrom << " done." << std::endl;
 
             delete geno_chr;

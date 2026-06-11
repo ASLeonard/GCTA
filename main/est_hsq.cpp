@@ -207,47 +207,49 @@ int gcta::read_GE(std::string GE_file, std::vector<std::string> &GE_ID, std::vec
 }
 
 void gcta::read_weight(std::string phen_file, std::vector<std::string> &phen_ID, std::vector<double> &weights) {
-    // Read phenotype data
     std::ifstream in_phen(phen_file.c_str());
     if (!in_phen) LOGGER.e(0, "cannot open the weight [" + phen_file + "] to read.");
 
-    int i = 0;
-    std::string str_buf, fid_buf, pid_buf;
-    std::vector<std::string> vs_buf;
     phen_ID.clear();
     weights.clear();
     LOGGER << "Reading weights from [" + phen_file + "]." << std::endl;
+
+    std::string str_buf, fid_buf, pid_buf;
+    std::vector<std::string> vs_buf;
+
+    // Parse header to determine column count
     std::getline(in_phen, str_buf);
     int phen_num = StrFunc::split_string(str_buf, vs_buf) - 2;
     if (phen_num <= 0) LOGGER.e(0, "no weight data is found.");
-    if (phen_num > 1) LOGGER << "There are " << phen_num << " weights specified in the file [" + phen_file + "], however, only the first one is used." << std::endl;
-    in_phen.seekg(std::ios::beg);
+    if (phen_num > 1)
+        LOGGER << "There are " << phen_num << " weights in [" + phen_file + "], only the first is used." << std::endl;
+
+    // seekg(0, beg) — seekg(ios::beg) is seekg(0) by coincidence, not by spec
+    in_phen.seekg(0, std::ios::beg);
+
     int line = 1;
-    while (in_phen) {
-        line++;
-        in_phen >> fid_buf;
-        if (in_phen.eof()) break;
-        in_phen >> pid_buf;
-        std::getline(in_phen, str_buf);
+    while (in_phen >> fid_buf >> pid_buf && std::getline(in_phen, str_buf)) {
+        ++line;
         if (StrFunc::split_string(str_buf, vs_buf) != phen_num) {
             std::stringstream errmsg;
-            errmsg << vs_buf.size() - phen_num << " weight values are missing in line #" << line << " in the file [" + phen_file + "]";
+            errmsg << vs_buf.size() - phen_num << " weight values missing in line #" << line
+                   << " in [" + phen_file + "]";
             LOGGER.e(0, errmsg.str());
         }
 
-        const char *temp_str = vs_buf[0].c_str();
+        const char* temp_str = vs_buf[0].c_str();
         char* pEnd;
         double temp_double = strtod(temp_str, &pEnd);
-        if(std::isfinite(temp_double) && strlen(temp_str) == pEnd - temp_str){ 
+        if (std::isfinite(temp_double) && strlen(temp_str) == static_cast<size_t>(pEnd - temp_str)) {
             phen_ID.push_back(fid_buf + ":" + pid_buf);
             weights.push_back(temp_double);
-        }else{
+        } else {
             LOGGER.w(0, "ignored line #" + std::to_string(line) + ".");
         }
-
     }
-    in_phen.close();
-    LOGGER << "Non-missing weights of " << phen_ID.size() << " individuals are included from [" + phen_file + "]." << std::endl;
+
+    LOGGER << "Non-missing weights of " << phen_ID.size()
+           << " individuals included from [" + phen_file + "]." << std::endl;
 }
 
 
