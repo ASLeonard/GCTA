@@ -313,7 +313,9 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
             }
         }
     }*/
-    
+    compact_snp_data();
+    auto _freq = _mu;
+    _mu.clear();
     if (_mu.empty()) calcu_mu();
 
     auto [beta, se, pval] = no_adj_covar
@@ -330,7 +332,7 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
         const auto j = _include[i];
         ofile<<_chr[j]<<"\t"<<_snp_name[j]<<"\t"<<_bp[j]<<"\t"<<_ref_A[j]<<"\t"<<_other_A[j]<<"\t";
         if(pval[i]>1.5) ofile<<"NA\tNA\tNA\tNA"<<std::endl;
-        else ofile<<0.5*_mu[j]<<"\t"<<beta[i]<<"\t"<<se[i]<<"\t"<<pval[i]<<std::endl;
+        else ofile<<0.5*_freq[j]<<"\t"<<beta[i]<<"\t"<<se[i]<<"\t"<<pval[i]<<std::endl;
     }
     ofile.close();
 }
