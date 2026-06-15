@@ -356,13 +356,12 @@ void Geno::init_AF(string alleleFileName) {
         LOGGER.i(0, "Reading frequencies from [" + alleleFileName + "]...");
         vector<int> field_return = {2};
         vector<string> fields;
-        vector<bool> a_rev;
-        marker->matchSNPListFile(alleleFileName, 3, field_return, fields, a_rev, false);
+        marker->matchSNPListFile(alleleFileName, 3, field_return, fields);
 
-        AFA1.resize(a_rev.size());
+        AFA1.resize(fields.size());
         vector<uint32_t> extract_index;
         bool filterByMaf = false;
-        for(int i = 0; i < a_rev.size(); i++){
+        for(int i = 0; i < fields.size(); i++){
             double af;
             try{
                 af = stod(fields[i]);
@@ -378,12 +377,7 @@ void Geno::init_AF(string alleleFileName) {
             }else{
                 filterByMaf = true;
             }
-
-            if(a_rev[i]){
-                AFA1[i] = 1.0 - af;
-            }else{
-                AFA1[i] = af;
-            }
+            AFA1[i] = af;
         }
         LOGGER.i(0, "Frequencies of " + to_string(AFA1.size()) + " SNPs are updated.");
 

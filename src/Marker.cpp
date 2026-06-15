@@ -221,16 +221,6 @@ Marker::Marker() {
     }
     reset_exclude();
 
-    if(options.find("update_ref_allele_file") != options.end()){
-        LOGGER.i(0, "Reading reference alleles of SNPs from [" + options["update_ref_allele_file"] + "]...");
-        std::vector<int> field_return;
-        std::vector<string> fields;
-        std::vector<bool> a_rev;
-        matchSNPListFile(options["update_ref_allele_file"], 2, field_return, fields, a_rev, true);
-
-        LOGGER.i(0, to_string(index_extract.size()) + " reference alleles are updated."); 
-    }
-
     if(index_extract.size() == 0){
         LOGGER.e(0, "no SNP remained.");
     }
@@ -257,9 +247,8 @@ void Marker::setLocoBfilePrefix(const std::string& bfile_prefix) {
     }
 }
 
-void Marker::matchSNPListFile(string filename, int num_min_fields, const std::vector<int>& field_return, std::vector<string> &fields, std::vector<bool>& a_rev, bool update_a_rev){
+void Marker::matchSNPListFile(string filename, int num_min_fields, const std::vector<int>& field_return, std::vector<string> &fields){
     std::vector<string> temp_fields;
-    std::vector<bool> temp_a_rev;
     std::ifstream allele_file(filename.c_str());
     if(allele_file.fail()){
         LOGGER.e(0, "can't open [" + filename + "] to read]");
@@ -312,30 +301,18 @@ void Marker::matchSNPListFile(string filename, int num_min_fields, const std::ve
     std::vector<uint32_t> ref_index_remained;
     ref_index_remained.reserve(marker_index.size());
     if(ref_allele.size()){
-        temp_a_rev.reserve(marker_index.size());
         for(int i = 0; i < marker_index.size(); i++){
             uint32_t cur_marker_index = marker_index[i];
             uint32_t cur_ref_index = ref_index[i];
             std::string cur_ref = ref_allele[cur_ref_index];
             std::transform(cur_ref.begin(), cur_ref.end(), cur_ref.begin(), toupper);
-            if(a1[cur_marker_index] == cur_ref){
-                temp_a_rev.push_back(A_rev[cur_marker_index]);
-                index_remained.push_back(cur_marker_index);
-                ref_index_remained.push_back(cur_ref_index);
-            }else if(a2[cur_marker_index] == cur_ref){
-                temp_a_rev.push_back(!A_rev[cur_marker_index]);
+            if(a1[cur_marker_index] == cur_ref || a2[cur_marker_index] == cur_ref){
                 index_remained.push_back(cur_marker_index);
                 ref_index_remained.push_back(cur_ref_index);
             }
         }
     }else{
         index_remained = marker_index;
-    }
-
-    if(update_a_rev){
-        for(int i = 0; i < index_remained.size(); i++){
-            A_rev[index_remained[i]] = temp_a_rev[i];
-        }
     }
 
     // match original kept list
@@ -352,11 +329,6 @@ void Marker::matchSNPListFile(string filename, int num_min_fields, const std::ve
     }
 
     keep_raw_index(index_common);
-
-    if(ref_allele.size()){
-        a_rev.resize(export_index.size());
-        std::transform(export_index.begin(), export_index.end(), a_rev.begin(), [&temp_a_rev](size_t pos){return temp_a_rev[pos];});
-    }
 
     int field_num = field_return.size();
     if(field_num){
@@ -618,7 +590,6 @@ void Marker::read_pvar(string pvar_file){
         pd.resize(newSize);
         a1.resize(newSize);
         a2.resize(newSize);
-        A_rev.resize(newSize, false);
         byte_start.resize(newSize, 1);
         std::vector<uint8_t> validSNP(nrows);
         #pragma omp parallel for
@@ -719,7 +690,6 @@ void Marker::read_bim(string bim_file) {
         std::transform(line_elements[5].begin(), line_elements[5].end(), line_elements[5].begin(), toupper);
         a1.push_back(line_elements[4]);
         a2.push_back(line_elements[5]);
-        A_rev.push_back(false);
         //TODO refractor the code.
         byte_start.push_back(1);
         last_length = line_elements.size();
@@ -1051,7 +1021,6 @@ void Marker::read_bgen_index(string bgen_file){
     pd.reserve(cur_total_num_variants);
     a1.reserve(cur_total_num_variants);
     a2.reserve(cur_total_num_variants);
-    A_rev.reserve(cur_total_num_variants);
     byte_start.reserve(cur_total_num_variants);
     byte_size.reserve(cur_total_num_variants);
     LOGGER.i(0, to_string(n_variants) + " SNPs to be included from bgen index file.");
@@ -1080,7 +1049,6 @@ void Marker::read_bgen_index(string bgen_file){
             a1.push_back(snp_a1);
             a2.push_back(snp_a2);
 
-            A_rev.push_back(false);
             byte_start.push_back(sqlite3_column_int64(stmt, 5));
             uint64_t cur_size = sqlite3_column_int64(stmt, 6);
             byte_size.push_back(cur_size);
@@ -1174,7 +1142,6 @@ MarkerInfo Marker::extractBgenMarkerInfo(FILE *h_bgen, uint64_t &pos){
     markerInfo.name = std::string(rsid.get());
     markerInfo.pd = snp_pos;
     markerInfo.alleles = alleles;
-    markerInfo.A_rev = false;
 
     pos = snp_start; // set the position easy for seek
 
@@ -1313,7 +1280,6 @@ void Marker::read_bgen(string bgen_file){
             std::transform(snp_a2.get(), snp_a2.get() + len_a2, snp_a2.get(), toupper);
             a1.push_back(snp_a1.get());
             a2.push_back(snp_a2.get());
-            A_rev.push_back(false);
             byte_start.push_back(snp_start);
         }
     }
@@ -1430,18 +1396,14 @@ void Marker::keep_extracted_index(const std::vector<uint32_t>& keep_index) {
     keep_raw_index(raw_index);
 }
 
-string Marker::get_marker(int rawindex, bool bflip){ // raw index
+string Marker::get_marker(int rawindex){
     std::string return_string = chr[rawindex] + "\t" + name[rawindex] + "\t" + 
         std::to_string(pd[rawindex]) + "\t";
-    if(A_rev[rawindex] ^ bflip){
-        return return_string + a2[rawindex] + "\t" + a1[rawindex];
-    }else{
-        return return_string + a1[rawindex] + "\t" + a2[rawindex];
-    }
+    return return_string + a1[rawindex] + "\t" + a2[rawindex];
 }
 
-string Marker::getMarkerStrExtract(int extractindex, bool bflip){ // extract index
-    return get_marker(getRawIndex(extractindex), bflip);
+string Marker::getMarkerStrExtract(int extractindex){
+    return get_marker(getRawIndex(extractindex));
 }
  
 
@@ -1458,11 +1420,13 @@ uint32_t Marker::getRawIndex(uint32_t extractedIndex){
 }
 
 bool Marker::isEffecRev(uint32_t extractedIndex){
-    return A_rev[index_extract[extractedIndex]];
+    (void)extractedIndex;
+    return false;
 }
 
 bool Marker::isEffecRevRaw(uint32_t rawIndex){
-    return A_rev[rawIndex];
+    (void)rawIndex;
+    return false;
 }
 
 
@@ -1527,9 +1491,6 @@ int Marker::registerOption(map<string, std::vector<string>>& options_in){
     addOneFileOption("marker_file", "", "--bim", options_in);
     addOneFileOption("extract_file", "", "--extract", options_in);
     addOneFileOption("exclude_file", "", "--exclude", options_in);
-    addOneFileOption("update_ref_allele_file", "", "--update-ref-allele", options_in);
-    
-
     addOneFileOption("pvar_file", ".pvar", "--pfile", options_in);
     addOneFileOption("marker_file", ".bim", "--bpfile", options_in);
 
