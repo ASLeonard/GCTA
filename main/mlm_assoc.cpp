@@ -314,7 +314,7 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
         }
     }*/
     compact_snp_data();
-    auto _freq = _mu;
+    auto _freq = _mu; //TODO: almost certaintly the segfault issue
     _mu.clear();
     if (_mu.empty()) calcu_mu();
 
@@ -329,10 +329,9 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     if(!ofile) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
     ofile<<"Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\t"<<(_log_pval ? "log_p" : "p")<<std::endl;
 	for(size_t i = 0; i < m; ++i){
-        const auto j = _include[i];
-        ofile<<_chr[j]<<"\t"<<_snp_name[j]<<"\t"<<_bp[j]<<"\t"<<_ref_A[j]<<"\t"<<_other_A[j]<<"\t";
+        ofile<<_chr[i]<<"\t"<<_snp_name[i]<<"\t"<<_bp[i]<<"\t"<<_ref_A[i]<<"\t"<<_other_A[i]<<"\t";
         if(pval[i]>1.5) ofile<<"NA\tNA\tNA\tNA"<<std::endl;
-        else ofile<<0.5*_freq[j]<<"\t"<<beta[i]<<"\t"<<se[i]<<"\t"<<pval[i]<<std::endl;
+        else ofile<<0.5*_freq[i]<<"\t"<<beta[i]<<"\t"<<se[i]<<"\t"<<pval[i]<<std::endl;
     }
     ofile.close();
 }
