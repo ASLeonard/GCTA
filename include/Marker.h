@@ -56,8 +56,6 @@ public:
     int getMIndex(uint32_t raw_index);
     //uint64_t getStartPosSize(uint32_t raw_index);
     void getStartPosSize(uint32_t raw_index, uint64_t &pos, uint64_t &size);
-    bool isEffecRev(uint32_t extractedIndex);
-    bool isEffecRevRaw(uint32_t rawIndex);
     std::string get_marker(int rawindex);
     std::string getMarkerStrExtract(int extractindex);
     static int registerOption(std::map<string, std::vector<string>>& options_in);

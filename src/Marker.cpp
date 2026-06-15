@@ -1419,18 +1419,6 @@ uint32_t Marker::getRawIndex(uint32_t extractedIndex){
     return index_extract[extractedIndex];
 }
 
-bool Marker::isEffecRev(uint32_t extractedIndex){
-    (void)extractedIndex;
-    return false;
-}
-
-bool Marker::isEffecRevRaw(uint32_t rawIndex){
-    (void)rawIndex;
-    return false;
-}
-
-
-
 //TODO support multiple column SNP list, currently only take the first SNP list
 // If multiple column provided, it will miss the correct SNP name.
 std::vector<string> Marker::read_snplist(string snplist_file) {
