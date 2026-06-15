@@ -534,7 +534,7 @@ void gcta::update_fam(std::vector<int> &rindi) {
     _pid.resize(write);
     _fa_id.resize(write);
     _mo_id.resize(write);
-    _sex.resize(write);
+    _sex.resize(write); 
     _pheno.resize(write);
 
     _indi_num = write;
@@ -1888,6 +1888,8 @@ void gcta::update_allele_ref(std::string ref_A_file) {
 }
 
 void gcta::calcu_mu(bool ssq_flag) {
+    compact_indi_data();
+    compact_snp_data();
     const int n = static_cast<int>(_keep.size());
     const int m = static_cast<int>(_include.size());
 
@@ -1896,7 +1898,7 @@ void gcta::calcu_mu(bool ssq_flag) {
     Eigen::VectorXf auto_fac = Eigen::VectorXf::Ones(n);
     Eigen::VectorXf xfac(n);
     for (int i = 0; i < n; i++) {
-        const int sex = _sex[_keep[i]];
+        const int sex = _sex[i];
         if      (sex == 1) xfac[i] = 0.5f;
         else if (sex == 2) xfac[i] = 1.0f;
         else             { xfac[i] = 1.0f; no_sex_info = true; }
@@ -1909,8 +1911,7 @@ void gcta::calcu_mu(bool ssq_flag) {
 
     #pragma omp parallel for reduction(||:flag_x_problem)
     for (int j = 0; j < m; j++) {
-        const int snp_idx = _include[j];
-        const bool is_x = (_legacy_homogametic_chr != 0 && _chr[snp_idx] == _legacy_homogametic_chr);
+        const bool is_x = (_legacy_homogametic_chr != 0 && _chr[j] == _legacy_homogametic_chr);
         if (is_x && no_sex_info) flag_x_problem = true;
         const Eigen::VectorXf& fac = is_x ? xfac : auto_fac;
 
@@ -1919,21 +1920,21 @@ void gcta::calcu_mu(bool ssq_flag) {
             auto mask = (col.array() < DOSAGE_NA);
             const float fcount = mask.select(fac, 0.0f).sum();
             if (fcount > 0.0f)
-                _mu[snp_idx] = static_cast<double>(
+                _mu[j] = static_cast<double>(
                     mask.select((col.array() * fac.array()).matrix(), 0.0f).sum() / fcount);
         } else {
-                        const auto &s1 = _snp_1[snp_idx];
-            const auto &s2 = _snp_2[snp_idx];
+            const auto &s1 = _snp_1[j];
+            const auto &s2 = _snp_2[j];
             float fcount = 0.0f, mu_acc = 0.0f;
             for (int i = 0; i < n; i++) {
-                const int ki = _keep[i];
-                if (!s1[ki] || s2[ki]) {
-                    float g = static_cast<float>(s1[ki] + s2[ki]);                    mu_acc += fac[i] * g;
+                if (!s1[i] || s2[i]) {
+                    float g = static_cast<float>(s1[i] + s2[i]);
+                    mu_acc += fac[i] * g;
                     fcount += fac[i];
                 }
             }
             if (fcount > 0.0f)
-                _mu[snp_idx] = static_cast<double>(mu_acc / fcount);
+                _mu[j] = static_cast<double>(mu_acc / fcount);
         }
     }
 
@@ -1949,7 +1950,7 @@ void gcta::calcu_maf()
     _maf.resize(m);
     #pragma omp parallel for
     for(int i = 0; i < m; i++){
-        _maf[i] = 0.5*_mu[_include[i]];
+        _maf[i] = 0.5*_mu[i];
         if(_maf[i] > 0.5) _maf[i] = 1.0 - _maf[i];
     }
 }
@@ -2065,6 +2066,7 @@ void gcta::read_indi_blup(std::string blup_indi_file) {
 
 bool gcta::make_XMat(Eigen::MatrixXf &X)
 {
+    compact_indi_data();
     if (!_make_XMat_no_compact) compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
@@ -2077,7 +2079,6 @@ bool gcta::make_XMat(Eigen::MatrixXf &X)
     #pragma omp parallel for private(j)
     for (i = 0; i < n; i++) {
         if (_dosage_flag) {
-            // After compact_dosage_data(): _keep[i]==i, _include[j]==j; direct access.
             for (j = 0; j < m; j++) {
                 const float d = _geno_dose(i, j);
                 if (d < DOSAGE_NA) {
@@ -2089,9 +2090,9 @@ bool gcta::make_XMat(Eigen::MatrixXf &X)
             }
         }
         else {
-            for (j = 0; j < _include.size(); j++) {
-                if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
-                    X(i,j) = _snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]];
+            for (j = 0; j < m; j++) {
+                if (!_snp_1[j][i] || _snp_2[j][i]) {
+                    X(i,j) = _snp_1[j][i] + _snp_2[j][i];
                 } 
                 else {
                     X(i,j) = DOSAGE_NA;
@@ -2106,6 +2107,7 @@ bool gcta::make_XMat(Eigen::MatrixXf &X)
 
 bool gcta::make_XMat_d(Eigen::MatrixXf &X)
 {
+    compact_indi_data();
     compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
@@ -2118,7 +2120,6 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
     #pragma omp parallel for private(j)
     for (i = 0; i < n; i++) {
         if (_dosage_flag) {
-            // After compact_dosage_data(): _keep[i]==i, _include[j]==j; direct access.
             for (j = 0; j < m; j++) {
                 const float d = _geno_dose(i, j);
                 if (d < DOSAGE_NA) {
@@ -2134,12 +2135,12 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
             }
         }
         else {
-            for (j = 0; j < _include.size(); j++) {
-                if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
-                    X(i,j) = _snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]];
+            for (j = 0; j < m; j++) {
+                if (!_snp_1[j][i] || _snp_2[j][i]) {
+                    X(i,j) = _snp_1[j][i] + _snp_2[j][i];
                     if (X(i,j) < 0.5) X(i,j) = 0.0;
-                    else if (X(i,j) < 1.5) X(i,j) = _mu[_include[j]];
-                    else X(i,j) = (2.0 * _mu[_include[j]] - 2.0);
+                    else if (X(i,j) < 1.5) X(i,j) = _mu[j];
+                    else X(i,j) = (2.0 * _mu[j] - 2.0);
                 } 
                 else{
                     X(i,j) = DOSAGE_NA;
@@ -2154,17 +2155,17 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
 
 void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_homogametic_flag, bool miss_with_mu, bool divid_by_std)
 {
+    compact_indi_data();
+    compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
     unsigned long i = 0, j = 0, n = _keep.size(), m = _include.size();
     sd_SNP.resize(m);
     if (_dosage_flag) {
-        // Use _mu[_include[j]]: correct when compact is inhibited (_include[j]!=j),
-        // and equivalent to _mu[j] when compact has been applied (_include[j]==j).
-        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - Eigen::VectorXf::Constant(n, _mu[_include[j]])).squaredNorm() / (n - 1.0);
+        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - Eigen::VectorXf::Constant(n, _mu[j])).squaredNorm() / (n - 1.0);
     } 
     else {
-        for (j = 0; j < m; j++) sd_SNP[j] = _mu[_include[j]]*(1.0 - 0.5 * _mu[_include[j]]);
+        for (j = 0; j < m; j++) sd_SNP[j] = _mu[j]*(1.0 - 0.5 * _mu[j]);
     }
     if (divid_by_std) {
         for (j = 0; j < m; j++) {
@@ -2177,7 +2178,7 @@ void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_homogameti
     for (i = 0; i < n; i++) {
         for (j = 0; j < m; j++) {
             if (X(i,j) < DOSAGE_NA) {
-                X(i,j) -= _mu[_include[j]];
+                X(i,j) -= _mu[j];
                 if (divid_by_std) X(i,j) *= sd_SNP[j];
             } 
             else if (miss_with_mu) X(i,j) = 0.0;
@@ -2203,6 +2204,8 @@ void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_homogameti
 
 void gcta::std_XMat_d(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu, bool divid_by_std)
 {
+    compact_indi_data();
+    compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
     unsigned long i = 0, j = 0, n = _keep.size(), m = _include.size();
@@ -2247,14 +2250,16 @@ void gcta::std_XMat_d(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu
 void gcta::makex_eigenVector(int j, eigenVector &x, bool resize, bool minus_2p)
 {
     int i = 0;
+    compact_indi_data();
+    compact_snp_data();
     if (resize) x.resize(_keep.size());
     #pragma omp parallel for
     for (i = 0; i < _keep.size(); i++) {
-        if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
-            x[i] = (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
+        if (!_snp_1[j][i] || _snp_2[j][i]) {
+            x[i] = (_snp_1[j][i] + _snp_2[j][i]);
         }
-        else x[i] = _mu[_include[j]];
-        if (minus_2p) x[i] -= _mu[_include[j]];
+        else x[i] = _mu[j];
+        if (minus_2p) x[i] -= _mu[j];
     }
 }
 
@@ -2262,15 +2267,17 @@ void gcta::makex_eigenVector(int j, eigenVector &x, bool resize, bool minus_2p)
 void gcta::makex_eigenVector_std(int j, eigenVector &x, bool resize, double snp_std)
 {
     int i = 0;
+    compact_indi_data();
+    compact_snp_data();
     if (resize) x.resize(_keep.size());
     #pragma omp parallel for
     for (i = 0; i < _keep.size(); i++) {
-        if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
-            x[i] = (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
+        if (!_snp_1[j][i] || _snp_2[j][i]) {
+            x[i] = (_snp_1[j][i] + _snp_2[j][i]);
         }
-        else x[i] = _mu[_include[j]];
+        else x[i] = _mu[j];
         // change here: subtract mean and divide by std
-        x[i] -= _mu[_include[j]];
+        x[i] -= _mu[j];
         x[i] /= snp_std;
     }
 }
@@ -2279,7 +2286,9 @@ void gcta::makex_eigenVector_std(int j, eigenVector &x, bool resize, double snp_
 void gcta::save_XMat(bool miss_with_mu, bool std)
 {
     if(std && _dosage_flag) LOGGER.e(0, "the --recode-std is invalid for dosage data.");
-    if (_dosage_flag) compact_dosage_data(); // ensure _include[j]==j, _keep[i]==i
+    compact_indi_data();
+    if (_dosage_flag) compact_dosage_data();
+    else compact_snp_data();
     if ( (miss_with_mu || std) && _mu.empty()) calcu_mu();
 
     int i = 0, j = 0, m = _include.size();
@@ -2287,7 +2296,7 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
     if(std){
         sd_SNP.resize(m);
         for (j = 0; j < m; j++) {
-            sd_SNP(j) = _mu[_include[j]]*(1.0 - 0.5 * _mu[_include[j]]);
+            sd_SNP(j) = _mu[j]*(1.0 - 0.5 * _mu[j]);
             if (fabs(sd_SNP(j)) < 1.0e-50) sd_SNP(j) = 0.0;
             else sd_SNP(j) = sqrt(1.0 / sd_SNP(j));
         }
@@ -2303,39 +2312,38 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
     zoutf.push(raw_file);
     LOGGER << "Saving the recoded genotype matrix to the file [" + X_zFile + "]." << std::endl;
     zoutf << "FID IID ";
-    for (j = 0; j < _include.size(); j++) zoutf << _snp_name[_include[j]] << " ";
+    for (j = 0; j < m; j++) zoutf << _snp_name[j] << " ";
     zoutf << std::endl;
     zoutf << "Reference Allele ";
-    for (j = 0; j < _include.size(); j++) zoutf << _allele_ref[_include[j]] << " ";
+    for (j = 0; j < m; j++) zoutf << _allele_ref[j] << " ";
     zoutf << std::endl;
     for (i = 0; i < _keep.size(); i++) {
-        zoutf << _fid[_keep[i]] << ' ' << _pid[_keep[i]] << ' ';
+        zoutf << _fid[i] << ' ' << _pid[i] << ' ';
         if (_dosage_flag) {
-            // Post compact_dosage_data(): _keep[i]==i, _include[j]==j
-            for (j = 0; j < _include.size(); j++) {
+            for (j = 0; j < m; j++) {
                 const float d = _geno_dose(i, j);
                 if (d < DOSAGE_NA) {
                     x_buf = d;
-                    if(std) x_buf = (x_buf - _mu[_include[j]]) * sd_SNP(j);
+                    if(std) x_buf = (x_buf - _mu[j]) * sd_SNP(j);
                     zoutf << x_buf << ' ';
                 } else {
                     if(std) zoutf << "0 ";
                     else{
-                        if (miss_with_mu) zoutf << _mu[_include[j]] << ' ';
+                        if (miss_with_mu) zoutf << _mu[j] << ' ';
                         else zoutf << "NA ";
                     }
                 }
             }
         } else {
-            for (j = 0; j < _include.size(); j++) {
-                if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
-                    x_buf = _snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]];
-                    if(std) x_buf = (x_buf - _mu[_include[j]]) * sd_SNP(j);
+            for (j = 0; j < m; j++) {
+                if (!_snp_1[j][i] || _snp_2[j][i]) {
+                    x_buf = _snp_1[j][i] + _snp_2[j][i];
+                    if(std) x_buf = (x_buf - _mu[j]) * sd_SNP(j);
                     zoutf << x_buf << ' ';                    
                 } else {
                     if(std) zoutf << "0 ";
                     else {
-                        if (miss_with_mu) zoutf << _mu[_include[j]] << ' ';
+                        if (miss_with_mu) zoutf << _mu[j] << ' ';
                         else zoutf << "NA ";
                     }
                 }
@@ -2351,6 +2359,14 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
 bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
+    compact_indi_data();
+    if (!_make_XMat_no_compact) compact_snp_data();
+    return make_XMat_subset_dense(X, snp_indx, divid_by_std);
+}
+
+bool gcta::make_XMat_subset_dense(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std)
+{
+    if(snp_indx.empty()) return false;
     const int n = _keep.size(), m = snp_indx.size();
 
     // Guard: only resize when strictly necessary.  If the caller pre-allocated
@@ -2359,57 +2375,34 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
     if (X.rows() != n || X.cols() < m)
         X.resize(n, m);
 
-    if (_dosage_flag) {
-        const int col_start = snp_indx[0];
-        auto src = _geno_dose.block(0, col_start, n, m).array();
-
-        Eigen::RowVectorXf mu_row(m);
-        for (int j = 0; j < m; j++) mu_row[j] = static_cast<float>(_mu[snp_indx[j]]);
-        X.leftCols(m).array() = src.rowwise() - mu_row.array();
-
-        if (divid_by_std) {
-            Eigen::RowVectorXf scale(m);
-            for (int j = 0; j < m; j++) {
-                const int k = snp_indx[j];
-                const double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
-                scale[j] = (sd > 1.0e-50) ? static_cast<float>(1.0 / std::sqrt(sd)) : 1.0f;
-            }
-            X.leftCols(m).array() = X.leftCols(m).array().rowwise() * scale.array();
-        }
-
-        X.leftCols(m).array() = X.leftCols(m).array().isInf().select(0.0f, X.leftCols(m).array());
-    } else {
-        // After compact_snp_data(): _include[j]==j, while _keep can still be a
-        // non-identity subset. Always remap row i through _keep[i].
-        // When _make_XMat_no_compact=true (LOCO loop), compaction is skipped and
-        // _snp_1 retains its original BIM order; snp_indx values are positions
-        // within _include, so we must map through _include to get the raw index.
-            std::vector<float> snp_mu(m);
-        std::vector<float> sd_inv(m, 1.0f);
-        for (int j = 0; j < m; j++) {
-            const int k  = _make_XMat_no_compact ? _include[snp_indx[j]] : snp_indx[j];
-            snp_mu[j]    = static_cast<float>(_mu[k]);
+    #pragma omp parallel for schedule(static)
+    for (int j = 0; j < m; j++) {
+        const int k = snp_indx[j];
+        auto col = X.col(j);
+        if (_dosage_flag) {
+            const float mu_k = static_cast<float>(_mu[k]);
+            float scale = 1.0f;
             if (divid_by_std) {
                 const double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
-                if (sd > 1.0e-50)
-                    sd_inv[j] = static_cast<float>(1.0 / std::sqrt(sd));
+                if (sd > 1.0e-50) scale = static_cast<float>(1.0 / std::sqrt(sd));
             }
-        }
-
-        // Column-parallel: each thread writes one contiguous Eigen column (column-major).
-        // divid_by_std is loop-invariant; the compiler hoists the branch.
-        #pragma omp parallel for schedule(static)
-        for (int j = 0; j < m; j++) {
-            const int   k     = _make_XMat_no_compact ? _include[snp_indx[j]] : snp_indx[j];
-            const float mu_k  = snp_mu[j];
-            const float scale = sd_inv[j];
-            const auto& s1    = _snp_1[k];
-            const auto& s2    = _snp_2[k];
-            auto col = X.col(j);
             for (int i = 0; i < n; i++) {
-                const int ki = _keep[i];
-                if (!s1[ki] || s2[ki]) {
-                    float geno = static_cast<float>(s1[ki]) + static_cast<float>(s2[ki]);
+                const float d = _geno_dose(i, k);
+                if (d < DOSAGE_NA) col(i) = (d - mu_k) * scale;
+                else col(i) = 0.0f;
+            }
+        } else {
+            const auto& s1 = _snp_1[k];
+            const auto& s2 = _snp_2[k];
+            const float mu_k = static_cast<float>(_mu[k]);
+            float scale = 1.0f;
+            if (divid_by_std) {
+                const double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
+                if (sd > 1.0e-50) scale = static_cast<float>(1.0 / std::sqrt(sd));
+            }
+            for (int i = 0; i < n; i++) {
+                if (!s1[i] || s2[i]) {
+                    float geno = static_cast<float>(s1[i]) + static_cast<float>(s2[i]);
                     col(i) = (geno - mu_k) * scale;
                 } else {
                     col(i) = 0.0f;
@@ -2424,35 +2417,30 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
 bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
+    compact_indi_data();
     compact_snp_data();
+    return make_XMat_d_subset_dense(X, snp_indx, divid_by_std);
+}
+
+bool gcta::make_XMat_d_subset_dense(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std)
+{
+    if(snp_indx.empty()) return false;
     if (_mu.empty()) calcu_mu();
 
     const int n = _keep.size(), m = snp_indx.size();
     X.resize(n, m);
 
-    // Pre-cache per-SNP metadata; after compaction _include[j]==j for both paths.
-    std::vector<int>   snp_k(m);
-    std::vector<float> snp_mu(m);
-    std::vector<float> snp_psq(m);
-    for (int j = 0; j < m; j++) {
-        snp_k[j]    = snp_indx[j];
-        snp_mu[j]   = static_cast<float>(_mu[snp_k[j]]);
-        snp_psq[j]  = 0.5f * snp_mu[j] * snp_mu[j];
-    }
-
     // Column-parallel fill (column-major layout: each col is contiguous)
     #pragma omp parallel for schedule(static)
     for (int j = 0; j < m; j++) {
-        const int   k    = snp_k[j];
-        const float mu_k = snp_mu[j];
-        const float psq  = snp_psq[j];
+        const int k = snp_indx[j];
         auto col = X.col(j);
         if (_dosage_flag) {
-            // compact_dosage_data() compacts SNP columns only; keep row remapping.
+            const float mu_k = static_cast<float>(_mu[k]);
+            const float psq = 0.5f * mu_k * mu_k;
             for (int i = 0; i < n; i++) {
-                const int ki = _keep[i];
-                if (_geno_dose(ki, k) < DOSAGE_NA) {
-                    float g = _geno_dose(ki, k);
+                if (_geno_dose(i, k) < DOSAGE_NA) {
+                    float g = _geno_dose(i, k);
                     if      (g < 0.5f) g = 0.0f;
                     else if (g < 1.5f) g = mu_k;
                     else               g = 2.0f * mu_k - 2.0f;
@@ -2462,13 +2450,13 @@ bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bo
                 }
             }
         } else {
-            // After compaction SNP indices are dense; individual rows still map via _keep.
             const auto& s1 = _snp_1[k];
             const auto& s2 = _snp_2[k];
+            const float mu_k = static_cast<float>(_mu[k]);
+            const float psq = 0.5f * mu_k * mu_k;
             for (int i = 0; i < n; i++) {
-                const int ki = _keep[i];
-                if (!s1[ki] || s2[ki]) {
-                    float g = static_cast<float>(s1[ki]) + static_cast<float>(s2[ki]);
+                if (!s1[i] || s2[i]) {
+                    float g = static_cast<float>(s1[i]) + static_cast<float>(s2[i]);
                     if      (g < 0.5f) g = 0.0f;
                     else if (g < 1.5f) g = mu_k;
                     else               g = 2.0f * mu_k - 2.0f;
@@ -2483,7 +2471,8 @@ bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bo
     if (divid_by_std) {
         #pragma omp parallel for schedule(static)
         for (int j = 0; j < m; j++) {
-            const double sd = _mu[snp_k[j]] * (1.0 - 0.5 * _mu[snp_k[j]]);
+            const int k = snp_indx[j];
+            const double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
             if (sd > 1.0e-50)
                 X.col(j) *= static_cast<float>(1.0 / sd);
         }

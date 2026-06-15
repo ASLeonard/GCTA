@@ -301,6 +301,8 @@ private:
     //void make_XMat_eigenMatrix(MatrixXf &X);
     bool make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std);
     bool make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std);
+    bool make_XMat_subset_dense(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std);
+    bool make_XMat_d_subset_dense(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std);
 
 
     void calcu_mu(bool ssq_flag = false);

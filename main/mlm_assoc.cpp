@@ -399,6 +399,9 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
 
     LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<std::endl;
 
+    compact_indi_data();
+    if (!_make_XMat_no_compact) compact_snp_data();
+
     int k = 0, l = 0;
     // Pre-allocate at max_block_size — no heap activity inside the hot loop.
     // leftCols(bs) selects the active columns for partial (last) blocks.
@@ -422,7 +425,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
             std::min(static_cast<unsigned long>(max_block_size), m - i));
         indx.resize(bs);
         std::iota(indx.begin(), indx.end(), static_cast<int>(i));
-        make_XMat_subset(X_block, indx, false);  // X_block is n×bs (written into pre-alloc'd buffer)
+        make_XMat_subset_dense(X_block, indx, false);  // X_block is n×bs (written into pre-alloc'd buffer)
 
         // GEMV first — X_block is still hot in cache from make_XMat_subset.
         // X^T Vi_y (bs×1) — single GEMV into pre-allocated target.
@@ -577,7 +580,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
             std::min(static_cast<unsigned long>(max_block_size), m - i));
         indx.resize(bs);
         for(k = 0; k < bs; k++) indx[k] = i + k;
-        make_XMat_subset(X_block, indx, false);  // X_block is n×bs
+        make_XMat_subset_dense(X_block, indx, false);  // X_block is n×bs
 
         // All operations using the original genotype values must come first,
         // before the in-place STRMM/STRSM overwrites X_block.
