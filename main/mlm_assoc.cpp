@@ -325,15 +325,33 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     
     const std::string filename = _out + ".mlma";
     LOGGER<<"\nSaving the results of the mixed linear model association analyses of "<<m<<" SNPs to ["+filename+"] ..."<<std::endl;
-    std::ofstream ofile(filename);
-    if(!ofile) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
-    ofile<<"Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\t"<<(_log_pval ? "log_p" : "p")<<std::endl;
-	for(size_t i = 0; i < m; ++i){
-        ofile<<_chr[i]<<"\t"<<_snp_name[i]<<"\t"<<_bp[i]<<"\t"<<_ref_A[i]<<"\t"<<_other_A[i]<<"\t";
-        if(pval[i]>1.5) ofile<<"NA\tNA\tNA\tNA"<<std::endl;
-        else ofile<<0.5*_freq[i]<<"\t"<<beta[i]<<"\t"<<se[i]<<"\t"<<pval[i]<<std::endl;
+    std::string chunk;
+    chunk.reserve(1 << 22); // 4 MB chunk
+
+    for (size_t i = 0; i < m; ++i) {
+        if (pval[i] > 1.0) {
+            std::format_to(std::back_inserter(chunk),
+                "{}\t{}\t{}\t{}\t{}\tNA\tNA\tNA\tNA\n",
+                _chr[i], _snp_name[i], _bp[i],
+                _allele_ref[i], _allele_alt[i]);
+        } else {
+            std::format_to(std::back_inserter(chunk),
+                "{}\t{}\t{}\t{}\t{}\t{:.6g}\t{:.6g}\t{:.6g}\t{:.6g}\n",
+                _chr[i], _snp_name[i], _bp[i],
+                _allele_ref[i], _allele_alt[i],
+                0.5*_freq[i], beta[i], se[i], pval[i]);
+        }
+
+        // Flush when chunk is large enough
+        if (chunk.size() >= (1 << 21)) { // 2 MB threshold
+            ofile.write(chunk.data(), chunk.size());
+            chunk.clear();
+        }
     }
-    ofile.close();
+    // Final flush
+    if (!chunk.empty()) {
+        ofile.write(chunk.data(), chunk.size());
+    }
 }
 
 gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m)
