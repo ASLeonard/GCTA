@@ -68,13 +68,6 @@ void gcta::read_metafile(std::string metafile, bool GC, double GC_val) {
         count++;
         if (iter == _snp_name_map.end()) continue;
         i = iter->second;
-        if (A1_buf != _allele1[i] && A1_buf != _allele2[i]) {
-            bad_snp.push_back(_snp_name[i]);
-            bad_A1.push_back(_allele1[i]);
-            bad_A2.push_back(_allele2[i]);
-            bad_refA.push_back(A1_buf);
-            continue;
-        }
         snplist.push_back(snp_buf);
         ref_A1_buf.push_back(A1_buf);
         ref_A2_buf.push_back(A2_buf);
@@ -110,28 +103,19 @@ void gcta::read_metafile(std::string metafile, bool GC, double GC_val) {
     std::map<std::string, int> id_map;
     for (i = 0; i < snplist.size(); i++) id_map.insert(std::pair<std::string, int>(snplist[i], i));
     for (i = 0; i < _include.size(); i++) {
-        int include_i = _include[i];
-        bool flip_flag = false;
-        std::string cur_snp_name = _snp_name[include_i];
+        int include_i = _include[i];        std::string cur_snp_name = _snp_name[include_i];
         auto iter = id_map.find(cur_snp_name);
-        _ref_A[include_i] = ref_A1_buf[iter->second];
-        _other_A[include_i] = ref_A2_buf[iter->second];
-        if (!_mu.empty() && ref_A1_buf[iter->second] == _allele2[include_i]) {
-            _mu[include_i] = 2.0 - _mu[include_i];
-            flip_flag = true;
-        }
-        double cur_freq_value =  _mu[include_i] / 2.0;
+        _allele_ref[include_i] = ref_A1_buf[iter->second];
+        _allele_alt[include_i] = ref_A2_buf[iter->second];        double cur_freq_value =  _mu[include_i] / 2.0;
         double freq_diff = abs(cur_freq_value - freq_buf[iter->second]);
         if(freq_diff < freq_diff_thresh){
             snplist_freq.push_back(cur_snp_name);
             indx.push_back(iter->second);
-        }else{
-            if(flip_flag) cur_freq_value = 1.0 - cur_freq_value;
-            bad_snp_freq.push_back(cur_snp_name);
-            bad_A1_freq.push_back(_allele1[include_i]);
-            bad_A2_freq.push_back(_allele2[include_i]);
-            bad_refA_freq.push_back(_ref_A[include_i]);
-            bad_otherA_freq.push_back(_other_A[include_i]);
+        }else{            bad_snp_freq.push_back(cur_snp_name);
+            bad_A1_freq.push_back(_allele_alt[include_i]);
+            bad_A2_freq.push_back(_allele_ref[include_i]);
+            bad_refA_freq.push_back(_allele_ref[include_i]);
+            bad_otherA_freq.push_back(_allele_alt[include_i]);
             bad_freq_value.push_back(cur_freq_value);
             bad_freq_ma.push_back(freq_buf[iter->second]);
         }
@@ -307,7 +291,7 @@ void gcta::run_massoc_cond(std::string metafile, std::string snplistfile, int wi
     int i = 0, j = 0;
     for (i = 0; i < pgiven.size(); i++) {
         j = pgiven[i];
-        ofile << _chr[_include[j]] << "\t" << _snp_name[_include[j]] << "\t" << _bp[_include[j]] << "\t" << _ref_A[_include[j]] << "\t" << _freq[j] << "\t" << _beta[j] << "\t" << _beta_se[j] << "\t" << _pval[j] << std::endl;
+        ofile << _chr[_include[j]] << "\t" << _snp_name[_include[j]] << "\t" << _bp[_include[j]] << "\t" << _allele_ref[_include[j]] << "\t" << _freq[j] << "\t" << _beta[j] << "\t" << _beta_se[j] << "\t" << _pval[j] << std::endl;
     }
     ofile.close();
     
@@ -327,7 +311,7 @@ void gcta::massoc_slct_output(bool joint_only, std::vector<int> &slct, eigenVect
     for (i = 0; i < slct.size(); i++) {
         j = slct[i];
         ofile << _chr[_include[j]] << "\t" << _snp_name[_include[j]] << "\t" << _bp[_include[j]] << "\t";
-        ofile << _ref_A[_include[j]] << "\t" << _freq[j] << "\t" << _beta[j] << "\t" << _beta_se[j] << "\t";
+        ofile << _allele_ref[_include[j]] << "\t" << _freq[j] << "\t" << _beta[j] << "\t" << _beta_se[j] << "\t";
         ofile << _pval[j] << "\t" << _Nd[j] << "\t" << 0.5 * _mu[_include[j]] << "\t" << bJ[i] << "\t" << bJ_se[i] << "\t" << pJ[i] << "\t";
         if (i == slct.size() - 1) ofile << 0 << std::endl;
         else ofile << rval(i, i + 1) << std::endl;
@@ -368,7 +352,7 @@ void gcta::massoc_cond_output(std::vector<int> &remain, eigenVector &bC, eigenVe
         for (i = 0; i < remain.size(); i++) {
             j = remain[i];
             ofile << _chr[_include[j]] << "\t" << _snp_name[_include[j]] << "\t" << _bp[_include[j]] << "\t";
-            ofile << _ref_A[_include[j]] << "\t" << _freq[j] << "\t" << _beta[j] << "\t" << _beta_se[j] << "\t";
+            ofile << _allele_ref[_include[j]] << "\t" << _freq[j] << "\t" << _beta[j] << "\t" << _beta_se[j] << "\t";
             ofile << _pval[j] << "\t" << _Nd[j] << "\t" << 0.5 * _mu[_include[j]] << "\t";
             if (pC[i] > 1.5) ofile << "NA\tNA\tNA" << std::endl;
             else ofile << bC[i] << "\t" << bC_se[i] << "\t" << pC[i] << std::endl;
@@ -379,7 +363,7 @@ void gcta::massoc_cond_output(std::vector<int> &remain, eigenVector &bC, eigenVe
             if(pC[i] < out_thresh){
                 j = remain[i];
                 ofile << _chr[_include[j]] << "\t" << _snp_name[_include[j]] << "\t" << _bp[_include[j]] << "\t";
-                ofile << _ref_A[_include[j]] << "\t" << _freq[j] << "\t" << _beta[j] << "\t" << _beta_se[j] << "\t";
+                ofile << _allele_ref[_include[j]] << "\t" << _freq[j] << "\t" << _beta[j] << "\t" << _beta_se[j] << "\t";
                 ofile << _pval[j] << "\t" << _Nd[j] << "\t" << 0.5 * _mu[_include[j]] << "\t";
                 ofile << bC[i] << "\t" << bC_se[i] << "\t" << pC[i] << std::endl;
             }
@@ -881,7 +865,7 @@ void gcta::run_massoc_sblup(std::string metafile, int wind_size, double lambda)
         if (!ofile) LOGGER.e(0, "cannot open the file [" + filename + "] to write.");
         for (j = 0; j < _include.size(); j++) {
             // change here: convert from u to b before writing to file
-            ofile << _snp_name[_include[j]] << "\t" << _ref_A[_include[j]] << "\t" << _beta[j] << "\t" << bJ[j] / sqrt(_MSX[j]) << std::endl;
+            ofile << _snp_name[_include[j]] << "\t" << _allele_ref[_include[j]] << "\t" << _beta[j] << "\t" << bJ[j] / sqrt(_MSX[j]) << std::endl;
         }
         ofile.close();
     } else LOGGER.e(0, "Jacobi iteration cannot converge. You can increase the maximum number of iterations by the option --massoc-sblup-maxit.");

@@ -53,7 +53,7 @@ void gcta::paa(std::string aa_file)
             if(!_snp_1[_include[k]][_keep[i]] || _snp_2[_include[k]][_keep[i]]){
                 x=_snp_1[_include[k]][_keep[i]]+_snp_2[_include[k]][_keep[i]];
                 if(x<0.1){
-                    if(_ref_A[_include[k]]==aa[_include[k]]){
+                    if(_allele_ref[_include[k]]==aa[_include[k]]){
                         if(_mu[_include[k]]>1.0) hom_da_rare[i]+=1.0;
                         else hom_da_comm[i]+=1.0;
                     }
@@ -63,7 +63,7 @@ void gcta::paa(std::string aa_file)
                     }
                 }
                 else if(x>1.9){
-                    if(_ref_A[_include[k]]==aa[_include[k]]){
+                    if(_allele_ref[_include[k]]==aa[_include[k]]){
                         if(_mu[_include[k]]>1.0) hom_aa_comm[i]+=1.0;
                         else hom_aa_rare[i]+=1.0;
                     }
@@ -73,7 +73,7 @@ void gcta::paa(std::string aa_file)
                     }
                 }
                 else{
-                    if(_ref_A[_include[k]]==aa[_include[k]]){
+                    if(_allele_ref[_include[k]]==aa[_include[k]]){
                         if(_mu[_include[k]]>1.0) het_aa_comm[i]+=1.0;
                         else het_aa_rare[i]+=1.0;
                     }
@@ -148,7 +148,7 @@ void gcta::ibc(bool ibc_all)
 		for(k=0; k<_include.size(); k++){
             if(!_snp_1[_include[k]][_keep[i]] || _snp_2[_include[k]][_keep[i]]){
                 x=_snp_1[_include[k]][_keep[i]]+_snp_2[_include[k]][_keep[i]];
-                if(_allele2[_include[k]]==_ref_A[_include[k]]) x=2.0-x;
+                if(_allele_ref[_include[k]]==_allele_ref[_include[k]]) x=2.0-x;
                 Fhat_buf=(x-_mu[_include[k]])*(x-_mu[_include[k]]);
                 if(ibc_all) Fhat4[i]+=Fhat_buf;
                 Fhat_buf*=h_i[k];
@@ -237,7 +237,7 @@ void gcta::Fst(std::string filename)
     ofile<<"Fst"<<std::endl;
     double p_bar=0.0, s_sq=0.0, h_bar=0.0, a=0.0, b=0.0, c=0.0, Fst=0.0, d_buf=0.0;
     for(i=0; i<_include.size(); i++){
-        ofile<<_chr[_include[i]]<<"\t"<<_snp_name[_include[i]]<<"\t"<<_bp[_include[i]]<<"\t"<<_ref_A[_include[i]]<<"\t";
+        ofile<<_chr[_include[i]]<<"\t"<<_snp_name[_include[i]]<<"\t"<<_bp[_include[i]]<<"\t"<<_allele_ref[_include[i]]<<"\t";
         makex_eigenVector(i, x, false, false);
         for(j=0; j<r; j++){
             p_sub[j]=x.dot(S.col(j))*0.5/n_sub[j];

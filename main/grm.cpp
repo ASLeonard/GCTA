@@ -1220,7 +1220,7 @@ void gcta::snp_pc_loading(std::string pc_file)
     for(i = 0; i < eigenval_num; i++) ofile << "\tpc" << i+1 << "_loading";
     ofile << std::endl;
     for(i = 0; i < m; i++){
-        ofile << _snp_name[_include[i]] << "\t" << _ref_A[_include[i]] << "\t" << _other_A[_include[i]] << "\t" <<  _mu[_include[i]];
+        ofile << _snp_name[_include[i]] << "\t" << _allele_ref[_include[i]] << "\t" << _allele_alt[_include[i]] << "\t" <<  _mu[_include[i]];
         for(j = 0; j < eigenvec_num; j++) ofile << "\t" << snp_loading(i, j);
         ofile << "\n";
     }
@@ -1315,13 +1315,13 @@ void gcta::project_loading(std::string pc_load, int N){
     for(int snp_index=0; snp_index < snps.size(); snp_index++){
         int cur_snp_index = snp_index_include[snp_index];
         if(cur_snp_index >= 0 && ori_SNPs.find(cur_snp_index) != ori_SNPs.end() ){
-            if((StrFunc::i_compare(A1[snp_index],_allele1[cur_snp_index]) && 
-                StrFunc::i_compare(A2[snp_index],_allele2[cur_snp_index])) 
-               || (StrFunc::i_compare(A1[snp_index],_allele2[cur_snp_index]) && 
-                StrFunc::i_compare(A2[snp_index],_allele1[cur_snp_index]))){
+            if((StrFunc::i_compare(A1[snp_index],_allele_alt[cur_snp_index]) && 
+                StrFunc::i_compare(A2[snp_index],_allele_ref[cur_snp_index])) 
+               || (StrFunc::i_compare(A1[snp_index],_allele_ref[cur_snp_index]) && 
+                StrFunc::i_compare(A2[snp_index],_allele_alt[cur_snp_index]))){
                      _include.push_back(cur_snp_index);
                      mu_adj.push_back(mu[snp_index]);
-                     _ref_A[cur_snp_index] = A1[snp_index];
+                     _allele_ref[cur_snp_index] = A1[snp_index];
                      filter_snp_loading.insert(filter_snp_loading.end(), snp_loading.begin() + N*snp_index, snp_loading.begin() + N*snp_index + N );
                      continue;
             }
@@ -1359,9 +1359,7 @@ void gcta::project_loading(std::string pc_load, int N){
         Eigen::Matrix<t_val,1,Eigen::Dynamic> geno(_include.size());
         for(int snp_index=0; snp_index < _include.size(); snp_index++){
             if (!_snp_1[_include[snp_index]][_keep[ind_index]] || _snp_2[_include[snp_index]][_keep[ind_index]]) {
-                geno(snp_index) = _snp_1[_include[snp_index]][_keep[ind_index]] + _snp_2[_include[snp_index]][_keep[ind_index]];
-                if (_allele1[_include[snp_index]] != _ref_A[_include[snp_index]]) geno(snp_index) = 2.0 - geno(snp_index);
-                geno(snp_index) = (geno(snp_index) - mu_adj[snp_index]) / sqrt(mu_adj[snp_index]*(1.0 - 0.5*mu_adj[snp_index]));
+                geno(snp_index) = _snp_1[_include[snp_index]][_keep[ind_index]] + _snp_2[_include[snp_index]][_keep[ind_index]];                geno(snp_index) = (geno(snp_index) - mu_adj[snp_index]) / sqrt(mu_adj[snp_index]*(1.0 - 0.5*mu_adj[snp_index]));
             }else{
                 geno(snp_index) = 0.0;
             }

@@ -329,7 +329,7 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     if(!ofile) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
     ofile<<"Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\t"<<(_log_pval ? "log_p" : "p")<<std::endl;
 	for(size_t i = 0; i < m; ++i){
-        ofile<<_chr[i]<<"\t"<<_snp_name[i]<<"\t"<<_bp[i]<<"\t"<<_ref_A[i]<<"\t"<<_other_A[i]<<"\t";
+        ofile<<_chr[i]<<"\t"<<_snp_name[i]<<"\t"<<_bp[i]<<"\t"<<_allele_ref[i]<<"\t"<<_allele_alt[i]<<"\t";
         if(pval[i]>1.5) ofile<<"NA\tNA\tNA\tNA"<<std::endl;
         else ofile<<0.5*_freq[i]<<"\t"<<beta[i]<<"\t"<<se[i]<<"\t"<<pval[i]<<std::endl;
     }
@@ -775,7 +775,7 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
     for(c1=0; c1<chrs.size(); c1++){
         for(i=0; i<icld_chrs[c1].size(); i++){
             j=icld_chrs[c1][i];
-            ofile<<_chr[j]<<"\t"<<_snp_name[j]<<"\t"<<_bp[j]<<"\t"<<_ref_A[j]<<"\t"<<_other_A[j]<<"\t";
+            ofile<<_chr[j]<<"\t"<<_snp_name[j]<<"\t"<<_bp[j]<<"\t"<<_allele_ref[j]<<"\t"<<_allele_alt[j]<<"\t";
             if(pval[c1][i]>1.5) ofile<<"NA\tNA\tNA\tNA"<<std::endl;
             else ofile<<0.5*_mu[j]<<"\t"<<beta[c1][i]<<"\t"<<se[c1][i]<<"\t"<<pval[c1][i]<<std::endl;
         }
@@ -1075,7 +1075,7 @@ void gcta::mlma_loco_v2(std::string grm_file, std::string grm_chr_prefix,
         for (i = 0; i < icld_chrs[c1].size(); i++) {
             const int j = icld_chrs[c1][i];
             ofile << _chr[j] << "\t" << _snp_name[j] << "\t" << _bp[j] << "\t"
-                  << _ref_A[j] << "\t" << _other_A[j] << "\t";
+                  << _allele_ref[j] << "\t" << _allele_alt[j] << "\t";
             if (p[i] > 1.5)
                 ofile << "NA\tNA\tNA\tNA\n";
             else
