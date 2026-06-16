@@ -179,51 +179,32 @@ inline void run_mlma_stream_association(RemlState& state,
 
         // Write per-SNP results into batch output buffer to minimise write() overhead.
         for (int i = 0; i < bs; ++i) {
-            const uint32_t raw = marker->getRawIndex(exIdx[i]);
+            const uint32_t raw      = marker->getRawIndex(exIdx[i]);
             const std::string& chr  = marker->getRawChr(raw);
             const std::string& name = marker->getRawName(raw);
             const unsigned     bp   = static_cast<unsigned>(marker->getRawBp(raw));
-            const bool eff_rev       = marker->isEffecRev(exIdx[i]);
-            const std::string& a1    = eff_rev ? marker->getRawA2(raw) : marker->getRawA1(raw);
-            const std::string& a2    = eff_rev ? marker->getRawA1(raw) : marker->getRawA2(raw);
+            const bool eff_rev      = marker->isEffecRev(exIdx[i]);
+            const std::string& a1   = eff_rev ? marker->getRawA2(raw) : marker->getRawA1(raw);
+            const std::string& a2   = eff_rev ? marker->getRawA1(raw) : marker->getRawA2(raw);
 
-            char line[512];
             float beta_val = 0.0f, se_val = 0.0f;
             double pval_val = 0.0;
             const bool stat_ok = valid_v[i] &&
                 mlma_snp_stat(Xt_Vi_y[i], xvx_diag[i], log_pval,
-                              beta_val, se_val, pval_val);
+                            beta_val, se_val, pval_val);
 
-            auto format_line = [&](char* dst, size_t cap) {
-                if (!stat_ok) {
-                    return std::snprintf(dst, cap,
-                                         "%s\t%s\t%u\t%s\t%s\tNA\tNA\tNA\tNA\n",
-                                         chr.c_str(), name.c_str(), bp,
-                                         a1.c_str(), a2.c_str());
-                }
-                return std::snprintf(dst, cap,
-                                     "%s\t%s\t%u\t%s\t%s\t%.6g\t%.6g\t%.6g\t%.6g\n",
-                                     chr.c_str(), name.c_str(), bp,
-                                     a1.c_str(), a2.c_str(),
-                                     static_cast<double>(af_v[i]),
-                                     static_cast<double>(beta_val),
-                                     static_cast<double>(se_val),
-                                     pval_val);
-            };
-
-            const int len = format_line(line, sizeof(line));
-            if (len < 0) {
-                LOGGER.e(0, "failed to format output line for SNP " + std::to_string(exIdx[i]) + ".");
-            }
-            const size_t need = static_cast<size_t>(len);
-            if (need < sizeof(line)) {
-                append_io(line, need);
+            if (!stat_ok) {
+                std::format_to(std::back_inserter(io_buf),
+                    "{}\t{}\t{}\t{}\t{}\tNA\tNA\tNA\tNA\n",
+                    chr, name, bp, a1, a2);
             } else {
-                line_scratch.resize(need + 1);
-                const int len2 = format_line(line_scratch.data(), line_scratch.size());
-                if (len2 < 0)
-                    LOGGER.e(0, "failed to format long output line for SNP " + std::to_string(exIdx[i]) + ".");
-                append_io(line_scratch.data(), static_cast<size_t>(len2));
+                std::format_to(std::back_inserter(io_buf),
+                    "{}\t{}\t{}\t{}\t{}\t{:.6g}\t{:.6g}\t{:.6g}\t{:.6g}\n",
+                    chr, name, bp, a1, a2,
+                    static_cast<double>(af_v[i]),
+                    static_cast<double>(beta_val),
+                    static_cast<double>(se_val),
+                    pval_val);
             }
         }
 
