@@ -405,7 +405,11 @@ void calcu_tr_PA_woodbury(const RemlCtx& ctx, RemlVec& tr_PA) {
     const int c = static_cast<int>(ctx.Vi_X.cols());
     RemlMat ViXTViX(c, c);
     ViXTViX.noalias() = ctx.Vi_X.transpose() * ctx.Vi_X;
-    const double tr_corr_I = (ctx.Xt_Vi_X_i * ViXTViX).trace();
+    // trace(A*B) == (A.cwiseProduct(B.transpose())).sum() for any square A,B.
+    // Both Xt_Vi_X_i and ViXTViX are c x c (c = covariate count, typically 1-5);
+    // avoiding the c x c GEMM eliminates BLAS call overhead that would dominate
+    // the actual arithmetic at such small sizes.
+    const double tr_corr_I = ctx.Xt_Vi_X_i.cwiseProduct(ViXTViX.transpose()).sum();
 
     tr_PA(ncomp - 1) = tr_Vinv - tr_corr_I;
 
@@ -413,7 +417,7 @@ void calcu_tr_PA_woodbury(const RemlCtx& ctx, RemlVec& tr_PA) {
     RemlMat delta_UkViX = delta.asDiagonal() * ctx.Uk_Vi_X;
     RemlMat ViX_K_ViX = lambda_t * ViXTViX;
     ViX_K_ViX.noalias() += ctx.Uk_Vi_X.transpose() * delta_UkViX;
-    const double tr_corr_K = (ctx.Xt_Vi_X_i * ViX_K_ViX).trace();
+    const double tr_corr_K = ctx.Xt_Vi_X_i.cwiseProduct(ViX_K_ViX.transpose()).sum();
 
     tr_PA(0) = tr_Vinv_K - tr_corr_K;
 }
@@ -908,15 +912,21 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         evec_full = svd.matrixU().leftCols(k_svd);
     } else {
         omega.resize(0, 0);
+        // Pre-allocate thin-Q scratch (n x k_ext) once and reuse across all power
+        // iterations and the final QR.  Without this, each Identity(n, k_ext)
+        // construction allocates and zero-inits ~n*k_ext*8 bytes (up to ~4.9 GB at
+        // n=500k, k_ext=1220), totalling 4 such allocations per compute_woodbury_basis call.
+        Eigen::MatrixXd qr_scratch = Eigen::MatrixXd::Identity(n, k_ext);
         constexpr int power_iter = 3;
         for (int pi = 0; pi < power_iter; ++pi) {
             Eigen::HouseholderQR<Eigen::MatrixXd> qr_pi(Y);
-            Y = qr_pi.householderQ() * Eigen::MatrixXd::Identity(n, k_ext);
-            Y = K_dbl.selfadjointView<Eigen::Lower>() * Y;
+            qr_scratch.setIdentity();
+            Y = K_dbl.selfadjointView<Eigen::Lower>() * (qr_pi.householderQ() * qr_scratch);
         }
         {
             Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
-            Y = qr.householderQ() * Eigen::MatrixXd::Identity(n, k_ext);
+            qr_scratch.setIdentity();
+            Y = qr.householderQ() * qr_scratch;
         }
         Eigen::MatrixXd KY = K_dbl.selfadjointView<Eigen::Lower>() * Y;
         Eigen::MatrixXd B  = Y.transpose() * KY;
@@ -925,7 +935,12 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         if (es.info() != Eigen::Success)
             LOGGER.e(0, "Woodbury: eigendecomposition of projected GRM failed.");
         eval_full = es.eigenvalues().tail(k_svd).reverse();
-        evec_full = Y * es.eigenvectors().rightCols(k_svd).rowwise().reverse();
+        // Materialise the reversed eigenvector block into a plain contiguous matrix
+        // before the n x k_svd DGEMM.  Without this, rowwise().reverse() on a block
+        // expression forces column-by-column scatter during DGEMM, defeating tiling.
+        const Eigen::MatrixXd evecs_sorted =
+            es.eigenvectors().rightCols(k_svd).rowwise().reverse().eval();
+        evec_full = Y * evecs_sorted;
     }
 
     if (auto_k) {
