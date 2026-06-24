@@ -1518,7 +1518,7 @@ void option(int option_num, char* option_str[])
                     if(exclude_region_wind>0) pter_gcta->exclude_region_snp(exclude_snp_name, exclude_region_wind);
                     else pter_gcta->exclude_single_snp(exclude_snp_name);
                 }
-                if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
+                if (!update_refA_file.empty()) pter_gcta->update_allele_ref(update_refA_file);
                 if (LD) pter_gcta->read_LD_target_SNPs(LD_file);
                 if(gsmr_flag) pter_gcta->read_gsmrfile(expo_file_list, outcome_file_list, gwas_thresh, nsnp_gsmr, gsmr_so_alg);
                 if(mtcojo_flag) nsnp_read = pter_gcta->read_mtcojofile(mtcojolist_file, gwas_thresh, nsnp_gsmr);
@@ -1620,7 +1620,7 @@ void option(int option_num, char* option_str[])
         if (!extract_snp_name.empty()) pter_gcta->extract_single_snp(extract_snp_name);
         if (!exclude_snp_name.empty()) pter_gcta->exclude_single_snp(exclude_snp_name);
         if (extract_chr_start > 0) LOGGER.w(0, "the option --chr, --autosome or --nonautosome is inactive for dosage data.");
-        if (!update_refA_file.empty()) pter_gcta->update_ref_A(update_refA_file);
+        if (!update_refA_file.empty()) pter_gcta->update_allele_ref(update_refA_file);
         if (dose_mach_flag) pter_gcta->read_imp_dose_mach(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
         else if (dose_mach_gz_flag) pter_gcta->read_imp_dose_mach_gz(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);
         else if (dose_beagle_flag) pter_gcta->read_imp_dose_beagle(dose_file, kp_indi_file, rm_indi_file, blup_indi_file);

@@ -184,8 +184,8 @@ void gcta::read_bimfile(std::string bimfile) {
     _snp_name.clear();
     _genet_dst.clear();
     _bp.clear();
-    _allele1.clear();
-    _allele2.clear();
+    _allele_alt.clear();
+    _allele_ref.clear();
     while (Bim) {
         Bim >> ibuf;
         if (Bim.eof()) break;
@@ -198,15 +198,13 @@ void gcta::read_bimfile(std::string bimfile) {
         _bp.push_back(ibuf);
         Bim >> cbuf;
         StrFunc::to_upper(cbuf);
-        _allele1.push_back(cbuf);
+        _allele_alt.push_back(cbuf);
         Bim >> cbuf;
         StrFunc::to_upper(cbuf);
-        _allele2.push_back(cbuf);
+        _allele_ref.push_back(cbuf);
     }
     Bim.close();
     _snp_num = _chr.size();
-    _ref_A = _allele1;
-    _other_A = _allele2;
     LOGGER << _snp_num << " SNPs to be included from [" + bimfile + "]." << std::endl;
 
     // Initialize _include
@@ -323,7 +321,7 @@ void gcta::read_bedfile(std::string bedfile)
  *   11 -> Homozygous for allele 2 (coded as 0)
  *
  * Reference allele frequency:
- *   - Always calculated for the allele specified in _ref_A
+ *   - Always calculated for the allele specified in _allele_ref
  *   - Stored in _mu as mean allele count (0-2 range)
  *   - To get allele frequency in 0-1 range: divide _mu by 2
  * 
@@ -389,7 +387,7 @@ void gcta::read_bed_dosage(std::string bedfile)
     // BED 2-bit encoding (per pair of raw bits, LSB-first within byte):
     //   00 = homA1,  01 = missing,  10 = het,  11 = homA2
     // Per-SNP LUT maps raw 2-bit value → ref-allele count as float
-    // (or DOSAGE_NA for missing). Built once per SNP from the flip flag.
+    // (or DOSAGE_NA for missing). Built once per SNP.
     //
     // Single pass: decode raw ref-allele counts into _geno_dose AND
     // accumulate allele_count/valid_count for _mu simultaneously.
@@ -403,16 +401,15 @@ void gcta::read_bed_dosage(std::string bedfile)
     for (int j = 0; j < _snp_num; j++) {
         if (!rsnp[j]) { buf_pos += bytes_per_snp; continue; }
 
-        // Precompute flip flag and 4-entry decode LUT for this SNP.
+        // Build a 4-entry decode LUT for this SNP.
         const int full_idx = _include[snp_indx];
-        const bool flip = (_allele2[full_idx] == _ref_A[full_idx]);
-        // lut[raw_2bit] = ref-allele count {0,1,2} or -1 (missing).
+                // lut[raw_2bit] = ref-allele count {0,1,2} or -1 (missing).
         // raw: 00=homA1(2), 01=missing(-1), 10=het(1), 11=homA2(0)
         const int8_t lut[4] = {
-            static_cast<int8_t>(flip ? 0 : 2),  // 00 homA1
+            2,  // 00 homA1
             -1,                                  // 01 missing
             1,                                   // 10 het (same either way)
-            static_cast<int8_t>(flip ? 2 : 0),  // 11 homA2
+            0,  // 11 homA2
         };
 
         int allele_count = 0, valid_count = 0;
@@ -461,16 +458,6 @@ void gcta::read_bed_dosage(std::string bedfile)
         }
     }
 
-        // Debug print of the first few entries of the _geno_dose matrix
-    LOGGER << "DEBUG: First few entries of _geno_dose matrix (up to 5 individuals x 5 SNPs):" << std::endl;
-    std::ofstream dbg(_out + ".debug_geno_dose.txt");
-    for (int i = 0; i < n; i++) {
-        for (int sj = 0; sj < m; sj++) {
-            dbg << " " << (_geno_dose(i, sj) >= DOSAGE_NA ? "NA" : std::to_string(_geno_dose(i, sj)));
-        }
-        dbg << std::endl;
-    }
-
     LOGGER << "Dosage data for " << n << " individuals and " << m
            << " SNPs loaded from [" + bedfile + "] ("
            << geneticModelToString(_genetic_model) << " model)." << std::endl;
@@ -506,10 +493,8 @@ void gcta::update_bim(std::vector<int> &rsnp) {
             _snp_name[write]  = std::move(_snp_name[i]);
             _genet_dst[write] = _genet_dst[i];
             _bp[write]        = _bp[i];
-            _allele1[write]   = std::move(_allele1[i]);
-            _allele2[write]   = std::move(_allele2[i]);
-            _ref_A[write]     = std::move(_ref_A[i]);
-            _other_A[write]   = std::move(_other_A[i]);
+            _allele_alt[write]   = std::move(_allele_alt[i]);
+            _allele_ref[write]   = std::move(_allele_ref[i]);
             if (!_impRsq.empty()) _impRsq[write] = _impRsq[i];
         }
         write++;
@@ -518,10 +503,8 @@ void gcta::update_bim(std::vector<int> &rsnp) {
     _snp_name.resize(write);
     _genet_dst.resize(write);
     _bp.resize(write);
-    _allele1.resize(write);
-    _allele2.resize(write);
-    _ref_A.resize(write);
-    _other_A.resize(write);
+    _allele_alt.resize(write);
+    _allele_ref.resize(write);
     if (!_impRsq.empty()) _impRsq.resize(write);
 
     _snp_num = write;
@@ -551,7 +534,7 @@ void gcta::update_fam(std::vector<int> &rindi) {
     _pid.resize(write);
     _fa_id.resize(write);
     _mo_id.resize(write);
-    _sex.resize(write);
+    _sex.resize(write); 
     _pheno.resize(write);
 
     _indi_num = write;
@@ -875,8 +858,8 @@ void gcta::update_include(std::vector<int> chr_buf, std::vector<std::string> snp
     _snp_name.insert(_snp_name.end(), snpid_buf.begin(), snpid_buf.end());
     _genet_dst.insert(_genet_dst.end(), gd_buf.begin(), gd_buf.end());
     _bp.insert(_bp.end(), bp_buf.begin(), bp_buf.end());
-    _allele1.insert(_allele1.end(), a1_buf.begin(), a1_buf.end());
-    _allele2.insert(_allele2.end(), a2_buf.begin(), a2_buf.end());
+    _allele_alt.insert(_allele_alt.end(), a1_buf.begin(), a1_buf.end());
+    _allele_ref.insert(_allele_ref.end(), a2_buf.begin(), a2_buf.end());
 }
 
 void read_single_bimfile(std::string bimfile, std::vector<int> &chr, std::vector<std::string> &snp_name, std::vector<double> &genet_dst, std::vector<int> &bp, std::vector<std::string> &allele1, std::vector<std::string> &allele2, bool msg_flag) {
@@ -939,8 +922,6 @@ void gcta::read_multi_bimfiles(std::vector<std::string> multi_bfiles)
         _snp_name_map.insert(std::pair<std::string,int>(_snp_name[i], i));
         _include[i] = i;
     }
-    _ref_A = _allele1; _other_A = _allele2;
-
     LOGGER.i(0, std::to_string(_snp_num) + " SNPs to be included from PLINK BIM files.");
 }
 
@@ -1083,8 +1064,8 @@ void gcta::read_imp_info_mach_gz(std::string zinfofile)
     if (col_num < 7) LOGGER.e(0, errmsg);
     if (vs_buf[6] != "Rsq") LOGGER.e(0, errmsg);
     _snp_name.clear();
-    _allele1.clear();
-    _allele2.clear();
+    _allele_alt.clear();
+    _allele_ref.clear();
     _impRsq.clear();
     _mu.clear();
     while (std::getline(zinf, buf)) {
@@ -1093,9 +1074,9 @@ void gcta::read_imp_info_mach_gz(std::string zinfofile)
         if (!(ss >> str_buf)) break;
         _snp_name.push_back(str_buf);
         if (!(ss >> c_buf)) LOGGER.e(0, nerr);
-        _allele1.push_back(c_buf);
+        _allele_alt.push_back(c_buf);
         if (!(ss >> c_buf)) LOGGER.e(0, nerr);
-        _allele2.push_back(c_buf);
+        _allele_ref.push_back(c_buf);
         double freq1 = 0.0;
         if (!(ss >> freq1)) LOGGER.e(0, nerr);   // Freq1 → _mu (as 2*freq since _mu is 0-2 scale)
         for (i = 0; i < 3; i++) if (!(ss >> f_buf)) LOGGER.e(0, nerr);  // MAF, Quality, Rsq
@@ -1108,8 +1089,6 @@ void gcta::read_imp_info_mach_gz(std::string zinfofile)
     _chr.resize(_snp_num);
     _bp.resize(_snp_num);
     _genet_dst.resize(_snp_num);
-    _ref_A = _allele1;
-    _other_A = _allele2;
 
     // Initialize _include
     init_include();
@@ -1135,8 +1114,8 @@ void gcta::read_imp_info_mach(std::string infofile)
     if (col_num < 7) LOGGER.e(0, errmsg);
     if (vs_buf[6] != "Rsq" && vs_buf[6] != "Rsq_hat") LOGGER.e(0, errmsg);
     _snp_name.clear();
-    _allele1.clear();
-    _allele2.clear();
+    _allele_alt.clear();
+    _allele_ref.clear();
     _impRsq.clear();
     while (std::getline(inf, buf)) {
         std::stringstream ss(buf);
@@ -1144,9 +1123,9 @@ void gcta::read_imp_info_mach(std::string infofile)
         if (!(ss >> str_buf)) break;
         _snp_name.push_back(str_buf);
         if (!(ss >> c_buf)) LOGGER.e(0, nerr);
-        _allele1.push_back(c_buf);
+        _allele_alt.push_back(c_buf);
         if (!(ss >> c_buf)) LOGGER.e(0, nerr);
-        _allele2.push_back(c_buf);
+        _allele_ref.push_back(c_buf);
         for (i = 0; i < 3; i++) if (!(ss >> f_buf)) LOGGER.e(0, nerr);
         _impRsq.push_back(f_buf);
     }
@@ -1155,8 +1134,6 @@ void gcta::read_imp_info_mach(std::string infofile)
     _chr.resize(_snp_num);
     _bp.resize(_snp_num);
     _genet_dst.resize(_snp_num);
-    _ref_A = _allele1;
-    _other_A = _allele2;
 
     // Initialize _include
     init_include();
@@ -1274,16 +1251,6 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
 
     // update data
     update_bim(rsnp);
-
-
-    LOGGER << "DEBUG: First few entries of _geno_dose matrix (up to 5 individuals x 5 SNPs):" << std::endl;
-    std::ofstream dbg(_out + ".debug_geno_dose_mach.txt");
-    for (int i = 0; i < _keep.size(); i++) {
-        for (int sj = 0; sj < _include.size(); sj++) {
-            dbg << " " << (_geno_dose(i, sj) >= DOSAGE_NA ? "NA" : std::to_string(_geno_dose(i, sj)));
-        }
-        dbg << std::endl;
-    }
 
 }
 
@@ -1418,9 +1385,9 @@ void gcta::read_imp_info_beagle(std::string zinfofile) {
         if (!(ss >> i_buf)) LOGGER.e(0, nerr);
         _bp.push_back(i_buf);
         if (!(ss >> c_buf)) LOGGER.e(0, nerr);
-        _allele1.push_back(c_buf);
+        _allele_alt.push_back(c_buf);
         if (!(ss >> c_buf)) LOGGER.e(0, nerr);
-        _allele2.push_back(c_buf);
+        _allele_ref.push_back(c_buf);
         if (!(ss >> str_buf)) LOGGER.e(0, nerr);
         if (!(ss >> str_buf)) LOGGER.e(0, nerr);
         if (!(ss >> str_buf)) LOGGER.e(0, nerr);
@@ -1437,8 +1404,6 @@ void gcta::read_imp_info_beagle(std::string zinfofile) {
     _snp_num = _snp_name.size();
     LOGGER << _snp_num << " SNPs to be included from [" + zinfofile + "]." << std::endl;
     _genet_dst.resize(_snp_num);
-    _ref_A = _allele1;
-    _other_A = _allele2;
 
     // Initialize _include
     init_include();
@@ -1578,7 +1543,7 @@ void gcta::save_bimfile() {
     if (!Bim) LOGGER.e(0, "cannot open the file [" + bimfile + "] to write.");
     LOGGER << "Writing PLINK BIM file to [" + bimfile + "] ..." << std::endl;
     for (i = 0; i < _include.size(); i++) {
-        Bim << _chr[_include[i]] << "\t" << _snp_name[_include[i]] << "\t" << _genet_dst[_include[i]] << "\t" << _bp[_include[i]] << "\t" << _allele1[_include[i]] << "\t" << _allele2[_include[i]] << std::endl;
+        Bim << _chr[_include[i]] << "\t" << _snp_name[_include[i]] << "\t" << _genet_dst[_include[i]] << "\t" << _bp[_include[i]] << "\t" << _allele_alt[_include[i]] << "\t" << _allele_ref[_include[i]] << std::endl;
     }
     Bim.close();
     LOGGER << _include.size() << " SNPs to be saved to [" + bimfile + "]." << std::endl;
@@ -1899,36 +1864,32 @@ void gcta::update_sex(std::string sex_file) {
     LOGGER << "Sex information for " << icount << " individuals are update from [" + sex_file + "]." << std::endl;
 }
 
-void gcta::update_ref_A(std::string ref_A_file) {
-    std::ifstream i_ref_A(ref_A_file.c_str());
-    if (!i_ref_A) LOGGER.e(0, "cannot open the file [" + ref_A_file + "] to read.");
+void gcta::update_allele_ref(std::string ref_A_file) {
+    std::ifstream i_allele_ref(ref_A_file.c_str());
+    if (!i_allele_ref) LOGGER.e(0, "cannot open the file [" + ref_A_file + "] to read.");
     int i = 0;
     std::string str_buf, ref_A_buf;
     LOGGER << "Reading reference alleles of SNPs from [" + ref_A_file + "]." << std::endl;
     int icount = 0;
-    while (i_ref_A) {
-        i_ref_A >> str_buf;
-        if (i_ref_A.eof()) break;
+    while (i_allele_ref) {
+        i_allele_ref >> str_buf;
+        if (i_allele_ref.eof()) break;
         auto iter = _snp_name_map.find(str_buf);
-        i_ref_A >> ref_A_buf;
+        i_allele_ref >> ref_A_buf;
         if (iter != _snp_name_map.end()) {
-            if (ref_A_buf == _allele1[iter->second]) {
-                _ref_A[iter->second] = _allele1[iter->second];
-                _other_A[iter->second] = _allele2[iter->second];
-            } else if (ref_A_buf == _allele2[iter->second]) {
-                _ref_A[iter->second] = _allele2[iter->second];
-                _other_A[iter->second] = _allele1[iter->second];
-            } else LOGGER.e(0, "invalid reference allele for SNP \"" + _snp_name[iter->second] + "\".");
+            _allele_ref[iter->second] = ref_A_buf;
             icount++;
         }
-        std::getline(i_ref_A, str_buf);
+        std::getline(i_allele_ref, str_buf);
     }
-    i_ref_A.close();
+    i_allele_ref.close();
     LOGGER << "Reference alleles of " << icount << " SNPs are updated from [" + ref_A_file + "]." << std::endl;
     if (icount != _snp_num) LOGGER.w(0, "reference alleles of " + std::to_string(_snp_num - icount) + " SNPs have not been updated.");
 }
 
 void gcta::calcu_mu(bool ssq_flag) {
+    compact_indi_data();
+    compact_snp_data();
     const int n = static_cast<int>(_keep.size());
     const int m = static_cast<int>(_include.size());
 
@@ -1937,7 +1898,7 @@ void gcta::calcu_mu(bool ssq_flag) {
     Eigen::VectorXf auto_fac = Eigen::VectorXf::Ones(n);
     Eigen::VectorXf xfac(n);
     for (int i = 0; i < n; i++) {
-        const int sex = _sex[_keep[i]];
+        const int sex = _sex[i];
         if      (sex == 1) xfac[i] = 0.5f;
         else if (sex == 2) xfac[i] = 1.0f;
         else             { xfac[i] = 1.0f; no_sex_info = true; }
@@ -1950,8 +1911,7 @@ void gcta::calcu_mu(bool ssq_flag) {
 
     #pragma omp parallel for reduction(||:flag_x_problem)
     for (int j = 0; j < m; j++) {
-        const int snp_idx = _include[j];
-        const bool is_x = (_legacy_homogametic_chr != 0 && _chr[snp_idx] == _legacy_homogametic_chr);
+        const bool is_x = (_legacy_homogametic_chr != 0 && _chr[j] == _legacy_homogametic_chr);
         if (is_x && no_sex_info) flag_x_problem = true;
         const Eigen::VectorXf& fac = is_x ? xfac : auto_fac;
 
@@ -1960,24 +1920,21 @@ void gcta::calcu_mu(bool ssq_flag) {
             auto mask = (col.array() < DOSAGE_NA);
             const float fcount = mask.select(fac, 0.0f).sum();
             if (fcount > 0.0f)
-                _mu[snp_idx] = static_cast<double>(
+                _mu[j] = static_cast<double>(
                     mask.select((col.array() * fac.array()).matrix(), 0.0f).sum() / fcount);
         } else {
-            const bool flip = (_allele2[snp_idx] == _ref_A[snp_idx]);
-            const auto &s1 = _snp_1[snp_idx];
-            const auto &s2 = _snp_2[snp_idx];
+            const auto &s1 = _snp_1[j];
+            const auto &s2 = _snp_2[j];
             float fcount = 0.0f, mu_acc = 0.0f;
             for (int i = 0; i < n; i++) {
-                const int ki = _keep[i];
-                if (!s1[ki] || s2[ki]) {
-                    float g = static_cast<float>(s1[ki] + s2[ki]);
-                    if (flip) g = 2.0f - g;
+                if (!s1[i] || s2[i]) {
+                    float g = static_cast<float>(s1[i] + s2[i]);
                     mu_acc += fac[i] * g;
                     fcount += fac[i];
                 }
             }
             if (fcount > 0.0f)
-                _mu[snp_idx] = static_cast<double>(mu_acc / fcount);
+                _mu[j] = static_cast<double>(mu_acc / fcount);
         }
     }
 
@@ -1993,7 +1950,7 @@ void gcta::calcu_maf()
     _maf.resize(m);
     #pragma omp parallel for
     for(int i = 0; i < m; i++){
-        _maf[i] = 0.5*_mu[_include[i]];
+        _maf[i] = 0.5*_mu[i];
         if(_maf[i] > 0.5) _maf[i] = 1.0 - _maf[i];
     }
 }
@@ -2047,11 +2004,7 @@ void gcta::update_freq(std::string freq) {
         fbuf = atof(str_buf.c_str());
         if (iter != _snp_name_map.end()) {
             if (fbuf > 1.0 || fbuf < 0.0) LOGGER.e(0, "invalid value of allele frequency for the SNP " + snp_name_buf + ".");
-            if (ref_A_buf != _allele1[iter->second] && ref_A_buf != _allele2[iter->second]) {
-                LOGGER.e(0, "Invalid allele type \"" + ref_A_buf + "\" for the SNP " + _snp_name[iter->second] + ".");
-            }
-            if (ref_A_buf == _ref_A[iter->second]) _mu[iter->second] = fbuf * 2.0;
-            else _mu[iter->second] = (1.0 - fbuf)*2.0;
+            _mu[iter->second] = fbuf * 2.0;
             icount++;
         }
         std::getline(ifreq, str_buf);
@@ -2070,7 +2023,7 @@ void gcta::save_freq(bool ssq_flag) {
     int i = 0;
     LOGGER << "Writing allele frequencies of " << _include.size() << " SNPs to [" + save_freq + "]." << std::endl;
     for (i = 0; i < _include.size(); i++) {
-        ofreq << _snp_name[_include[i]] << "\t" << _ref_A[_include[i]] << "\t" << std::setprecision(15) << _mu[_include[i]]*0.5;
+        ofreq << _snp_name[_include[i]] << "\t" << _allele_ref[_include[i]] << "\t" << std::setprecision(15) << _mu[_include[i]]*0.5;
         //        if(ssq_flag) ofreq<<"\t"<<_ssq[_include[i]]<<"\t"<<_w[_include[i]];
         ofreq << std::endl;
     }
@@ -2113,6 +2066,7 @@ void gcta::read_indi_blup(std::string blup_indi_file) {
 
 bool gcta::make_XMat(Eigen::MatrixXf &X)
 {
+    compact_indi_data();
     if (!_make_XMat_no_compact) compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
@@ -2125,11 +2079,10 @@ bool gcta::make_XMat(Eigen::MatrixXf &X)
     #pragma omp parallel for private(j)
     for (i = 0; i < n; i++) {
         if (_dosage_flag) {
-            // After compact_dosage_data(): _keep[i]==i, _include[j]==j; direct access.
             for (j = 0; j < m; j++) {
                 const float d = _geno_dose(i, j);
                 if (d < DOSAGE_NA) {
-                    X(i,j) = (_allele1[j] == _ref_A[j]) ? d : 2.0f - d;
+                    X(i,j) = d;
                 } else {
                     X(i,j) = DOSAGE_NA;
                     have_mis = true;
@@ -2137,10 +2090,9 @@ bool gcta::make_XMat(Eigen::MatrixXf &X)
             }
         }
         else {
-            for (j = 0; j < _include.size(); j++) {
-                if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
-                    if (_allele1[_include[j]] == _ref_A[_include[j]]) X(i,j) = _snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]];
-                    else X(i,j) = 2.0 - (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
+            for (j = 0; j < m; j++) {
+                if (!_snp_1[j][i] || _snp_2[j][i]) {
+                    X(i,j) = _snp_1[j][i] + _snp_2[j][i];
                 } 
                 else {
                     X(i,j) = DOSAGE_NA;
@@ -2155,6 +2107,7 @@ bool gcta::make_XMat(Eigen::MatrixXf &X)
 
 bool gcta::make_XMat_d(Eigen::MatrixXf &X)
 {
+    compact_indi_data();
     compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
@@ -2167,11 +2120,10 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
     #pragma omp parallel for private(j)
     for (i = 0; i < n; i++) {
         if (_dosage_flag) {
-            // After compact_dosage_data(): _keep[i]==i, _include[j]==j; direct access.
             for (j = 0; j < m; j++) {
                 const float d = _geno_dose(i, j);
                 if (d < DOSAGE_NA) {
-                    float g = (_allele1[j] == _ref_A[j]) ? d : 2.0f - d;
+                    float g = d;
                     if      (g < 0.5f) g = 0.0f;
                     else if (g < 1.5f) g = static_cast<float>(_mu[j]);
                     else               g = static_cast<float>(2.0 * _mu[j] - 2.0);
@@ -2183,13 +2135,12 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
             }
         }
         else {
-            for (j = 0; j < _include.size(); j++) {
-                if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
-                    if (_allele1[_include[j]] == _ref_A[_include[j]]) X(i,j) = _snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]];
-                    else X(i,j) = 2.0 - (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
+            for (j = 0; j < m; j++) {
+                if (!_snp_1[j][i] || _snp_2[j][i]) {
+                    X(i,j) = _snp_1[j][i] + _snp_2[j][i];
                     if (X(i,j) < 0.5) X(i,j) = 0.0;
-                    else if (X(i,j) < 1.5) X(i,j) = _mu[_include[j]];
-                    else X(i,j) = (2.0 * _mu[_include[j]] - 2.0);
+                    else if (X(i,j) < 1.5) X(i,j) = _mu[j];
+                    else X(i,j) = (2.0 * _mu[j] - 2.0);
                 } 
                 else{
                     X(i,j) = DOSAGE_NA;
@@ -2204,17 +2155,17 @@ bool gcta::make_XMat_d(Eigen::MatrixXf &X)
 
 void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_homogametic_flag, bool miss_with_mu, bool divid_by_std)
 {
+    compact_indi_data();
+    compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
     unsigned long i = 0, j = 0, n = _keep.size(), m = _include.size();
     sd_SNP.resize(m);
     if (_dosage_flag) {
-        // Use _mu[_include[j]]: correct when compact is inhibited (_include[j]!=j),
-        // and equivalent to _mu[j] when compact has been applied (_include[j]==j).
-        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - Eigen::VectorXf::Constant(n, _mu[_include[j]])).squaredNorm() / (n - 1.0);
+        for (j = 0; j < m; j++)  sd_SNP[j] = (X.col(j) - Eigen::VectorXf::Constant(n, _mu[j])).squaredNorm() / (n - 1.0);
     } 
     else {
-        for (j = 0; j < m; j++) sd_SNP[j] = _mu[_include[j]]*(1.0 - 0.5 * _mu[_include[j]]);
+        for (j = 0; j < m; j++) sd_SNP[j] = _mu[j]*(1.0 - 0.5 * _mu[j]);
     }
     if (divid_by_std) {
         for (j = 0; j < m; j++) {
@@ -2227,7 +2178,7 @@ void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_homogameti
     for (i = 0; i < n; i++) {
         for (j = 0; j < m; j++) {
             if (X(i,j) < DOSAGE_NA) {
-                X(i,j) -= _mu[_include[j]];
+                X(i,j) -= _mu[j];
                 if (divid_by_std) X(i,j) *= sd_SNP[j];
             } 
             else if (miss_with_mu) X(i,j) = 0.0;
@@ -2253,6 +2204,8 @@ void gcta::std_XMat(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool grm_homogameti
 
 void gcta::std_XMat_d(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu, bool divid_by_std)
 {
+    compact_indi_data();
+    compact_snp_data();
     if (_mu.empty()) calcu_mu();
 
     unsigned long i = 0, j = 0, n = _keep.size(), m = _include.size();
@@ -2297,15 +2250,16 @@ void gcta::std_XMat_d(Eigen::MatrixXf &X, eigenVector &sd_SNP, bool miss_with_mu
 void gcta::makex_eigenVector(int j, eigenVector &x, bool resize, bool minus_2p)
 {
     int i = 0;
+    compact_indi_data();
+    compact_snp_data();
     if (resize) x.resize(_keep.size());
     #pragma omp parallel for
     for (i = 0; i < _keep.size(); i++) {
-        if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
-            if (_allele1[_include[j]] == _ref_A[_include[j]]) x[i] = (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
-            else x[i] = 2.0 - (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
+        if (!_snp_1[j][i] || _snp_2[j][i]) {
+            x[i] = (_snp_1[j][i] + _snp_2[j][i]);
         }
-        else x[i] = _mu[_include[j]];
-        if (minus_2p) x[i] -= _mu[_include[j]];
+        else x[i] = _mu[j];
+        if (minus_2p) x[i] -= _mu[j];
     }
 }
 
@@ -2313,16 +2267,17 @@ void gcta::makex_eigenVector(int j, eigenVector &x, bool resize, bool minus_2p)
 void gcta::makex_eigenVector_std(int j, eigenVector &x, bool resize, double snp_std)
 {
     int i = 0;
+    compact_indi_data();
+    compact_snp_data();
     if (resize) x.resize(_keep.size());
     #pragma omp parallel for
     for (i = 0; i < _keep.size(); i++) {
-        if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
-            if (_allele1[_include[j]] == _ref_A[_include[j]]) x[i] = (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
-            else x[i] = 2.0 - (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
+        if (!_snp_1[j][i] || _snp_2[j][i]) {
+            x[i] = (_snp_1[j][i] + _snp_2[j][i]);
         }
-        else x[i] = _mu[_include[j]];
+        else x[i] = _mu[j];
         // change here: subtract mean and divide by std
-        x[i] -= _mu[_include[j]];
+        x[i] -= _mu[j];
         x[i] /= snp_std;
     }
 }
@@ -2331,7 +2286,9 @@ void gcta::makex_eigenVector_std(int j, eigenVector &x, bool resize, double snp_
 void gcta::save_XMat(bool miss_with_mu, bool std)
 {
     if(std && _dosage_flag) LOGGER.e(0, "the --recode-std is invalid for dosage data.");
-    if (_dosage_flag) compact_dosage_data(); // ensure _include[j]==j, _keep[i]==i
+    compact_indi_data();
+    if (_dosage_flag) compact_dosage_data();
+    else compact_snp_data();
     if ( (miss_with_mu || std) && _mu.empty()) calcu_mu();
 
     int i = 0, j = 0, m = _include.size();
@@ -2339,7 +2296,7 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
     if(std){
         sd_SNP.resize(m);
         for (j = 0; j < m; j++) {
-            sd_SNP(j) = _mu[_include[j]]*(1.0 - 0.5 * _mu[_include[j]]);
+            sd_SNP(j) = _mu[j]*(1.0 - 0.5 * _mu[j]);
             if (fabs(sd_SNP(j)) < 1.0e-50) sd_SNP(j) = 0.0;
             else sd_SNP(j) = sqrt(1.0 / sd_SNP(j));
         }
@@ -2355,41 +2312,38 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
     zoutf.push(raw_file);
     LOGGER << "Saving the recoded genotype matrix to the file [" + X_zFile + "]." << std::endl;
     zoutf << "FID IID ";
-    for (j = 0; j < _include.size(); j++) zoutf << _snp_name[_include[j]] << " ";
+    for (j = 0; j < m; j++) zoutf << _snp_name[j] << " ";
     zoutf << std::endl;
     zoutf << "Reference Allele ";
-    for (j = 0; j < _include.size(); j++) zoutf << _ref_A[_include[j]] << " ";
+    for (j = 0; j < m; j++) zoutf << _allele_ref[j] << " ";
     zoutf << std::endl;
     for (i = 0; i < _keep.size(); i++) {
-        zoutf << _fid[_keep[i]] << ' ' << _pid[_keep[i]] << ' ';
+        zoutf << _fid[i] << ' ' << _pid[i] << ' ';
         if (_dosage_flag) {
-            // Post compact_dosage_data(): _keep[i]==i, _include[j]==j
-            for (j = 0; j < _include.size(); j++) {
+            for (j = 0; j < m; j++) {
                 const float d = _geno_dose(i, j);
                 if (d < DOSAGE_NA) {
-                    if (_allele1[_include[j]] == _ref_A[_include[j]]) x_buf = d;
-                    else x_buf = 2.0 - d;
-                    if(std) x_buf = (x_buf - _mu[_include[j]]) * sd_SNP(j);
+                    x_buf = d;
+                    if(std) x_buf = (x_buf - _mu[j]) * sd_SNP(j);
                     zoutf << x_buf << ' ';
                 } else {
                     if(std) zoutf << "0 ";
                     else{
-                        if (miss_with_mu) zoutf << _mu[_include[j]] << ' ';
+                        if (miss_with_mu) zoutf << _mu[j] << ' ';
                         else zoutf << "NA ";
                     }
                 }
             }
         } else {
-            for (j = 0; j < _include.size(); j++) {
-                if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
-                    if (_allele1[_include[j]] == _ref_A[_include[j]]) x_buf = _snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]];
-                    else x_buf = 2.0 - (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
-                    if(std) x_buf = (x_buf - _mu[_include[j]]) * sd_SNP(j);
+            for (j = 0; j < m; j++) {
+                if (!_snp_1[j][i] || _snp_2[j][i]) {
+                    x_buf = _snp_1[j][i] + _snp_2[j][i];
+                    if(std) x_buf = (x_buf - _mu[j]) * sd_SNP(j);
                     zoutf << x_buf << ' ';                    
                 } else {
                     if(std) zoutf << "0 ";
                     else {
-                        if (miss_with_mu) zoutf << _mu[_include[j]] << ' ';
+                        if (miss_with_mu) zoutf << _mu[j] << ' ';
                         else zoutf << "NA ";
                     }
                 }
@@ -2405,6 +2359,14 @@ void gcta::save_XMat(bool miss_with_mu, bool std)
 bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
+    compact_indi_data();
+    if (!_make_XMat_no_compact) compact_snp_data();
+    return make_XMat_subset_dense(X, snp_indx, divid_by_std);
+}
+
+bool gcta::make_XMat_subset_dense(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std)
+{
+    if(snp_indx.empty()) return false;
     const int n = _keep.size(), m = snp_indx.size();
 
     // Guard: only resize when strictly necessary.  If the caller pre-allocated
@@ -2413,70 +2375,34 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
     if (X.rows() != n || X.cols() < m)
         X.resize(n, m);
 
-    if (_dosage_flag) {
-        const int col_start = snp_indx[0];
-        auto src = _geno_dose.block(0, col_start, n, m).array();
-
-        Eigen::RowVectorXf mu_row(m);
-        for (int j = 0; j < m; j++) mu_row[j] = static_cast<float>(_mu[snp_indx[j]]);
-        X.leftCols(m).array() = src.rowwise() - mu_row.array();
-
-        for (int j = 0; j < m; j++) {
-            const int k = snp_indx[j];
-            if (_allele1[k] != _ref_A[k])
-                X.col(j).array() = (2.0f - static_cast<float>(_mu[k])) - src.col(j);
-        }
-
-        if (divid_by_std) {
-            Eigen::RowVectorXf scale(m);
-            for (int j = 0; j < m; j++) {
-                const int k = snp_indx[j];
-                const double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
-                scale[j] = (sd > 1.0e-50) ? static_cast<float>(1.0 / std::sqrt(sd)) : 1.0f;
-            }
-            X.leftCols(m).array() = X.leftCols(m).array().rowwise() * scale.array();
-        }
-
-        X.leftCols(m).array() = X.leftCols(m).array().isInf().select(0.0f, X.leftCols(m).array());
-    } else {
-        // After compact_snp_data(): _include[j]==j, while _keep can still be a
-        // non-identity subset. Always remap row i through _keep[i].
-        // When _make_XMat_no_compact=true (LOCO loop), compaction is skipped and
-        // _snp_1 retains its original BIM order; snp_indx values are positions
-        // within _include, so we must map through _include to get the raw index.
-        std::vector<bool>  snp_flip(m);
-        std::vector<float> snp_mu(m);
-        std::vector<float> sd_inv(m, 1.0f);
-        for (int j = 0; j < m; j++) {
-            const int k  = _make_XMat_no_compact ? _include[snp_indx[j]] : snp_indx[j];
-            snp_flip[j]  = (_allele1[k] != _ref_A[k]);
-            snp_mu[j]    = static_cast<float>(_mu[k]);
+    #pragma omp parallel for schedule(static)
+    for (int j = 0; j < m; j++) {
+        const int k = snp_indx[j];
+        auto col = X.col(j);
+        if (_dosage_flag) {
+            const float mu_k = static_cast<float>(_mu[k]);
+            float scale = 1.0f;
             if (divid_by_std) {
                 const double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
-                if (sd > 1.0e-50)
-                    sd_inv[j] = static_cast<float>(1.0 / std::sqrt(sd));
+                if (sd > 1.0e-50) scale = static_cast<float>(1.0 / std::sqrt(sd));
             }
-        }
-
-        // Column-parallel: each thread writes one contiguous Eigen column (column-major).
-        // divid_by_std is loop-invariant; the compiler hoists the branch.
-        // Note: std::vector<bool> is bit-packed; reading snp_flip[j] from
-        // multiple threads is safe (different words) but each access goes
-        // through a proxy.  Cost is negligible vs the inner loop work.
-        #pragma omp parallel for schedule(static)
-        for (int j = 0; j < m; j++) {
-            const int   k     = _make_XMat_no_compact ? _include[snp_indx[j]] : snp_indx[j];
-            const bool  flip  = snp_flip[j];
-            const float mu_k  = snp_mu[j];
-            const float scale = sd_inv[j];
-            const auto& s1    = _snp_1[k];
-            const auto& s2    = _snp_2[k];
-            auto col = X.col(j);
             for (int i = 0; i < n; i++) {
-                const int ki = _keep[i];
-                if (!s1[ki] || s2[ki]) {
-                    float geno = static_cast<float>(s1[ki]) + static_cast<float>(s2[ki]);
-                    if (flip) geno = 2.0f - geno;
+                const float d = _geno_dose(i, k);
+                if (d < DOSAGE_NA) col(i) = (d - mu_k) * scale;
+                else col(i) = 0.0f;
+            }
+        } else {
+            const auto& s1 = _snp_1[k];
+            const auto& s2 = _snp_2[k];
+            const float mu_k = static_cast<float>(_mu[k]);
+            float scale = 1.0f;
+            if (divid_by_std) {
+                const double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
+                if (sd > 1.0e-50) scale = static_cast<float>(1.0 / std::sqrt(sd));
+            }
+            for (int i = 0; i < n; i++) {
+                if (!s1[i] || s2[i]) {
+                    float geno = static_cast<float>(s1[i]) + static_cast<float>(s2[i]);
                     col(i) = (geno - mu_k) * scale;
                 } else {
                     col(i) = 0.0f;
@@ -2491,38 +2417,30 @@ bool gcta::make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool
 bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std)
 {
     if(snp_indx.empty()) return false;
+    compact_indi_data();
     compact_snp_data();
+    return make_XMat_d_subset_dense(X, snp_indx, divid_by_std);
+}
+
+bool gcta::make_XMat_d_subset_dense(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std)
+{
+    if(snp_indx.empty()) return false;
     if (_mu.empty()) calcu_mu();
 
     const int n = _keep.size(), m = snp_indx.size();
     X.resize(n, m);
 
-    // Pre-cache per-SNP metadata; after compaction _include[j]==j for both paths.
-    std::vector<int>   snp_k(m);
-    std::vector<bool>  snp_flip(m);
-    std::vector<float> snp_mu(m);
-    std::vector<float> snp_psq(m);
-    for (int j = 0; j < m; j++) {
-        snp_k[j]    = snp_indx[j];
-        snp_flip[j] = (_allele1[snp_k[j]] != _ref_A[snp_k[j]]);
-        snp_mu[j]   = static_cast<float>(_mu[snp_k[j]]);
-        snp_psq[j]  = 0.5f * snp_mu[j] * snp_mu[j];
-    }
-
     // Column-parallel fill (column-major layout: each col is contiguous)
     #pragma omp parallel for schedule(static)
     for (int j = 0; j < m; j++) {
-        const int   k    = snp_k[j];
-        const bool  flip = snp_flip[j];
-        const float mu_k = snp_mu[j];
-        const float psq  = snp_psq[j];
+        const int k = snp_indx[j];
         auto col = X.col(j);
         if (_dosage_flag) {
-            // compact_dosage_data() compacts SNP columns only; keep row remapping.
+            const float mu_k = static_cast<float>(_mu[k]);
+            const float psq = 0.5f * mu_k * mu_k;
             for (int i = 0; i < n; i++) {
-                const int ki = _keep[i];
-                if (_geno_dose(ki, k) < DOSAGE_NA) {
-                    float g = flip ? 2.0f - _geno_dose(ki, k) : _geno_dose(ki, k);
+                if (_geno_dose(i, k) < DOSAGE_NA) {
+                    float g = _geno_dose(i, k);
                     if      (g < 0.5f) g = 0.0f;
                     else if (g < 1.5f) g = mu_k;
                     else               g = 2.0f * mu_k - 2.0f;
@@ -2532,14 +2450,13 @@ bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bo
                 }
             }
         } else {
-            // After compaction SNP indices are dense; individual rows still map via _keep.
             const auto& s1 = _snp_1[k];
             const auto& s2 = _snp_2[k];
+            const float mu_k = static_cast<float>(_mu[k]);
+            const float psq = 0.5f * mu_k * mu_k;
             for (int i = 0; i < n; i++) {
-                const int ki = _keep[i];
-                if (!s1[ki] || s2[ki]) {
-                    float g = static_cast<float>(s1[ki]) + static_cast<float>(s2[ki]);
-                    if (flip) g = 2.0f - g;
+                if (!s1[i] || s2[i]) {
+                    float g = static_cast<float>(s1[i]) + static_cast<float>(s2[i]);
                     if      (g < 0.5f) g = 0.0f;
                     else if (g < 1.5f) g = mu_k;
                     else               g = 2.0f * mu_k - 2.0f;
@@ -2554,7 +2471,8 @@ bool gcta::make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bo
     if (divid_by_std) {
         #pragma omp parallel for schedule(static)
         for (int j = 0; j < m; j++) {
-            const double sd = _mu[snp_k[j]] * (1.0 - 0.5 * _mu[snp_k[j]]);
+            const int k = snp_indx[j];
+            const double sd = _mu[k] * (1.0 - 0.5 * _mu[k]);
             if (sd > 1.0e-50)
                 X.col(j) *= static_cast<float>(1.0 / sd);
         }

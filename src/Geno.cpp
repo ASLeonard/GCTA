@@ -356,13 +356,12 @@ void Geno::init_AF(string alleleFileName) {
         LOGGER.i(0, "Reading frequencies from [" + alleleFileName + "]...");
         vector<int> field_return = {2};
         vector<string> fields;
-        vector<bool> a_rev;
-        marker->matchSNPListFile(alleleFileName, 3, field_return, fields, a_rev, false);
+        marker->matchSNPListFile(alleleFileName, 3, field_return, fields);
 
-        AFA1.resize(a_rev.size());
+        AFA1.resize(fields.size());
         vector<uint32_t> extract_index;
         bool filterByMaf = false;
-        for(int i = 0; i < a_rev.size(); i++){
+        for(int i = 0; i < fields.size(); i++){
             double af;
             try{
                 af = stod(fields[i]);
@@ -378,12 +377,7 @@ void Geno::init_AF(string alleleFileName) {
             }else{
                 filterByMaf = true;
             }
-
-            if(a_rev[i]){
-                AFA1[i] = 1.0 - af;
-            }else{
-                AFA1[i] = af;
-            }
+            AFA1[i] = af;
         }
         LOGGER.i(0, "Frequencies of " + to_string(AFA1.size()) + " SNPs are updated.");
 
@@ -482,34 +476,34 @@ Geno::GenoCodingModel Geno::getCodingModel() const {
     return genoCodingModel;
 }
 
-double Geno::mapDosageToModel(double dosage, double mu, bool isEffRev, GenoCodingModel model) const {
+double Geno::mapDosageToModel(double dosage, double mu, GenoCodingModel model) const {
     if (model == GenoCodingModel::ADDITIVE) {
-        return isEffRev ? (2.0 - dosage) : dosage;
+        return dosage;
     }
 
     if (model == GenoCodingModel::DOMINANCE || model == GenoCodingModel::NONADDITIVE) {
         if (dosage < 0.5) {
-            return isEffRev ? (2.0 * mu - 2.0) : 0.0;
+            return 0.0;
         }
         if (dosage < 1.5) {
             return mu;
         }
-        return isEffRev ? 0.0 : (2.0 * mu - 2.0);
+        return (2.0 * mu - 2.0);
     }
 
-    return isEffRev ? (2.0 - dosage) : dosage;
+    return dosage;
 }
 
-Geno::GenoCodingSpec Geno::buildCodingSpec(double mu, double sd, bool isEffRev) const {
+Geno::GenoCodingSpec Geno::buildCodingSpec(double mu, double sd) const {
     GenoCodingSpec spec;
     const GenoCodingModel model = getCodingModel();
     if (model == GenoCodingModel::ADDITIVE) {
         spec.centerValue = bGenoCenter ? mu : 0.0;
         spec.rdev = bGenoStd ? sqrt(1.0 / sd) : 1.0;
 
-        const double raw0 = isEffRev ? 2.0 : 0.0;
+        const double raw0 = 0.0;
         const double raw1 = 1.0;
-        const double raw2 = isEffRev ? 0.0 : 2.0;
+        const double raw2 = 2.0;
         const double rawNa = mu;
 
         spec.a0 = (raw0 - spec.centerValue) * spec.rdev;
@@ -523,9 +517,9 @@ Geno::GenoCodingSpec Geno::buildCodingSpec(double mu, double sd, bool isEffRev) 
     spec.centerValue = bGenoCenter ? psq : 0.0;
     spec.rdev = bGenoStd ? (1.0 / sd) : 1.0;
 
-    const double raw0 = isEffRev ? (2.0 * mu - 2.0) : 0.0;
+    const double raw0 = 0.0;
     const double raw1 = mu;
-    const double raw2 = isEffRev ? 0.0 : (2.0 * mu - 2.0);
+    const double raw2 = (2.0 * mu - 2.0);
     const double rawNa = psq;
 
     spec.a0 = (raw0 - spec.centerValue) * spec.rdev;
@@ -581,7 +575,7 @@ void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                 return;
             }
             const GenoCodingModel model = getCodingModel();
-            const GenoCodingSpec spec = buildCodingSpec(mu, std, false);
+            const GenoCodingSpec spec = buildCodingSpec(mu, std);
 
             // PGEN dosage_main uses 14-bit fractional scaling of allele
             // dosage in [0, 2].
@@ -589,7 +583,7 @@ void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
             gbuf->geno.resize(keepSampleCT);
             for(uint32_t j = 0; j < keepSampleCT; ++j){
                 const double dos = static_cast<double>(dosage_main[j]) * kDosageScale;
-                const double recoded = mapDosageToModel(dos, mu, false, model);
+                const double recoded = mapDosageToModel(dos, mu, model);
                 gbuf->geno[j] = (recoded - spec.centerValue) * spec.rdev;
             }
 
@@ -623,8 +617,7 @@ void Geno::getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf){
         hasNoHET = PgenReader::CountHardFreqMissExtX(cur_buf, keepMaskInterPtr, heterogameticMaskInterPtr, rawSampleCT, keepSampleCT, keepHeterogameticSampleCT, &snpinfo, errmsg, iDC==1, f_std);
     }
     uint32_t curExtractIndex = gbuf->extractedMarkerIndex;
-    bool isEffRev = marker->isEffecRev(curExtractIndex);
-    double af = isEffRev ? (1.0 - snpinfo.af) : snpinfo.af;
+    double af = snpinfo.af;
     if(bHasPreAF){
         af = AFA1[curExtractIndex];
         snpinfo.mean = 2 * af;
@@ -655,7 +648,7 @@ void Geno::getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf){
                     gbuf->valid = false;
                     return;
                 }
-                const GenoCodingSpec spec = buildCodingSpec(mu, sd, isEffRev);
+                const GenoCodingSpec spec = buildCodingSpec(mu, sd);
                 const double lookup[32] __attribute__ ((aligned (16))) =
                     GET_TABLE16(spec.a0, spec.a1, spec.a2, spec.na);
                 gbuf->geno.resize(keepSampleCT);
@@ -875,10 +868,6 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
     double maskd = (double)mask;
     double af = (double)dosage_sum_half / maskd / validAllele;
     double mean;
-    bool bEffRev = this->marker->isEffecRev(gbuf->extractedMarkerIndex);
-    if(bEffRev){
-        af = 1.0 - af;
-    }
     double std = 2.0 * af * (1.0 - af);
     double info = 0.0;
     double mask2 = mask * mask;
@@ -928,10 +917,10 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
 
                 double* dos_lookup = new double[max_dos + 2];
                 const GenoCodingModel model = getCodingModel();
-                const GenoCodingSpec spec = buildCodingSpec(mu, std, bEffRev);
+                const GenoCodingSpec spec = buildCodingSpec(mu, std);
                 for(uint32_t i = 0; i < max_dos; i++){
                     const double tdos = static_cast<double>(i) / mask;
-                    const double recoded = mapDosageToModel(tdos, mu, bEffRev, model);
+                    const double recoded = mapDosageToModel(tdos, mu, model);
                     dos_lookup[i] = (recoded - spec.centerValue) * spec.rdev;
                 }
                 dos_lookup[max_dos] = spec.na;

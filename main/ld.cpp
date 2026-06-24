@@ -1077,11 +1077,10 @@ void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_a
         }
         */
         for (j = 0, k = brk_pnt[i]; j < size; j++, k++) {
-            if(multi_rsq_adj[k] <= multi_rsq_buf_adj[j]){
-            	multi_rsq[k] = multi_rsq_buf[j];
-            	multi_rsq_adj[k] = multi_rsq_buf_adj[j];
+            if (multi_rsq_adj[k] <= multi_rsq_buf_adj[j]) {
+                multi_rsq[k] = multi_rsq_buf[j];
             }
-            if(max_rsq[k] < max_rsq_buf[j]){
+            if (max_rsq[k] < max_rsq_buf[j]) {
                 max_rsq[k] = max_rsq_buf[j];
                 max_pos[k] = max_pos_buf[j] + brk_pnt[i];
             }
@@ -1091,17 +1090,18 @@ void gcta::calcu_max_ld_rsq_blk(eigenVector &multi_rsq, eigenVector &multi_rsq_a
 
 bool gcta::bending_eigenval_Xf(Eigen::VectorXf &eval)
 {
-    int j = 0;
     double eval_m = eval.mean();
+    compact_indi_data();
+    compact_snp_data();
     if (eval.minCoeff() > 0.0) return false;
     double S = 0.0, P = 0.0;
-    for (j = 0; j < eval.size(); j++) {
+    for (int j = 0; j < eval.size(); j++) {
         if (eval[j] >= 0) continue;
         S += eval[j];
         P = -eval[j];
     }
     double W = S * S * 100.0 + 1;
-    for (j = 0; j < eval.size(); j++) {
+    for (int j = 0; j < eval.size(); j++) {
         if (eval[j] >= 0) continue;
         eval[j] = P * (S - eval[j])*(S - eval[j]) / W;
     }

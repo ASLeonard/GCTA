@@ -113,7 +113,7 @@ void gcta::read_pc_adjust_file(std::string pcadjust_list_file, std::string pc_fi
     
     std::vector<std::string> badsnps;
     badsnps = remove_bad_snps(_meta_snp_name, _meta_remain_snp, _snp_val_flag, snp_a1, snp_a2, snp_freq,  _meta_snp_b, _meta_snp_se, _meta_snp_pval, _meta_snp_n_o, 
-                             _snp_name_map, _allele1, _allele2, 1, ncovar, _out);                             
+                             _snp_name_map, _allele_alt, _allele_ref, 1, ncovar, _out);                             
     if(badsnps.size()>0) {
         update_id_map_rm(badsnps, _snp_name_map, _include);
         update_mtcojo_snp_rm(badsnps, _meta_snp_name_map, _meta_remain_snp);

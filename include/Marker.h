@@ -30,7 +30,6 @@ struct MarkerInfo{
     std::string name;
     uint32_t pd;
     std::vector<string> alleles;
-    bool A_rev;
 };
 
 struct MarkerParam{
@@ -57,10 +56,8 @@ public:
     int getMIndex(uint32_t raw_index);
     //uint64_t getStartPosSize(uint32_t raw_index);
     void getStartPosSize(uint32_t raw_index, uint64_t &pos, uint64_t &size);
-    bool isEffecRev(uint32_t extractedIndex);
-    bool isEffecRevRaw(uint32_t rawIndex);
-    std::string get_marker(int rawindex, bool bflip=false);
-    std::string getMarkerStrExtract(int extractindex, bool bflip=false);
+    std::string get_marker(int rawindex);
+    std::string getMarkerStrExtract(int extractindex);
     static int registerOption(std::map<string, std::vector<string>>& options_in);
     static void processMain();
     static MarkerInfo extractBgenMarkerInfo(FILE *h_bgen, uint64_t &pos);
@@ -69,7 +66,7 @@ public:
     void reset_exclude();
     void keep_raw_index(const std::vector<uint32_t>& keep_index);
     void keep_extracted_index(const std::vector<uint32_t>& keep_index);
-    void matchSNPListFile(string filename, int num_min_fields, const std::vector<int>& field_return, std::vector<string> &fields, std::vector<bool>& a_rev, bool update_a_rev = false);
+    void matchSNPListFile(string filename, int num_min_fields, const std::vector<int>& field_return, std::vector<string> &fields);
     void save_marker(string filename);
     std::vector<uint32_t> getNextWindowIndex(uint32_t cur_marker_index, uint32_t window, bool& chr_ends, bool& isHomogameticChrom, bool retRaw = true);
     std::vector<uint32_t> getNextSizeIndex(uint32_t cur_marker_index, uint32_t num, bool& chr_ends, bool& isHomogameticChrom, bool retRaw = false);
@@ -105,7 +102,6 @@ private:
     std::vector<uint32_t> pd;
     std::vector<string> a1;
     std::vector<string> a2;
-    std::vector<bool> A_rev; //effect allele;
     std::vector<uint64_t> byte_start;
     std::vector<uint32_t> raw_limits;
 
