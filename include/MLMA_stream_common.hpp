@@ -108,25 +108,14 @@ inline void run_mlma_stream_association(RemlState& state,
     std::vector<float>       af_v(BLOCK, 0.0f);
 
     // Batch output buffer to reduce write() syscall overhead.
-    std::vector<char> io_buf(4 << 20);  // 4 MiB
-    size_t io_pos = 0;
-    std::vector<char> line_scratch;
+    std::string io_buf;
+    io_buf.reserve(4 << 20);  // 4 MiB
+
     auto flush_io = [&]() {
-        if (io_pos > 0) {
-            ofile.write(io_buf.data(), static_cast<std::streamsize>(io_pos));
-            io_pos = 0;
+        if (!io_buf.empty()) {
+            ofile.write(io_buf.data(), static_cast<std::streamsize>(io_buf.size()));
+            io_buf.clear();
         }
-    };
-    auto append_io = [&](const char* data, size_t len) {
-        if (len == 0) return;
-        if (len > io_buf.size()) {
-            flush_io();
-            ofile.write(data, static_cast<std::streamsize>(len));
-            return;
-        }
-        if (io_pos + len > io_buf.size()) flush_io();
-        std::memcpy(io_buf.data() + io_pos, data, len);
-        io_pos += len;
     };
 
     auto callback = [&](uintptr_t* buf, std::span<const uint32_t> exIdx) {
@@ -192,14 +181,16 @@ inline void run_mlma_stream_association(RemlState& state,
                 mlma_snp_stat(Xt_Vi_y[i], xvx_diag[i], log_pval,
                             beta_val, se_val, pval_val);
 
+            std::format_to(std::back_inserter(io_buf),
+                "{}\t{}\t{}\t{}\t{}",
+                chr, name, bp, a1, a2);
+
+            // Variable columns
             if (!stat_ok) {
-                std::format_to(std::back_inserter(io_buf),
-                    "{}\t{}\t{}\t{}\t{}\tNA\tNA\tNA\tNA\n",
-                    chr, name, bp, a1, a2);
+                io_buf += "\tNA\tNA\tNA\tNA\n";
             } else {
                 std::format_to(std::back_inserter(io_buf),
-                    "{}\t{}\t{}\t{}\t{}\t{:.6g}\t{:.6g}\t{:.6g}\t{:.6g}\n",
-                    chr, name, bp, a1, a2,
+                    "\t{:.6g}\t{:.6g}\t{:.6g}\t{:.6g}\n",
                     static_cast<double>(af_v[i]),
                     static_cast<double>(beta_val),
                     static_cast<double>(se_val),
