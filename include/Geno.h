@@ -80,6 +80,11 @@ typedef struct GenoBufItem{
     vector<double> geno;
     vector<uintptr_t> missing;
     double af = 0.0;
+    // Real (additive-scale) allele frequency, captured after sample compaction
+    // but before genotypes are recoded under the nonadditive/dominance model.
+    // Mirrors `af` (which is already computed from raw hard-call/dosage counts
+    // and is unaffected by recoding) — use this for reporting/output purposes.
+    double additive_af = 0.0;
     double mean = 0.0;
     double sd = 0.0; //std^2
     double info = 0.0;

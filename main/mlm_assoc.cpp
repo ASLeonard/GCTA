@@ -314,9 +314,14 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
         }
     }*/
     compact_snp_data();
-    auto _freq = _mu; //TODO: almost certaintly the segfault issue
     _mu.clear();
     if (_mu.empty()) calcu_mu();
+    // Real (additive-scale) allele frequency for the Freq column: _additive_mu is
+    // captured in read_bed_dosage() before the nonadditive recoding is applied, so
+    // (unlike _mu, which calcu_mu() recomputes directly from the possibly-recoded
+    // _geno_dose) it always reflects the true allele frequency. Falls back to _mu
+    // when unavailable (e.g. the additive model, which doesn't populate it).
+    const std::vector<double>& freq_mu = _additive_mu.empty() ? _mu : _additive_mu;
 
     auto [beta, se, pval] = no_adj_covar
         ? mlma_calcu_stat_covar(std::span<const float>(y), m)
@@ -349,7 +354,7 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
             std::format_to(
                 std::back_inserter(chunk),
                 "{:.6g}\t{:.6g}\t{:.6g}\t{:.6g}\n",
-                0.5 * _freq[i],
+                0.5 * freq_mu[i],
                 beta[i],
                 se[i],
                 pval[i]

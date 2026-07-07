@@ -383,6 +383,7 @@ void gcta::read_bed_dosage(std::string bedfile)
     // Size _geno_dose and _mu compactly (dense SNP index 0..m-1).
     _geno_dose.setZero(n, m);
     _mu.assign(m, 0.0);
+    _additive_mu.assign(m, 0.0);
 
     // BED 2-bit encoding (per pair of raw bits, LSB-first within byte):
     //   00 = homA1,  01 = missing,  10 = het,  11 = homA2
@@ -439,6 +440,10 @@ void gcta::read_bed_dosage(std::string bedfile)
         }
 
         _mu[snp_indx] = (valid_count > 0) ? static_cast<double>(allele_count) / valid_count : 0.0;
+        // Capture the real (additive-scale) allele frequency here — after sample
+        // compaction (the loop above only accumulated over kept individuals) but
+        // before the nonadditive recoding below overwrites _geno_dose in place.
+        _additive_mu[snp_indx] = _mu[snp_indx];
         snp_indx++;
     }
 
@@ -658,6 +663,13 @@ void gcta::compact_dosage_data() {
         _mu = std::move(mu);
     }
 
+    // Compact _additive_mu the same way — it must stay aligned with _mu/_include.
+    if (!_additive_mu.empty()) {
+        std::vector<double> additive_mu(m);
+        for (int j = 0; j < m; j++) additive_mu[j] = _additive_mu[_include[j]];
+        _additive_mu = std::move(additive_mu);
+    }
+
     // Compact metadata and reset _include[j]=j via update_bim.
     std::vector<int> rsnp(_snp_num, 0);
     for (int idx : _include) rsnp[idx] = 1;
@@ -697,6 +709,13 @@ void gcta::compact_snp_data() {
         std::vector<double> mu(m);
         for (int j = 0; j < m; j++) mu[j] = _mu[_include[j]];
         _mu = std::move(mu);
+    }
+
+    // Compact _additive_mu the same way — it must stay aligned with _mu/_include.
+    if (!_additive_mu.empty()) {
+        std::vector<double> additive_mu(m);
+        for (int j = 0; j < m; j++) additive_mu[j] = _additive_mu[_include[j]];
+        _additive_mu = std::move(additive_mu);
     }
 
     // Compact all metadata arrays and reset _include[j]=j via update_bim.
@@ -2017,13 +2036,16 @@ void gcta::update_freq(std::string freq) {
 
 void gcta::save_freq(bool ssq_flag) {
     if (_mu.empty()) calcu_mu(ssq_flag);
+    // Prefer _additive_mu (real allele frequency, captured before any nonadditive
+    // recoding) when available; falls back to _mu for the additive model.
+    const std::vector<double>& freq_mu = _additive_mu.empty() ? _mu : _additive_mu;
     std::string save_freq = _out + ".freq";
     std::ofstream ofreq(save_freq.c_str());
     if (!ofreq) LOGGER.e(0, "cannot open the file [" + save_freq + "] to write.");
     int i = 0;
     LOGGER << "Writing allele frequencies of " << _include.size() << " SNPs to [" + save_freq + "]." << std::endl;
     for (i = 0; i < _include.size(); i++) {
-        ofreq << _snp_name[_include[i]] << "\t" << _allele_ref[_include[i]] << "\t" << std::setprecision(15) << _mu[_include[i]]*0.5;
+        ofreq << _snp_name[_include[i]] << "\t" << _allele_ref[_include[i]] << "\t" << std::setprecision(15) << freq_mu[_include[i]]*0.5;
         //        if(ssq_flag) ofreq<<"\t"<<_ssq[_include[i]]<<"\t"<<_w[_include[i]];
         ofreq << std::endl;
     }

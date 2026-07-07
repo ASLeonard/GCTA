@@ -890,9 +890,9 @@ void option(int option_num, char* option_str[])
         } else if(flag == "--reml-inv-mtd"){
             reml_inv_method = std::stoi(argv[++i]);
             LOGGER << "--reml-inv-mtd " << reml_inv_method <<  std::endl;
-        } else if (flag == "--logp") {
+        } else if (flag == "--log-pval") {
             logp_flag = true;
-            LOGGER << "--logp" << std::endl;
+            LOGGER << "--log-pval" << std::endl;
         } else if (flag == "--pheno") {
             phen_file = argv[++i];
             LOGGER << "--pheno " << phen_file <<  std::endl;

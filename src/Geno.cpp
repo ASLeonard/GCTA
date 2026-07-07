@@ -563,6 +563,7 @@ void Geno::getGenoDouble_pgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
     if(maf >= min_maf && maf <= max_maf && snpinfo.nMissRate >= dFilterMiss){
         gbuf->valid = true;
         gbuf->af = af;
+        gbuf->additive_af = af;
         gbuf->nValidN = snpinfo.N;
         gbuf->nValidAllele = snpinfo.AlCount;
         gbuf->mean = 2.0 * af;
@@ -628,6 +629,7 @@ void Geno::getGenoDouble_bed(uintptr_t *buf, int idx, GenoBufItem* gbuf){
         if(snpinfo.nMissRate >= dFilterMiss){
             gbuf->valid = true;
             gbuf->af = af;
+            gbuf->additive_af = af;
             gbuf->nValidN = snpinfo.N;
             gbuf->nValidAllele = snpinfo.AlCount;
 
@@ -903,6 +905,7 @@ void Geno::getGenoDouble_bgen(uintptr_t *buf, int idx, GenoBufItem* gbuf){
         if(nMissRate >= dFilterMiss && info >= dFilterInfo){
             gbuf->valid = true;
             gbuf->af = af;
+            gbuf->additive_af = af;
             gbuf->nValidN = validN;
             gbuf->nValidAllele = validAllele;
             gbuf->info = is_phased ? (std::numeric_limits<double>::quiet_NaN()) : info;
@@ -1817,7 +1820,7 @@ void Geno::freq_func(uintptr_t* genobuf, std::span<const uint32_t> markerIndex){
         getGenoDouble(genobuf, i, &item);
         isValids[i] = item.valid;
         if(item.valid){
-            af[i] = item.af;
+            af[i] = item.additive_af;
             nValidAllele[i] = item.nValidAllele;
             info[i] = item.info;
         }
@@ -1858,7 +1861,7 @@ void Geno::recode_func(uintptr_t* genobuf, std::span<const uint32_t> markerIndex
             if(item.valid) {
                 numMarkerOutput++;
                 osOut << marker->getMarkerStrExtract(cur_marker) << "\t"
-                    << item.af << "\t" << item.nValidAllele;
+                    << item.additive_af << "\t" << item.nValidAllele;
                 if(hasInfo) osOut << "\t" << item.info;
                 for(int j = 0; j < keepSampleCT; j++){
                     osOut << "\t";
