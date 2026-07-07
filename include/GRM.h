@@ -158,7 +158,8 @@ private:
     // written before moving to the next tile.
     // grm and N are nullptr between tiles.
     // grm_tile_size == 0 means no tiling (single-pass, original behaviour).
-    int  grm_tile_size  = 0;  // 0 = disabled; set by --GRM-tile-size <N>
+    bool grm_tiling_enabled = false;      // true when --GRM-tile-budget is active
+    double grm_tile_budget_bytes = 0;   // budget in bytes for the grm+N tile buffer; 0 = disabled
     int  grm_tile_rs    = 0;  // tile row start (global index)
     int  grm_tile_re    = 0;  // tile row end   (global, exclusive)
     int  grm_tile_rows  = 0;  // grm_tile_re - grm_tile_rs

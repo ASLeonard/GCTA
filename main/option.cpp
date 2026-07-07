@@ -890,9 +890,9 @@ void option(int option_num, char* option_str[])
         } else if(flag == "--reml-inv-mtd"){
             reml_inv_method = std::stoi(argv[++i]);
             LOGGER << "--reml-inv-mtd " << reml_inv_method <<  std::endl;
-        } else if (flag == "--logp") {
+        } else if (flag == "--log-pval") {
             logp_flag = true;
-            LOGGER << "--logp" << std::endl;
+            LOGGER << "--log-pval" << std::endl;
         } else if (flag == "--pheno") {
             phen_file = argv[++i];
             LOGGER << "--pheno " << phen_file <<  std::endl;
@@ -1080,8 +1080,8 @@ void option(int option_num, char* option_str[])
             mlma_no_adj_covar = true;
             LOGGER << "--mlma-no-preadj-covar" << std::endl;
         } else if (flag == "--save-reml") {
-            save_reml_file = argv[++i];
-            LOGGER << "--save-reml " << save_reml_file << std::endl;
+            save_reml_flag = true;
+            LOGGER << "--save-reml" << std::endl;
         } else if (flag == "--load-reml") {
             load_reml_file = argv[++i];
             LOGGER << "--load-reml " << load_reml_file << std::endl;
@@ -1336,7 +1336,7 @@ void option(int option_num, char* option_str[])
             LOGGER.e(0, errmsg.str());
         }
     }
-    if (save_reml_flag) save_reml_file = out + ".reml.bin.gz";
+    if (save_reml_flag) save_reml_file = out + ".reml";
 
     // conflicted options
     LOGGER << std::endl;

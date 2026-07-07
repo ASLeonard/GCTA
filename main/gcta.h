@@ -681,6 +681,13 @@ private:
     std::vector<double> _fixed_rg_val;
 
     std::vector<double> _mu;
+    // Real (additive-scale) allele frequency mean, captured right after sample
+    // compaction in read_bed_dosage() but before the nonadditive recoding is
+    // applied to _geno_dose. Unlike _mu (which calcu_mu() may later recompute
+    // directly from _geno_dose and would then reflect the recoded — not real —
+    // values under the nonadditive model), _additive_mu always mirrors the true
+    // allele frequency and should be used for reporting/output purposes.
+    std::vector<double> _additive_mu;
     std::string _out;
     bool _save_ram;
 

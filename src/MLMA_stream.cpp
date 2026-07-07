@@ -1,11 +1,18 @@
 /*
  * GCTA: a tool for Genome-wide Complex Trait Analysis
  *
- * Streaming MLMA (--MLMA) – loads REML state from a binary file produced by
- * "--mlma --save-reml" and streams SNPs via Geno::loopDouble instead of
- * pre-loading the full genotype matrix into RAM.
+ * Streaming MLMA (--mlma-stream) – streams SNPs via Geno::loopDouble instead
+ * of pre-loading the full genotype matrix into RAM, using a REML state that
+ * is either loaded from disk or computed inline from a GRM.
  *
- * Mandatory flag: --load-reml <file>
+ * REML state source (exactly one is required):
+ *   --load-reml <file>   load a previously saved REML state and run the
+ *                         streaming association test.
+ *   --grm <prefix>        run REML inline against the given GRM. Combine
+ *                         with --save-reml to only fit REML and write the
+ *                         state to "<out>.reml" (no association test is run).
+ *
+ * --save-reml is a boolean flag (no argument) valid only alongside --grm.
  */
 
 
@@ -78,7 +85,7 @@ RemlState readRemlState(const string& filename, bool no_adj_covar)
 {
     std::ifstream f(filename, std::ios::binary);
     if (!f.is_open())
-        LOGGER.e(0, "cannot open [" + filename + "] — run --mlma --save-reml first.");
+        LOGGER.e(0, "cannot open [" + filename + "] — run --mlma-stream --grm <prefix> --save-reml first.");
 
     auto must_read = [&](void* dst, std::streamsize nbytes) {
         f.read(reinterpret_cast<char*>(dst), nbytes);
@@ -318,8 +325,9 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
     const bool has_mlma_stream = options_in.find("--mlma-stream") != options_in.end();
     const bool has_load_reml   = options_in.find("--load-reml")   != options_in.end()
                                   && !options_in["--load-reml"].empty();
-    const bool has_save_reml   = options_in.find("--save-reml")   != options_in.end()
-                                  && !options_in["--save-reml"].empty();
+    // --save-reml is a boolean flag (no argument): the REML state is always
+    // written to "<out>.reml". Any value accidentally supplied is ignored.
+    const bool has_save_reml   = options_in.find("--save-reml")   != options_in.end();
 
     auto capture_common_reml_flags = [&]() {
         if (options_in.find("--reml-alg") != options_in.end()
@@ -345,7 +353,10 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         LOGGER.e(0, "--mlma-stream does not allow --load-reml with --save-reml.");
 
     if (has_save_reml) {
-        options["save_reml"] = options_in["--save-reml"][0];
+        if (!options_in["--save-reml"].empty())
+            LOGGER.w(0, "--save-reml takes no argument in --mlma-stream; the REML state "
+                        "will be saved to [" + options.at("out") + ".reml" + "].");
+        options["save_reml"] = "1";
         options_in.erase("--save-reml");
     }
 
@@ -455,18 +466,27 @@ void MLMA::processMain()
         const string out_prefix     = options.at("out");
         const bool   no_adj_covar   = options.count("no_adj_covar") > 0;
         const bool   log_pval       = options.count("log_pval") > 0;
+        // --save-reml only fits/saves the REML state and never streams SNPs,
+        // so the bim (Marker) and genotype (Geno) data are never touched.
+        const bool   reml_only      = options.count("save_reml") > 0;
 
         if (no_adj_covar)
             LOGGER.e(0, "--mlma-no-preadj-covar is not yet supported in --MLMA. "
                         "Re-run without this flag (pre-adjustment is the default).");
 
         // ---- Pheno / Marker / Geno (Geno re-reads pheno state in loopDouble) ----
+        // Pheno alone reads the .fam (sample IDs); Marker/Geno additionally need
+        // the .bim/.bed and are skipped entirely in --save-reml-only mode.
         Pheno*  pheno  = new Pheno();
-        Marker* marker = new Marker();
-        Geno*   geno   = new Geno(pheno, marker);
-        const string model_name = options.count("model") ? options.at("model") : "additive";
-        geno->setGenoCodingModel(model_name);
-        LOGGER.i(0, "MLMA_stream genotype model: " + model_name + ".");
+        Marker* marker = nullptr;
+        Geno*   geno   = nullptr;
+        if (!reml_only) {
+            marker = new Marker();
+            geno   = new Geno(pheno, marker);
+            const string model_name = options.count("model") ? options.at("model") : "additive";
+            geno->setGenoCodingModel(model_name);
+            LOGGER.i(0, "MLMA_stream genotype model: " + model_name + ".");
+        }
 
         // ---- Phenotype ----
         const uint32_t n_init = pheno->count_keep();
@@ -656,10 +676,11 @@ void MLMA::processMain()
             state = reml::build_reml_state(ctx);
 
             if (options.count("save_reml")) {
-                const string save_reml_file = options.at("save_reml");
+                const string save_reml_file = out_prefix + ".reml";
                 LOGGER.i(0, "Saving REML state to [" + save_reml_file + "] ...");
                 writeRemlState(save_reml_file, state, no_adj_covar);
-                LOGGER.i(0, "REML estimation completed. Use --load-reml to perform association tests.");
+                LOGGER.i(0, "REML estimation completed. Use --load-reml " + save_reml_file +
+                            " to perform association tests.");
                 delete geno;
                 delete marker;
                 delete pheno;
