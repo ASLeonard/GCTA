@@ -42,6 +42,30 @@
 
 using std::to_string;
 
+namespace {
+
+// Finds the largest `re` in (rs, full_re] such that a GRM tile spanning rows
+// [rs, re) with column width `re` (lower-triangle layout: row i needs columns
+// [0, i]) fits within budget_elems combined grm+N elements, i.e.
+//   (re - rs) * re <= budget_elems
+// Solved as the positive root of re^2 - rs*re - budget_elems = 0, then
+// corrected by +/-1 for floating-point rounding at the boundary.
+int solve_tile_budget_end(int rs, int full_re, uint64_t budget_elems){
+    const double disc = static_cast<double>(rs) * static_cast<double>(rs)
+                       + 4.0 * static_cast<double>(budget_elems);
+    double x = (static_cast<double>(rs) + std::sqrt(disc)) / 2.0;
+    int re = static_cast<int>(std::floor(x));
+    while(re > rs &&
+          static_cast<uint64_t>(re - rs) * static_cast<uint64_t>(re) > budget_elems)
+        re--;
+    while(re < full_re &&
+          static_cast<uint64_t>(re + 1 - rs) * static_cast<uint64_t>(re + 1) <= budget_elems)
+        re++;
+    return std::min(re, full_re);
+}
+
+} // namespace
+
 map<string, string> GRM::options;
 map<string, double> GRM::options_d;
 map<string, bool> GRM::options_b;
@@ -824,12 +848,10 @@ GRM::GRM(Pheno* pheno, Marker* marker) {
     }
 
     // In bBLAS mode grm and N are managed per-tile in processMakeGRM; allocate
-    // them here only when not using tiling (grm_tile_size == 0 or >= full_n).
-    const int ctor_tile_size_raw = (options_d.count("grm_tile_size") > 0)
-                                   ? static_cast<int>(options_d.at("grm_tile_size")) : 0;
-    const int ctor_tile_size = (ctor_tile_size_raw > 0 && ctor_tile_size_raw < static_cast<int>(num_individual))
-                               ? ctor_tile_size_raw : 0;
-    if(!bBLAS || ctor_tile_size == 0){
+    // them here only when not using tiling (no --GRM-tile-budget active).
+    const bool ctor_tiling_enabled = options_d.count("grm_tile_budget_bytes") > 0
+                                    && options_d.at("grm_tile_budget_bytes") > 0;
+    if(!bBLAS || !ctor_tiling_enabled){
         int ret_grm = posix_memalign((void **)&grm, 32, fill_grm * sizeof(double));
         if(ret_grm){
             LOGGER.e(0, "can't allocate enough memory to store the (parted) GRM: " + to_string(fill_grm*sizeof(double) / 1024.0/1024/1024) + "GB required.");
@@ -960,7 +982,7 @@ void GRM::calculate_GRM_blas(uintptr_t *buf, std::span<const uint32_t> markerInd
     }
 
     static constexpr double alpha = 1.0;
-    if(grm_tile_size > 0){
+    if(grm_tiling_enabled){
         // Block-tiled path: split into off-diagonal dgemm + diagonal dsyrk.
         //
         // grm buffer is column-major (grm_tile_rows × grm_tile_cols):
@@ -1635,26 +1657,27 @@ void GRM::flush_grm_tile(FILE *grm_out, FILE *N_out,
 }
 
 
-// N_thread: two distinct N[] layouts, selected by grm_tile_size.
+// N_thread: two distinct N[] layouts, selected by grm_tiling_enabled
+// (true when an auto-sized --GRM-tile-budget is active).
 //
-//   grm_tile_size > 0  (tiled path):
+//   grm_tiling_enabled  (tiled path):
 //     N is a RECTANGULAR buffer of shape (grm_tile_rows × grm_tile_cols), allocated in
 //     processMakeGRM with posix_memalign and zeroed per tile.
 //     Index: N[(pair1 - grm_tile_rs) * grm_tile_cols + pair2]
 //     pair2 ranges over [0, pair1] (lower triangle), but the stride is grm_tile_cols
 //     (full width), not the triangular row length.  flush_grm_tile reads it the same way.
 //
-//   grm_tile_size == 0  (non-tiled path):
+//   !grm_tiling_enabled  (non-tiled path):
 //     N is a PACKED TRIANGULAR buffer: row pair1 occupies positions
 //     [tri_offset(pair1), tri_offset(pair1) + pair1].
 //     startPos = (pair1+1+first) * (pair1-first) / 2  is the triangular row offset.
 //     deduce_GRM advances po_N by (pair1+1) after each row, consuming the packed layout.
 //
 // INVARIANT: these two paths must never be mixed.  The tiled path is always active
-// when grm_tile_size > 0; the non-tiled path is the fallback (grm_tile_size == 0).
+// when grm_tiling_enabled; the non-tiled path is the fallback otherwise.
 // If the two code paths are ever merged, this layout difference must be resolved first.
 void GRM::N_thread(int grm_index_from, int grm_index_to, const uintptr_t* cur_cmask){
-    if(grm_tile_size > 0){
+    if(grm_tiling_enabled){
         // Rectangular N layout: N[(pair1 - grm_tile_rs) * grm_tile_cols + pair2]
         uint32_t *po_N_row = N + static_cast<size_t>(grm_index_from - grm_tile_rs) * grm_tile_cols;
         const uintptr_t *p_cmask1 = cur_cmask + grm_index_from;
@@ -2126,15 +2149,23 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
 
     options_b["isDominance"] = isDominance;
 
-    string op_tile = "--GRM-tile-size";
-    if(options_in.find(op_tile) != options_in.end()){
-        if(options_in[op_tile].size() != 1)
-            LOGGER.e(0, op_tile + " requires exactly one integer argument.");
-        int ts = std::stoi(options_in[op_tile][0]);
-        if(ts < 0)
-            LOGGER.e(0, op_tile + " must be a non-negative integer (0 = disabled).");
-        options_d["grm_tile_size"] = static_cast<double>(ts);
-        options_in.erase(op_tile);
+    string op_tile_budget = "--GRM-tile-budget";
+    if(options_in.find(op_tile_budget) != options_in.end()){
+        if(options_in[op_tile_budget].size() != 1)
+            LOGGER.e(0, op_tile_budget + " requires exactly one value, in GB, e.g. 10.");
+        // Budget covers only the GRM tile buffer itself (grm + N, 8+4 bytes/elem),
+        // not genotype buffers or other working memory.
+        double budget_gb;
+        try{
+            budget_gb = std::stod(options_in[op_tile_budget][0]);
+        } catch(...) {
+            LOGGER.e(0, op_tile_budget + ": can't parse GB value '" + options_in[op_tile_budget][0] + "'.");
+            budget_gb = 0; // unreachable, silences -Wmaybe-uninitialized
+        }
+        if(budget_gb <= 0)
+            LOGGER.e(0, op_tile_budget + " must be a positive number of GB, e.g. 10.");
+        options_d["grm_tile_budget_bytes"] = budget_gb * 1024.0 * 1024.0 * 1024.0;
+        options_in.erase(op_tile_budget);
     }
 
     options["use_blas"] = "yes";
@@ -2194,21 +2225,16 @@ void GRM::processMakeGRM(){
     const vector<uint32_t> processIndex = marker->get_extract_index_autosome();
     sd.reserve(processIndex.size());
 
-    grm_tile_size = (options_d.count("grm_tile_size") > 0)
-                    ? static_cast<int>(options_d["grm_tile_size"]) : 0;
+    grm_tile_budget_bytes = (options_d.count("grm_tile_budget_bytes") > 0)
+                    ? static_cast<uint64_t>(options_d["grm_tile_budget_bytes"]) : 0;
 
-    // If the tile size covers the full sample range there is no benefit to tiling
-    // and it would waste memory (rectangular N vs triangular), so disable it.
-    const int full_n = static_cast<int>(part_keep_indices.second) - static_cast<int>(part_keep_indices.first) + 1;
-    if(grm_tile_size > 0 && grm_tile_size >= full_n){
-        LOGGER.w(0, "--GRM-tile-size " + to_string(grm_tile_size) +
-                    " >= sample size " + to_string(full_n) + "; tiling disabled.");
-        grm_tile_size = 0;
-    }
+    grm_tiling_enabled = grm_tile_budget_bytes > 0;
 
-    if(bBLAS && grm_tile_size > 0){
-        // ── Block-tiled GRM: process grm_tile_size rows per pass to cap memory ──
-        // Peak allocation per tile: grm_tile_rows × grm_tile_cols × (8+4) bytes.
+    if(bBLAS && grm_tiling_enabled){
+        // ── Block-tiled GRM: cap the grm+N tile buffer to --GRM-tile-budget
+        // bytes, auto-sizing rows per tile since the lower-triangle column
+        // width grows as tile_rs increases — this keeps memory usage roughly
+        // uniform across tiles instead of shrinking-then-huge. ──
 
         float thresh = -99.0f;
         bool isSparse = false;
@@ -2237,18 +2263,42 @@ void GRM::processMakeGRM(){
         const int num_thread = omp_get_max_threads();
         const int full_rs = static_cast<int>(part_keep_indices.first);
         const int full_re = static_cast<int>(part_keep_indices.second) + 1;
-        const int num_tiles = (full_re - full_rs + grm_tile_size - 1) / grm_tile_size;
-        LOGGER.i(0, "Block-tiled GRM: " + to_string(num_tiles) + " tile(s) of up to "
-                    + to_string(grm_tile_size) + " rows each.");
+
+        // Precompute every tile's [rs, re) boundary up front. This validates the
+        // whole run (including the budget-too-small error case below) before any
+        // genotype scanning starts.
+        // 12 bytes/element = 8 (double grm) + 4 (uint32 N).
+        const uint64_t budget_elems = grm_tile_budget_bytes / 12ULL;
+        vector<std::pair<int,int>> tile_ranges;
+        int rs = full_rs;
+        while(rs < full_re){
+            const int re = solve_tile_budget_end(rs, full_re, budget_elems);
+            if(re <= rs){
+                const uint64_t need_bytes = static_cast<uint64_t>(rs + 1) * 12ULL;
+                LOGGER.e(0, "--GRM-tile-budget is too small: the next row (sample offset "
+                            + to_string(rs) + ") alone needs "
+                            + to_string(need_bytes / (1024.0*1024.0*1024.0)).substr(0, 6)
+                            + " GB for its GRM+N row, but the budget is only "
+                            + to_string(grm_tile_budget_bytes / (1024.0*1024.0*1024.0)).substr(0, 6)
+                            + " GB. Increase --GRM-tile-budget.");
+            }
+            tile_ranges.push_back({rs, re});
+            rs = re;
+        }
+        LOGGER.i(0, "Block-tiled GRM (memory budget "
+                    + to_string(grm_tile_budget_bytes / (1024.0*1024.0*1024.0)).substr(0, 6)
+                    + " GB): " + to_string(tile_ranges.size()) + " tile(s), rows/tile ranging "
+                    + to_string(tile_ranges.front().second - tile_ranges.front().first) + "-"
+                    + to_string(tile_ranges.back().second - tile_ranges.back().first) + ".");
 
         // Allocate for the worst-case tile once and reuse — avoids repeated mmap/munmap
-        // and the associated page-fault storms that dominate sys time.
-        // Worst case: the last full tile has tile_rows=T, tile_cols=full_re (widest column span).
+        // and the associated page-fault storms that dominate sys time. Every tile is
+        // constructed to fit within budget_elems, so this scan is just a safety net
+        // against any boundary-solver rounding.
         size_t max_tile_elems = 0;
-        for(int ts = full_rs; ts < full_re; ts += grm_tile_size){
-            const int te = std::min(ts + grm_tile_size, full_re);
+        for(const auto &range : tile_ranges){
             max_tile_elems = std::max(max_tile_elems,
-                                      static_cast<size_t>(te - ts) * te);
+                                      static_cast<size_t>(range.second - range.first) * range.second);
         }
         if(posix_memalign((void**)&grm, 64, max_tile_elems * sizeof(double)) != 0)
             LOGGER.e(0, "Can't allocate GRM tile buffer.");
@@ -2267,8 +2317,9 @@ void GRM::processMakeGRM(){
         sd.clear();
         grm_skip_global_state = false;  // first tile must accumulate global state
 
-        for(int tile_rs = full_rs; tile_rs < full_re; tile_rs += grm_tile_size){
-            const int tile_re = std::min(tile_rs + grm_tile_size, full_re);
+        for(const auto &range : tile_ranges){
+            const int tile_rs = range.first;
+            const int tile_re = range.second;
             grm_tile_rs   = tile_rs;
             grm_tile_re   = tile_re;
             grm_tile_rows = tile_re - tile_rs;
@@ -2325,7 +2376,7 @@ void GRM::processMakeGRM(){
             LOGGER.i(0, "GRM has been saved in the file [" + o_name + ".grm.sp]");
         }
     } else {
-        // Non-tiled path (grm_tile_size == 0): single pass, original behaviour.
+        // Non-tiled path (!grm_tiling_enabled): single pass, original behaviour.
         LOGGER << "Computing GRM..." << std::endl;
         geno->loopDouble(processIndex, nMarkerBlock, true, true, isSTD, true, callBacks);
         LOGGER << "  Used " << numValidMarkers << " valid SNPs." << std::endl;

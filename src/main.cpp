@@ -60,7 +60,7 @@ void out_ver(bool flag_outFile){
     }
 
     log(0, "*******************************************************************", "");
-    log(0, "* Genome-wide Complex Trait Analysis (GCTA)", "");
+    log(0, "* Genome-wide Complex Trait Analysis (GCTAg)", "");
     log(0, std::string("* version ") + std::string(GCTA_VERSION) + std::string(" ") + getOSName(), "");
     {
         std::ostringstream outstring;
@@ -104,7 +104,7 @@ int main(int argc, char *argv[]){
         "--pfile", "--bpfile", "--mpfile", "--mbpfile", "--model-only", "--load-model", "--seed", "--fastGWA-mlm-binary", "--num-vec", "--trace-exact", "--cv-threshold", "--tao-start",
         "--acat", "--gene-list", "--snp-list", "--min-mac", "--max-maf", "--wind",
         "--envir", "--optimal-rho", "--noSandwich", "--grid-size",
-        "--GRM-tile-size",
+        "--GRM-tile-budget",
         "--mlma-stream", "--save-reml", "--load-reml", "--mlma-no-preadj-covar", "--log-pval", "--model",
         "--reml-trace-approx", "--reml-maxit", "--reml-woodbury", "--reml-alg",
         "--reml-no-constrain", "--reml-priors", "--reml-priors-var", "--reml-diagV-adj",
