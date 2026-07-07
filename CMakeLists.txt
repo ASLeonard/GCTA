@@ -445,13 +445,13 @@ if(APPLE)
     cmake_path(GET CMAKE_CXX_COMPILER PARENT_PATH _omp_bin_dir)
     cmake_path(GET _omp_bin_dir       PARENT_PATH _omp_prefix)
     find_path(OpenMP_CXX_INCLUDE_DIR NAMES omp.h
-        HINTS "${_omp_prefix}/include"
-              "/opt/homebrew/opt/libomp/include"
-              "/usr/local/opt/libomp/include")
+        HINTS "/opt/homebrew/opt/libomp/include"
+              "/usr/local/opt/libomp/include"
+              "${_omp_prefix}/include")
     find_library(OpenMP_omp_LIBRARY NAMES omp libomp
-        HINTS "${_omp_prefix}/lib"
-              "/opt/homebrew/opt/libomp/lib"
-              "/usr/local/opt/libomp/lib")
+        HINTS "/opt/homebrew/opt/libomp/lib"
+              "/usr/local/opt/libomp/lib"
+              "${_omp_prefix}/lib")
 
     if(NOT OpenMP_omp_LIBRARY OR NOT OpenMP_CXX_INCLUDE_DIR)
         message(FATAL_ERROR "OpenMP not found on macOS. Install with: brew install libomp")
