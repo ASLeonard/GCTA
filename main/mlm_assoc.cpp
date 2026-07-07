@@ -344,8 +344,8 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
             _chr[i],
             _snp_name[i],
             _bp[i],
-            _allele_ref[i],
-            _allele_alt[i]
+            _allele_alt[i],
+            _allele_ref[i]
         );
 
         if (pval[i] > 1.0) {
@@ -815,9 +815,10 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
     for(c1=0; c1<chrs.size(); c1++){
         for(i=0; i<icld_chrs[c1].size(); i++){
             j=icld_chrs[c1][i];
-            ofile<<_chr[j]<<"\t"<<_snp_name[j]<<"\t"<<_bp[j]<<"\t"<<_allele_ref[j]<<"\t"<<_allele_alt[j]<<"\t";
+            ofile<<_chr[j]<<"\t"<<_snp_name[j]<<"\t"<<_bp[j]<<"\t"<<_allele_alt[j]<<"\t"<<_allele_ref[j]<<"\t";
+            const double freq_j = (!_additive_mu.empty() ? _additive_mu[j] : _mu[j]);
             if(pval[c1][i]>1.5) ofile<<"NA\tNA\tNA\tNA"<<std::endl;
-            else ofile<<0.5*_mu[j]<<"\t"<<beta[c1][i]<<"\t"<<se[c1][i]<<"\t"<<pval[c1][i]<<std::endl;
+            else ofile<<0.5*freq_j<<"\t"<<beta[c1][i]<<"\t"<<se[c1][i]<<"\t"<<pval[c1][i]<<std::endl;
         }
     }
     ofile.close();
@@ -1115,11 +1116,12 @@ void gcta::mlma_loco_v2(std::string grm_file, std::string grm_chr_prefix,
         for (i = 0; i < icld_chrs[c1].size(); i++) {
             const int j = icld_chrs[c1][i];
             ofile << _chr[j] << "\t" << _snp_name[j] << "\t" << _bp[j] << "\t"
-                  << _allele_ref[j] << "\t" << _allele_alt[j] << "\t";
+                  << _allele_alt[j] << "\t" << _allele_ref[j] << "\t";
+            const double freq_j = (!_additive_mu.empty() ? _additive_mu[j] : _mu[j]);
             if (p[i] > 1.5)
                 ofile << "NA\tNA\tNA\tNA\n";
             else
-                ofile << 0.5 * _mu[j] << "\t" << b[i] << "\t"
+                ofile << 0.5 * freq_j << "\t" << b[i] << "\t"
                       << s[i] << "\t" << p[i] << "\n";
         }
 

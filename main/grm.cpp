@@ -1221,7 +1221,7 @@ void gcta::snp_pc_loading(std::string pc_file)
     for(i = 0; i < eigenval_num; i++) ofile << "\tpc" << i+1 << "_loading";
     ofile << std::endl;
     for(i = 0; i < m; i++){
-        ofile << _snp_name[_include[i]] << "\t" << _allele_ref[_include[i]] << "\t" << _allele_alt[_include[i]] << "\t" <<  _mu[_include[i]];
+        ofile << _snp_name[_include[i]] << "\t" << _allele_alt[_include[i]] << "\t" << _allele_ref[_include[i]] << "\t" <<  _mu[_include[i]];
         for(j = 0; j < eigenvec_num; j++) ofile << "\t" << snp_loading(i, j);
         ofile << "\n";
     }
