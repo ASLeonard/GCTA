@@ -48,19 +48,12 @@ namespace {
 // [rs, re) with column width `re` (lower-triangle layout: row i needs columns
 // [0, i]) fits within budget_elems combined grm+N elements, i.e.
 //   (re - rs) * re <= budget_elems
-// Solved as the positive root of re^2 - rs*re - budget_elems = 0, then
-// corrected by +/-1 for floating-point rounding at the boundary.
-int solve_tile_budget_end(int rs, int full_re, uint64_t budget_elems){
-    const double disc = static_cast<double>(rs) * static_cast<double>(rs)
-                       + 4.0 * static_cast<double>(budget_elems);
-    double x = (static_cast<double>(rs) + std::sqrt(disc)) / 2.0;
-    int re = static_cast<int>(std::floor(x));
-    while(re > rs &&
-          static_cast<uint64_t>(re - rs) * static_cast<uint64_t>(re) > budget_elems)
-        re--;
-    while(re < full_re &&
-          static_cast<uint64_t>(re + 1 - rs) * static_cast<uint64_t>(re + 1) <= budget_elems)
-        re++;
+// Solved as the positive root of re^2 - rs*re - budget_elems = 0 in 
+// floating-point arithmetic, then floored and clamped to an integer full_re.
+int solve_tile_budget_end(int rs, int full_re, double budget_elems) {
+    const double drs = rs;
+    const double disc = drs * drs + 4.0 * budget_elems;
+    int re = static_cast<int>(std::floor((drs + std::sqrt(disc)) / 2.0));
     return std::min(re, full_re);
 }
 
@@ -2226,7 +2219,7 @@ void GRM::processMakeGRM(){
     sd.reserve(processIndex.size());
 
     grm_tile_budget_bytes = (options_d.count("grm_tile_budget_bytes") > 0)
-                    ? static_cast<uint64_t>(options_d["grm_tile_budget_bytes"]) : 0;
+                    ? static_cast<double>(options_d["grm_tile_budget_bytes"]) : 0;
 
     grm_tiling_enabled = grm_tile_budget_bytes > 0;
 
@@ -2268,7 +2261,7 @@ void GRM::processMakeGRM(){
         // whole run (including the budget-too-small error case below) before any
         // genotype scanning starts.
         // 12 bytes/element = 8 (double grm) + 4 (uint32 N).
-        const uint64_t budget_elems = grm_tile_budget_bytes / 12ULL;
+        const double budget_elems = grm_tile_budget_bytes / 12.0;
         vector<std::pair<int,int>> tile_ranges;
         int rs = full_rs;
         while(rs < full_re){
