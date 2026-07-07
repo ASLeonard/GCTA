@@ -24,6 +24,7 @@
 #include <Spectra/SymEigsSolver.h>
 #include <Spectra/MatOp/DenseSymMatProd.h>
 #include <cpu.h>   // gcta_dsyevd / gcta_dsyevr wrappers
+#include <Eigen/Core>
 
 void gcta::enable_grm_bin_flag() {
     _grm_bin_flag = true;
@@ -1021,7 +1022,7 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
     }
     if (!pca_approx.empty()) {
 
-        if (pca_approx == "SVD") {
+        if (pca_approx == "rSVD") {
 
             int oversample    = 20;          // bump from 10
             int pca_power_iter = 3;          // one extra pass helps GRMs
@@ -1119,7 +1120,7 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
                 LOGGER.e(0, "dsyevr returned " + std::to_string(m_found) +
                              " eigenvalues, expected " + std::to_string(out_pc_num) + ".");
             eval = w.reverse();
-            evec = Z(Eigen::all, Eigen::seq(out_pc_num - 1, 0, -1));
+            evec = Z(Eigen::placeholders::all, Eigen::seq(out_pc_num - 1, 0, -1));
         }
     }
 
