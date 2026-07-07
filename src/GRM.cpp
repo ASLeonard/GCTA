@@ -20,6 +20,8 @@
 #include "Logger.h"
 #include "cpu.h"
 #include <Eigen/Dense>
+#include <format>
+#include <limits>
 #include <iterator>
 #include <algorithm>
 #include <ranges>
@@ -834,7 +836,7 @@ GRM::GRM(Pheno* pheno, Marker* marker) {
         }
         memset(grm, 0, fill_grm * sizeof(double));
 
-        int ret_N = posix_memalign((void **)&N, 32, fill_N * sizeof(uint32_t));
+        int ret_N = posix_memalign((void **)&N, 64, fill_N * sizeof(uint32_t));
         if(ret_N){
             LOGGER.e(0, "can't allocate enough memory to store (parted) N: " + to_string(fill_grm*sizeof(uint32_t) / 1024.0/1024/1024) + "GB required.");
         }
@@ -1384,8 +1386,9 @@ void GRM::deduce_GRM(){
         if((!grm_out) || (!N_out)){
             LOGGER.e(0, "can't open " + o_name + ".grm.bin or .grm.N.bin to write");
         }
-        setvbuf(grm_out, nullptr, _IOFBF, 1 << 20);
-        setvbuf(N_out,   nullptr, _IOFBF, 1 << 20);
+        // 4 MiB matches a typical Lustre stripe size and avoids sub-stripe metadata ops.
+        setvbuf(grm_out, nullptr, _IOFBF, 4 << 20);
+        setvbuf(N_out,   nullptr, _IOFBF, 4 << 20);
     }
 
     float mtd_weight = 1.0;
@@ -1444,6 +1447,13 @@ void GRM::deduce_GRM(){
         // Worst-case block: BLAS_OUT_BLOCK rows × grm_n_write cols (last block).
         // Allocate once and reuse to avoid per-iteration malloc/free overhead.
         std::vector<float> grm_block(static_cast<size_t>(BLAS_OUT_BLOCK) * grm_n_write);
+        // Sparse path: accumulate formatted text for an entire BLAS_OUT_BLOCK into a
+        // pre-reserved string, then fputs once per block.  Avoids O(n²) small heap
+        // allocations from constructing a new stringstream per row.
+        // Reserve heuristic: BLAS_OUT_BLOCK rows × grm_n_write cols × ~25 chars/entry × 5% density.
+        std::string sparse_buf;
+        if(isSparse) sparse_buf.reserve(
+            static_cast<size_t>(BLAS_OUT_BLOCK) * grm_n_write / 20 * 25);
 
         for(int block_start = static_cast<int>(part_keep_indices.first);
                 block_start < grm_n_write;
@@ -1461,6 +1471,8 @@ void GRM::deduce_GRM(){
                     G_cm.block(local_block_start, 0, block_rows, block_cols).cast<float>();
             }
 
+            if(isSparse) sparse_buf.clear();
+
             for(int pair1 = block_start; pair1 < block_end; pair1++){
                 const int local_block_r = pair1 - block_start;
                 const uint32_t sub_miss1 = numValidMarkers - sub_miss[pair1];
@@ -1475,18 +1487,19 @@ void GRM::deduce_GRM(){
                     fwrite(w_grm.data(), sizeof(float), pair1 + 1, grm_out);
                     fwrite(w_N.data(),  sizeof(float), pair1 + 1, N_out);
                 }else{
-                    std::stringstream ss;
-                    ss << std::setprecision(std::numeric_limits<float>::digits10 + 2);
                     for(int i = 0; i <= pair1; i++){
                         if(w_grm[i] >= thresh){
-                            ss << pair1 << "\t" << i << "\t" << w_grm[i] << "\n";
+                            std::format_to(std::back_inserter(sparse_buf),
+                                "{}\t{}\t{:.{}g}\n",
+                                pair1, i, w_grm[i],
+                                std::numeric_limits<float>::digits10 + 2);
                         }
                     }
-                    const string tmp = ss.str();
-                    if(!tmp.empty()) fputs(tmp.c_str(), grm_out);
                 }
                 po_N += pair1 + 1;
             }
+            if(isSparse && !sparse_buf.empty())
+                fputs(sparse_buf.c_str(), grm_out);
         } // end block loop
     }
     /* // don't need special case
@@ -1568,6 +1581,13 @@ void GRM::flush_grm_tile(FILE *grm_out, FILE *N_out,
     // Worst-case block: BLAS_OUT_BLOCK rows × tile_cols cols (last block).
     // Allocate once outside the loop to avoid per-iteration malloc/free overhead.
     std::vector<float> grm_block(static_cast<size_t>(BLAS_OUT_BLOCK) * tile_cols);
+    // Sparse path: accumulate formatted text for an entire BLAS_OUT_BLOCK into a
+    // pre-reserved string, then fputs once per block.  Avoids O(n²) small heap
+    // allocations from constructing a new stringstream per row.
+    // Reserve heuristic: BLAS_OUT_BLOCK rows × tile_cols cols × ~25 chars/entry × 5% density.
+    std::string sparse_buf;
+    if(isSparse) sparse_buf.reserve(
+        static_cast<size_t>(BLAS_OUT_BLOCK) * tile_cols / 20 * 25);
 
     for(int block_start = tile_rs; block_start < tile_re; block_start += BLAS_OUT_BLOCK){
         const int block_end  = std::min(block_start + BLAS_OUT_BLOCK, tile_re);
@@ -1580,6 +1600,8 @@ void GRM::flush_grm_tile(FILE *grm_out, FILE *N_out,
             Eigen::Map<RowMajF>(grm_block.data(), block_rows, block_cols) =
                 G_cm.block(local_block_start, 0, block_rows, block_cols).cast<float>();
         }
+
+        if(isSparse) sparse_buf.clear();
 
         for(int pair1 = block_start; pair1 < block_end; pair1++){
             const int local_r = pair1 - block_start;
@@ -1597,21 +1619,40 @@ void GRM::flush_grm_tile(FILE *grm_out, FILE *N_out,
                 fwrite(w_grm.data(), sizeof(float), pair1 + 1, grm_out);
                 fwrite(w_N.data(),   sizeof(float), pair1 + 1, N_out);
             } else {
-                std::stringstream ss;
-                ss << std::setprecision(std::numeric_limits<float>::digits10 + 2);
                 for(int i = 0; i <= pair1; i++){
                     if(w_grm[i] >= thresh){
-                        ss << pair1 << "\t" << i << "\t" << w_grm[i] << "\n";
+                        std::format_to(std::back_inserter(sparse_buf),
+                            "{}\t{}\t{:.{}g}\n",
+                            pair1, i, w_grm[i],
+                            std::numeric_limits<float>::digits10 + 2);
                     }
                 }
-                const string tmp = ss.str();
-                if(!tmp.empty()) fputs(tmp.c_str(), grm_out);
             }
         }
+        if(isSparse && !sparse_buf.empty())
+            fputs(sparse_buf.c_str(), grm_out);
     }
 }
 
 
+// N_thread: two distinct N[] layouts, selected by grm_tile_size.
+//
+//   grm_tile_size > 0  (tiled path):
+//     N is a RECTANGULAR buffer of shape (grm_tile_rows × grm_tile_cols), allocated in
+//     processMakeGRM with posix_memalign and zeroed per tile.
+//     Index: N[(pair1 - grm_tile_rs) * grm_tile_cols + pair2]
+//     pair2 ranges over [0, pair1] (lower triangle), but the stride is grm_tile_cols
+//     (full width), not the triangular row length.  flush_grm_tile reads it the same way.
+//
+//   grm_tile_size == 0  (non-tiled path):
+//     N is a PACKED TRIANGULAR buffer: row pair1 occupies positions
+//     [tri_offset(pair1), tri_offset(pair1) + pair1].
+//     startPos = (pair1+1+first) * (pair1-first) / 2  is the triangular row offset.
+//     deduce_GRM advances po_N by (pair1+1) after each row, consuming the packed layout.
+//
+// INVARIANT: these two paths must never be mixed.  The tiled path is always active
+// when grm_tile_size > 0; the non-tiled path is the fallback (grm_tile_size == 0).
+// If the two code paths are ever merged, this layout difference must be resolved first.
 void GRM::N_thread(int grm_index_from, int grm_index_to, const uintptr_t* cur_cmask){
     if(grm_tile_size > 0){
         // Rectangular N layout: N[(pair1 - grm_tile_rs) * grm_tile_cols + pair2]
@@ -2188,8 +2229,9 @@ void GRM::processMakeGRM(){
             N_out   = fopen((o_name + ".grm.N.bin").c_str(), "wb");
             if(!grm_out || !N_out)
                 LOGGER.e(0, "can't open " + o_name + ".grm.bin or .grm.N.bin to write");
-            setvbuf(grm_out, nullptr, _IOFBF, 1 << 20);
-            setvbuf(N_out,   nullptr, _IOFBF, 1 << 20);
+            // 4 MiB matches a typical Lustre stripe size and avoids sub-stripe metadata ops.
+            setvbuf(grm_out, nullptr, _IOFBF, 4 << 20);
+            setvbuf(N_out,   nullptr, _IOFBF, 4 << 20);
         }
 
         const int num_thread = omp_get_max_threads();
@@ -2210,7 +2252,7 @@ void GRM::processMakeGRM(){
         }
         if(posix_memalign((void**)&grm, 64, max_tile_elems * sizeof(double)) != 0)
             LOGGER.e(0, "Can't allocate GRM tile buffer.");
-        if(posix_memalign((void**)&N, 32, max_tile_elems * sizeof(uint32_t)) != 0)
+        if(posix_memalign((void**)&N, 64, max_tile_elems * sizeof(uint32_t)) != 0)
             LOGGER.e(0, "Can't allocate N tile buffer.");
 
         // sub_miss / sd / numValidMarkers / finished_marker depend only on global

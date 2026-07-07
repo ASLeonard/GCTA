@@ -28,11 +28,8 @@
 #include <string>
 #include <vector>
 
-#ifdef __APPLE__
-  #include <omp.h>
-#else
-  #include <omp.h>
-#endif
+#include <omp.h>
+
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Local type aliases (double-precision throughout)
@@ -109,6 +106,10 @@ bool inverse_H(RemlCtx& ctx, RemlMat& H) {
 }
 
 void bend_V(RemlCtx& ctx, RemlMat& Vi) {
+    const int bv_n = static_cast<int>(Vi.rows());
+    if (bv_n > 5000)
+        LOGGER.w(0, "bend_V: O(n³) full eigendecomposition on n=" + std::to_string(bv_n) +
+                    " matrix — this may take several minutes.");
     Eigen::SelfAdjointEigenSolver<RemlMat> eigensolver(Vi);
     RemlVec eval = eigensolver.eigenvalues();
     // bending_eigenval inline:
@@ -203,6 +204,24 @@ void init_varcomp(const RemlCtx& ctx,
     }
 }
 
+// Fill ctx.Vi (lower triangle + diagonal) with sum_ci varcmp[ci] * A[ci].
+// Caller must have already called ctx.Vi.resize(n, n) and zeroed it.
+// Identity-components (A.size()==0) are added to the diagonal only.
+void assemble_V_lower(RemlCtx& ctx, const RemlVec& varcmp) {
+    const int num_comp = static_cast<int>(ctx.r_indx.size());
+    ctx.Vi.triangularView<Eigen::Lower>().setZero();
+    #pragma omp parallel for schedule(static)
+    for (int j = 0; j < ctx.n; j++) {
+        for (int ci = 0; ci < num_comp; ci++)
+            if (ctx.A[ctx.r_indx[ci]].size() > 0)
+                ctx.Vi.col(j).tail(ctx.n - j) +=
+                    varcmp[ci] * ctx.A[ctx.r_indx[ci]].col(j).tail(ctx.n - j);
+    }
+    for (int ci = 0; ci < num_comp; ci++)
+        if (ctx.A[ctx.r_indx[ci]].size() == 0)
+            ctx.Vi.diagonal().array() += varcmp[ci];
+}
+
 // Returns false if V is not positive-definite and inversion failed.
 bool calcu_Vi(RemlCtx& ctx, RemlVec& prev_varcmp, double& logdet, int& iter, bool factorize_only) {
     ctx.Vi_use_llt = false;
@@ -242,18 +261,7 @@ bool calcu_Vi(RemlCtx& ctx, RemlVec& prev_varcmp, double& logdet, int& iter, boo
         ctx.Vi.diagonal() = RemlVec::Constant(ctx.n, 1.0 / prev_varcmp[0]);
         logdet = ctx.n * std::log(prev_varcmp[0]);
     } else {
-        const int num_comp = static_cast<int>(ctx.r_indx.size());
-        ctx.Vi.triangularView<Eigen::Lower>().setZero();
-        #pragma omp parallel for schedule(static)
-        for (int j = 0; j < ctx.n; j++) {
-            for (int ci = 0; ci < num_comp; ci++)
-                if (ctx.A[ctx.r_indx[ci]].size() > 0)
-                    ctx.Vi.col(j).tail(ctx.n - j) +=
-                        prev_varcmp[ci] * ctx.A[ctx.r_indx[ci]].col(j).tail(ctx.n - j);
-        }
-        for (int ci = 0; ci < num_comp; ci++)
-            if (ctx.A[ctx.r_indx[ci]].size() == 0)
-                ctx.Vi.diagonal().array() += prev_varcmp[ci];
+        assemble_V_lower(ctx, prev_varcmp);
 
         // LLT-only path (factorize_only, no diagV_adj)
         if (factorize_only && !ctx.reml_diagV_adj) {
@@ -265,17 +273,9 @@ bool calcu_Vi(RemlCtx& ctx, RemlVec& prev_varcmp, double& logdet, int& iter, boo
                 ctx.Vi_use_llt = true;
                 return true;
             }
-            // dpotrf failed: reassemble
-            ctx.Vi.triangularView<Eigen::Lower>().setZero();
-            #pragma omp parallel for schedule(static)
-            for (int j = 0; j < ctx.n; j++)
-                for (int ci = 0; ci < num_comp; ci++)
-                    if (ctx.A[ctx.r_indx[ci]].size() > 0)
-                        ctx.Vi.col(j).tail(ctx.n - j) +=
-                            prev_varcmp[ci] * ctx.A[ctx.r_indx[ci]].col(j).tail(ctx.n - j);
-            for (int ci = 0; ci < num_comp; ci++)
-                if (ctx.A[ctx.r_indx[ci]].size() == 0)
-                    ctx.Vi.diagonal().array() += prev_varcmp[ci];
+            // dpotrf failed: reassemble from scratch (dpotrf may have partially overwritten Vi)
+            ctx.Vi.resize(ctx.n, ctx.n);
+            assemble_V_lower(ctx, prev_varcmp);
         }
 
         INVmethod method_try = ctx.reml_inv_mtd ? static_cast<INVmethod>(ctx.reml_inv_mtd) : INV_LLT;
@@ -293,17 +293,9 @@ bool calcu_Vi(RemlCtx& ctx, RemlVec& prev_varcmp, double& logdet, int& iter, boo
                 ctx.Vi.triangularView<Eigen::Upper>() = ctx.Vi.transpose();
                 return true;
             }
-            // Reassemble for LU fallback
-            ctx.Vi.triangularView<Eigen::Lower>().setZero();
-            #pragma omp parallel for schedule(static)
-            for (int j = 0; j < ctx.n; j++)
-                for (int ci = 0; ci < num_comp; ci++)
-                    if (ctx.A[ctx.r_indx[ci]].size() > 0)
-                        ctx.Vi.col(j).tail(ctx.n - j) +=
-                            prev_varcmp[ci] * ctx.A[ctx.r_indx[ci]].col(j).tail(ctx.n - j);
-            for (int ci = 0; ci < num_comp; ci++)
-                if (ctx.A[ctx.r_indx[ci]].size() == 0)
-                    ctx.Vi.diagonal().array() += prev_varcmp[ci];
+            // dpotrf/dpotri failed: reassemble for LU fallback
+            ctx.Vi.resize(ctx.n, ctx.n);
+            assemble_V_lower(ctx, prev_varcmp);
             ctx.Vi.triangularView<Eigen::Upper>() =
                 ctx.Vi.triangularView<Eigen::Lower>().transpose();
             method_try = INV_LU;
@@ -413,7 +405,11 @@ void calcu_tr_PA_woodbury(const RemlCtx& ctx, RemlVec& tr_PA) {
     const int c = static_cast<int>(ctx.Vi_X.cols());
     RemlMat ViXTViX(c, c);
     ViXTViX.noalias() = ctx.Vi_X.transpose() * ctx.Vi_X;
-    const double tr_corr_I = (ctx.Xt_Vi_X_i * ViXTViX).trace();
+    // trace(A*B) == (A.cwiseProduct(B.transpose())).sum() for any square A,B.
+    // Both Xt_Vi_X_i and ViXTViX are c x c (c = covariate count, typically 1-5);
+    // avoiding the c x c GEMM eliminates BLAS call overhead that would dominate
+    // the actual arithmetic at such small sizes.
+    const double tr_corr_I = ctx.Xt_Vi_X_i.cwiseProduct(ViXTViX.transpose()).sum();
 
     tr_PA(ncomp - 1) = tr_Vinv - tr_corr_I;
 
@@ -421,7 +417,7 @@ void calcu_tr_PA_woodbury(const RemlCtx& ctx, RemlVec& tr_PA) {
     RemlMat delta_UkViX = delta.asDiagonal() * ctx.Uk_Vi_X;
     RemlMat ViX_K_ViX = lambda_t * ViXTViX;
     ViX_K_ViX.noalias() += ctx.Uk_Vi_X.transpose() * delta_UkViX;
-    const double tr_corr_K = (ctx.Xt_Vi_X_i * ViX_K_ViX).trace();
+    const double tr_corr_K = ctx.Xt_Vi_X_i.cwiseProduct(ViX_K_ViX.transpose()).sum();
 
     tr_PA(0) = tr_Vinv_K - tr_corr_K;
 }
@@ -446,6 +442,9 @@ void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, int m_probes) {
             }
     }
 
+    // Pre-allocate thin-Q scratch (n×k) to avoid per-iteration Identity construction.
+    RemlMat qr_scratch = RemlMat::Identity(ctx.n, k);
+
     for (int ci = 0; ci < ncomp; ci++) {
         const bool is_I = (ctx.A[ctx.r_indx[ci]].size() == 0);
 
@@ -463,11 +462,12 @@ void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, int m_probes) {
         RemlMat K = applyPA_mat(ctx.hutchpp_S);
         for (int pw = 0; pw < ctx.reml_trace_power_iter; pw++) {
             Eigen::HouseholderQR<RemlMat> qr_pw(K);
-            K = qr_pw.householderQ() * RemlMat::Identity(ctx.n, k);
-            K = applyPA_mat(K);
+            qr_scratch.setIdentity();
+            K = applyPA_mat(qr_pw.householderQ() * qr_scratch);
         }
         Eigen::HouseholderQR<RemlMat> qr(K);
-        RemlMat Q = qr.householderQ() * RemlMat::Identity(ctx.n, k);
+        qr_scratch.setIdentity();
+        RemlMat Q = qr.householderQ() * qr_scratch;
 
         const RemlMat MQ = applyPA_mat(Q);
         const double t_lr = Q.cwiseProduct(MQ).sum();
@@ -486,10 +486,9 @@ void calcu_tr_PA(const RemlCtx& ctx, const RemlMat& P, RemlVec& tr_PA) {
     tr_PA.resize(m);
     for (int i = 0; i < m; i++) {
         if (ctx.A[ctx.r_indx[i]].size() == 0) {
-            double s = 0.0;
-            #pragma omp parallel for reduction(+:s) schedule(static)
-            for (int col = 0; col < ctx.n; col++) s += P(col, col);
-            tr_PA(i) = s;
+            // Identity component: tr(PA) = tr(P). OMP parallel reduction over n
+            // scalar loads has more overhead than gain; let Eigen vectorise it.
+            tr_PA(i) = P.diagonal().sum();
         } else {
             const auto& Ai = ctx.A[ctx.r_indx[i]];
             double s = 0.0;
@@ -512,14 +511,21 @@ void calcu_Hi(RemlCtx& ctx, RemlMat& P, RemlMat& Hi) {
     std::vector<RemlMat> PA(m);
     for (int i = 0; i < m; i++) {
         if (ctx.Vi_use_woodbury && i == 0) {
-            RemlMat PUk = P.selfadjointView<Eigen::Upper>() * ctx.Uk;
+            // P is fully symmetrized above; use plain product for dgemm dispatch
+            // (dsymm is slower than dgemm for rectangular Uk on AOCL/Zen4).
+            RemlMat PUk(ctx.n, ctx.woodbury_rank_);
+            PUk.noalias() = P * ctx.Uk;
             RemlVec delta_v = ctx.dk.array() - ctx.lambda_tail;
             PA[i] = ctx.lambda_tail * P;
             PA[i].noalias() += PUk * delta_v.asDiagonal() * ctx.Uk.transpose();
         } else if (ctx.A[ctx.r_indx[i]].size() == 0) {
             PA[i].resize(0, 0);
         } else {
-            PA[i].noalias() = P.selfadjointView<Eigen::Upper>() * ctx.A[ctx.r_indx[i]];
+            // ctx.A is lower-triangle only; use selfadjointView on A (not on the
+            // already-full P) to avoid reading uninitialised upper-triangle elements.
+            // A is symmetric so A*P == P*A; pass P.transpose() (==P) as the dense
+            // RHS so dsymm fires with A as the symmetric operand.
+            PA[i].noalias() = ctx.A[ctx.r_indx[i]].selfadjointView<Eigen::Lower>() * P;
         }
     }
 
@@ -599,7 +605,10 @@ void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
     } else {
         R.noalias() = APy.transpose() * Py;
         RemlMat PAPy(ctx.n, m);
-        PAPy.noalias() = P.selfadjointView<Eigen::Lower>() * APy;
+        // P is fully symmetrised by calcu_P_impl before this call.
+        // Plain product dispatches to dgemm, which is faster than dsymm for
+        // rectangular APy (m is small) on AOCL/Zen4.
+        PAPy.noalias() = P * APy;
         Hi.noalias() = APy.transpose() * PAPy;
     }
     Hi = 0.5 * Hi;
@@ -740,7 +749,7 @@ double reml_iteration(RemlCtx& ctx,
         // mtd 1 (Fisher scoring) requires full P. skip_P_this_iter is false for
         // mtd 1, so ctx.P is always materialised before reml_equation().
 
-        lgL = -0.5 * (logdet_Xt_Vi_X + logdet + (ctx.y.transpose() * Py)(0, 0));
+        lgL = -0.5 * (logdet_Xt_Vi_X + logdet + ctx.y.dot(Py));
 
         if (ctx.reml_force_converge && ctx.reml_AI_not_invertible) break;
 
@@ -903,15 +912,21 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         evec_full = svd.matrixU().leftCols(k_svd);
     } else {
         omega.resize(0, 0);
+        // Pre-allocate thin-Q scratch (n x k_ext) once and reuse across all power
+        // iterations and the final QR.  Without this, each Identity(n, k_ext)
+        // construction allocates and zero-inits ~n*k_ext*8 bytes (up to ~4.9 GB at
+        // n=500k, k_ext=1220), totalling 4 such allocations per compute_woodbury_basis call.
+        Eigen::MatrixXd qr_scratch = Eigen::MatrixXd::Identity(n, k_ext);
         constexpr int power_iter = 3;
         for (int pi = 0; pi < power_iter; ++pi) {
             Eigen::HouseholderQR<Eigen::MatrixXd> qr_pi(Y);
-            Y = qr_pi.householderQ() * Eigen::MatrixXd::Identity(n, k_ext);
-            Y = K_dbl.selfadjointView<Eigen::Lower>() * Y;
+            qr_scratch.setIdentity();
+            Y = K_dbl.selfadjointView<Eigen::Lower>() * (qr_pi.householderQ() * qr_scratch);
         }
         {
             Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
-            Y = qr.householderQ() * Eigen::MatrixXd::Identity(n, k_ext);
+            qr_scratch.setIdentity();
+            Y = qr.householderQ() * qr_scratch;
         }
         Eigen::MatrixXd KY = K_dbl.selfadjointView<Eigen::Lower>() * Y;
         Eigen::MatrixXd B  = Y.transpose() * KY;
@@ -920,7 +935,12 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         if (es.info() != Eigen::Success)
             LOGGER.e(0, "Woodbury: eigendecomposition of projected GRM failed.");
         eval_full = es.eigenvalues().tail(k_svd).reverse();
-        evec_full = Y * es.eigenvectors().rightCols(k_svd).rowwise().reverse();
+        // Materialise the reversed eigenvector block into a plain contiguous matrix
+        // before the n x k_svd DGEMM.  Without this, rowwise().reverse() on a block
+        // expression forces column-by-column scatter during DGEMM, defeating tiling.
+        const Eigen::MatrixXd evecs_sorted =
+            es.eigenvectors().rightCols(k_svd).rowwise().reverse().eval();
+        evec_full = Y * evecs_sorted;
     }
 
     if (auto_k) {

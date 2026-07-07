@@ -183,9 +183,8 @@ inline void run_mlma_stream_association(RemlState& state,
             const std::string& chr  = marker->getRawChr(raw);
             const std::string& name = marker->getRawName(raw);
             const unsigned     bp   = static_cast<unsigned>(marker->getRawBp(raw));
-            const bool eff_rev       = marker->isEffecRev(exIdx[i]);
-            const std::string& a1    = eff_rev ? marker->getRawA2(raw) : marker->getRawA1(raw);
-            const std::string& a2    = eff_rev ? marker->getRawA1(raw) : marker->getRawA2(raw);
+            const std::string& a1    = marker->getRawA1(raw);
+            const std::string& a2    = marker->getRawA2(raw);
 
             char line[512];
             float beta_val = 0.0f, se_val = 0.0f;

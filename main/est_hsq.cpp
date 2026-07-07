@@ -2636,8 +2636,7 @@ void gcta::blup_snp_geno() {
         fcount = 0.0;
         for (i = 0; i < _keep.size(); i++) {
             if (!_snp_1[_include[k]][_keep[i]] || _snp_2[_include[k]][_keep[i]]) {
-                if (_allele1[_include[k]] == _ref_A[_include[k]]) x = _snp_1[_include[k]][_keep[i]] + _snp_2[_include[k]][_keep[i]];
-                else x = 2.0 - (_snp_1[_include[k]][_keep[i]] + _snp_2[_include[k]][_keep[i]]);
+                x = _snp_1[_include[k]][_keep[i]] + _snp_2[_include[k]][_keep[i]];
                 x = (x - _mu[_include[k]]);
                 for (j = 0; j < col_num; j++) b_SNP(k, j) += x * _varcmp_Py(i, j);
                 fcount += 1.0;
@@ -2704,7 +2703,7 @@ void gcta::output_blup_snp(eigenMatrix &b_SNP) {
     int i = 0, j = 0, col_num = b_SNP.cols();
     LOGGER << "Writing BLUP solutions of SNP effects for " << _include.size() << " SNPs to [" + o_b_snp_file + "]." << std::endl;
     for (i = 0; i < _include.size(); i++) {
-        o_b_snp << _snp_name[_include[i]] << "\t" << _ref_A[_include[i]] << "\t";
+        o_b_snp << _snp_name[_include[i]] << "\t" << _allele_ref[_include[i]] << "\t";
         for (j = 0; j < col_num; j++) o_b_snp << b_SNP(i, j) << "\t";
         o_b_snp << std::endl;
     }
