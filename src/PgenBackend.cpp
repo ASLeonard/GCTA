@@ -134,7 +134,7 @@ try {
         for (uint32_t i = 0; i < nextSize; ++i) {
             int rawIndex  = static_cast<int>(rawIndices[finishedMarker + i]);
             int lag_index = rawIndex - g_.baseIndexLookup[fileIndex];
-            int al_idx    = g_.marker->isEffecRevRaw(rawIndex) ? 0 : 1;
+            int al_idx    = 1;
             uintptr_t* slot =
                 block.buf.data() + static_cast<std::size_t>(i) * stride;
             DosageBuf dbuf = DosageBuf::from(

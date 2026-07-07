@@ -95,7 +95,7 @@ public:
     void read_imp_dose_mach(std::string dosefile, std::string kp_indi_file, std::string rm_indi_file, std::string blup_indi_file);
     void read_imp_info_beagle(std::string zinfofile);
     void read_imp_dose_beagle(std::string zdosefile, std::string kp_indi_file, std::string rm_indi_file, std::string blup_indi_file);
-    void update_ref_A(std::string ref_A_file);
+    void update_allele_ref(std::string ref_A_file);
     void update_impRsq(std::string zinfofile);
     void update_freq(std::string freq);
     void save_freq(bool ssq_flag);
@@ -301,6 +301,8 @@ private:
     //void make_XMat_eigenMatrix(MatrixXf &X);
     bool make_XMat_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std);
     bool make_XMat_d_subset(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std);
+    bool make_XMat_subset_dense(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std);
+    bool make_XMat_d_subset_dense(Eigen::MatrixXf &X, std::vector<int> &snp_indx, bool divid_by_std);
 
 
     void calcu_mu(bool ssq_flag = false);
@@ -531,8 +533,7 @@ private:
         x.resize(_keep.size());
         for (i = 0; i < _keep.size(); i++) {
             if (!_snp_1[_include[j]][_keep[i]] || _snp_2[_include[j]][_keep[i]]) {
-                if (_allele1[_include[j]] == _ref_A[_include[j]]) x[i] = (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
-                else x[i] = 2.0 - (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
+                x[i] = (_snp_1[_include[j]][_keep[i]] + _snp_2[_include[j]][_keep[i]]);
             } else x[i] = _mu[_include[j]];
             if (minus_2p) x[i] -= _mu[_include[j]];
         }
@@ -551,10 +552,8 @@ private:
     std::map<std::string, std::string> _snp_name_per_chr;
     std::vector<double> _genet_dst;
     std::vector<int> _bp;
-    std::vector<std::string> _allele1;
-    std::vector<std::string> _allele2;
-    std::vector<std::string> _ref_A; // reference allele
-    std::vector<std::string> _other_A; // the other allele
+    std::vector<std::string> _allele_ref;
+    std::vector<std::string> _allele_alt;
     int _snp_num;
     std::vector<double> _rc_rate;
     std::vector<int> _include; // initialized in the read_bimfile()

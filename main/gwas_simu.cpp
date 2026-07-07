@@ -63,7 +63,7 @@ void gcta::output_simu_par(std::vector<std::string> &qtl_name, std::vector<int> 
     std::ofstream out_par(out_parfile.c_str());
     if (!out_par) LOGGER.e(0, "cannot open par file [" + out_parfile + "] to write!");
     out_par << "QTL\tRefAllele\tFrequency\tEffect" << std::endl;
-    for (i = 0; i < qtl_eff.size(); i++) out_par << qtl_name[i] << "\t" << _ref_A[qtl_pos[i]] << "\t" << 0.5 * _mu[qtl_pos[i]] << "\t" << qtl_eff[i] << std::endl;
+    for (i = 0; i < qtl_eff.size(); i++) out_par << qtl_name[i] << "\t" << _allele_ref[qtl_pos[i]] << "\t" << 0.5 * _mu[qtl_pos[i]] << "\t" << qtl_eff[i] << std::endl;
     out_par.close();
     LOGGER << "Simulated QTL effect(s) have been saved in [" + out_parfile + "]." << std::endl;
 }
@@ -488,7 +488,7 @@ void gcta::save_bimfile()
         if(!Bim) LOGGER.e(0, "cannot open the file ["+bimfile+"] to write.");
         LOGGER<<"Writing PLINK bim file to ["<<bimfile<<"]."<<std::endl;
         for(i=0; i<_snp_num; i++){
-                Bim<<_chr[i]<<"\t"<<_snp_name[i]<<"\t"<<_genet_dst[i]<<"\t"<<_bp[i]<<"\t"<<_allele1[i]<<"\t"<<_allele2[i]<<std::endl;
+                Bim<<_chr[i]<<"\t"<<_snp_name[i]<<"\t"<<_genet_dst[i]<<"\t"<<_bp[i]<<"\t"<<_allele_alt[i]<<"\t"<<_allele_ref[i]<<std::endl;
         }
         Bim.close();
         LOGGER<<_snp_num<<" SNPs to be saved to ["<<bimfile<<"]."<<std::endl;
@@ -561,7 +561,7 @@ void gcta::genet_dst(std::string bfile, std::string hapmap_genet_map)
     std::string out_bimfile = _out + ".genetdst";
     std::ofstream out_bim(out_bimfile.c_str());
     if (!out_bim) LOGGER.e(0, "cannot open file " + out_bimfile + " to write.");
-    for (i = 0; i < snp_num; i++) out_bim << _chr[i] << "\t" << _snp_name[i] << "\t" << dst[i]*1e-6 << "\t" << _bp[i] << "\t" << _allele1[i] << "\t" << _allele2[i] << std::endl;
+    for (i = 0; i < snp_num; i++) out_bim << _chr[i] << "\t" << _snp_name[i] << "\t" << dst[i]*1e-6 << "\t" << _bp[i] << "\t" << _allele_alt[i] << "\t" << _allele_ref[i] << std::endl;
     out_bim.close();
     LOGGER << "Genetic distances have been created, and been saved in [" + out_bimfile + "]." << std::endl;
 }
@@ -635,17 +635,17 @@ void gcta::simu_genome(
         _genet_dst.resize(_snp_num);
         _bp.clear();
         _bp.resize(_snp_num);
-        _allele1.clear();
-        _allele1.resize(_snp_num);
-        _allele2.clear();
-        _allele2.resize(_snp_num);
+        _allele_alt.clear();
+        _allele_alt.resize(_snp_num);
+        _allele_ref.clear();
+        _allele_ref.resize(_snp_num);
     for(i=0; i<_snp_num; i++){
         _chr[i]=1;
         strstrm.str("");
         strstrm<<"SNP_"<<i+1;
         _snp_name[i]=strstrm.str();
-        _allele1[i]='A';
-        _allele2[i]='C';
+        _allele_alt[i]='A';
+        _allele_ref[i]='C';
     }
     save_bimfile();
 
@@ -687,8 +687,8 @@ void gcta::simu_geno_unlinked(int N, int M, double maf)
     _snp_name.resize(M);
         _bp.resize(M);
     _genet_dst.resize(M);
-    _allele1.resize(M);
-    _allele2.resize(M);
+    _allele_alt.resize(M);
+    _allele_ref.resize(M);
     _snp_1.resize(M);
     _snp_2.resize(M);
 
@@ -706,8 +706,8 @@ void gcta::simu_geno_unlinked(int N, int M, double maf)
         _snp_name[j]=ss.str();
         _bp[j]=j+1;
         _genet_dst[j]=0.0;
-        _allele1[j]="A";
-        _allele2[j]="G";
+        _allele_alt[j]="A";
+        _allele_ref[j]="G";
         _snp_1[j].resize(N);
         _snp_2[j].resize(N);
                 std::tr1::uniform_real<double> runiform(maf,1-maf);

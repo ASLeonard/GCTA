@@ -210,8 +210,8 @@ private:
         double na = 0.0;
     };
     GenoCodingModel getCodingModel() const;
-    double mapDosageToModel(double dosage, double mu, bool isEffRev, GenoCodingModel model) const;
-    GenoCodingSpec buildCodingSpec(double mu, double sd, bool isEffRev) const;
+    double mapDosageToModel(double    dosage, double mu, GenoCodingModel model) const;
+    GenoCodingSpec buildCodingSpec(double mu, double sd) const;
     GenoCodingModel genoCodingModel = GenoCodingModel::ADDITIVE;
 
     int8_t alleModel = 1; // 1: add; 2: Dom; 3: Reces; 4: Het; //currently unused affect a0 a1 a2 na;

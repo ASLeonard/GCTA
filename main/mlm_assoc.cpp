@@ -325,21 +325,35 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
     
     const std::string filename = _out + ".mlma";
     LOGGER<<"\nSaving the results of the mixed linear model association analyses of "<<m<<" SNPs to ["+filename+"] ..."<<std::endl;
+
+    std::ofstream ofile(filename);
+    if(!ofile) LOGGER.e(0, "cannot open the file ["+filename+"] to write.");
+    ofile<<"Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\t"<<(_log_pval ? "log_p" : "p")<<std::endl;
     std::string chunk;
     chunk.reserve(1 << 22); // 4 MB chunk
 
     for (size_t i = 0; i < m; ++i) {
+        std::format_to(
+            std::back_inserter(chunk),
+            "{}\t{}\t{}\t{}\t{}\t",
+            _chr[i],
+            _snp_name[i],
+            _bp[i],
+            _allele_ref[i],
+            _allele_alt[i]
+        );
+
         if (pval[i] > 1.0) {
-            std::format_to(std::back_inserter(chunk),
-                "{}\t{}\t{}\t{}\t{}\tNA\tNA\tNA\tNA\n",
-                _chr[i], _snp_name[i], _bp[i],
-                _allele_ref[i], _allele_alt[i]);
+            chunk += "NA\tNA\tNA\tNA\n";
         } else {
-            std::format_to(std::back_inserter(chunk),
-                "{}\t{}\t{}\t{}\t{}\t{:.6g}\t{:.6g}\t{:.6g}\t{:.6g}\n",
-                _chr[i], _snp_name[i], _bp[i],
-                _allele_ref[i], _allele_alt[i],
-                0.5*_freq[i], beta[i], se[i], pval[i]);
+            std::format_to(
+                std::back_inserter(chunk),
+                "{:.6g}\t{:.6g}\t{:.6g}\t{:.6g}\n",
+                0.5 * _freq[i],
+                beta[i],
+                se[i],
+                pval[i]
+            );
         }
 
         // Flush when chunk is large enough
@@ -417,6 +431,9 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
 
     LOGGER<<"\nRunning association tests for "<<m<<" SNPs ..."<<std::endl;
 
+    compact_indi_data();
+    if (!_make_XMat_no_compact) compact_snp_data();
+
     int k = 0, l = 0;
     // Pre-allocate at max_block_size — no heap activity inside the hot loop.
     // leftCols(bs) selects the active columns for partial (last) blocks.
@@ -440,7 +457,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat(std::span<const float> y, unsigned long m
             std::min(static_cast<unsigned long>(max_block_size), m - i));
         indx.resize(bs);
         std::iota(indx.begin(), indx.end(), static_cast<int>(i));
-        make_XMat_subset(X_block, indx, false);  // X_block is n×bs (written into pre-alloc'd buffer)
+        make_XMat_subset_dense(X_block, indx, false);  // X_block is n×bs (written into pre-alloc'd buffer)
 
         // GEMV first — X_block is still hot in cache from make_XMat_subset.
         // X^T Vi_y (bs×1) — single GEMV into pre-allocated target.
@@ -595,7 +612,7 @@ gcta::MlmaResult gcta::mlma_calcu_stat_covar(std::span<const float> y, unsigned 
             std::min(static_cast<unsigned long>(max_block_size), m - i));
         indx.resize(bs);
         for(k = 0; k < bs; k++) indx[k] = i + k;
-        make_XMat_subset(X_block, indx, false);  // X_block is n×bs
+        make_XMat_subset_dense(X_block, indx, false);  // X_block is n×bs
 
         // All operations using the original genotype values must come first,
         // before the in-place STRMM/STRSM overwrites X_block.
@@ -793,7 +810,7 @@ void gcta::mlma_loco(std::string phen_file, std::string qcovar_file, std::string
     for(c1=0; c1<chrs.size(); c1++){
         for(i=0; i<icld_chrs[c1].size(); i++){
             j=icld_chrs[c1][i];
-            ofile<<_chr[j]<<"\t"<<_snp_name[j]<<"\t"<<_bp[j]<<"\t"<<_ref_A[j]<<"\t"<<_other_A[j]<<"\t";
+            ofile<<_chr[j]<<"\t"<<_snp_name[j]<<"\t"<<_bp[j]<<"\t"<<_allele_ref[j]<<"\t"<<_allele_alt[j]<<"\t";
             if(pval[c1][i]>1.5) ofile<<"NA\tNA\tNA\tNA"<<std::endl;
             else ofile<<0.5*_mu[j]<<"\t"<<beta[c1][i]<<"\t"<<se[c1][i]<<"\t"<<pval[c1][i]<<std::endl;
         }
@@ -1093,7 +1110,7 @@ void gcta::mlma_loco_v2(std::string grm_file, std::string grm_chr_prefix,
         for (i = 0; i < icld_chrs[c1].size(); i++) {
             const int j = icld_chrs[c1][i];
             ofile << _chr[j] << "\t" << _snp_name[j] << "\t" << _bp[j] << "\t"
-                  << _ref_A[j] << "\t" << _other_A[j] << "\t";
+                  << _allele_ref[j] << "\t" << _allele_alt[j] << "\t";
             if (p[i] > 1.5)
                 ofile << "NA\tNA\tNA\tNA\n";
             else
