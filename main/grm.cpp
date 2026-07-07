@@ -1119,7 +1119,7 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
                 LOGGER.e(0, "dsyevr returned " + std::to_string(m_found) +
                              " eigenvalues, expected " + std::to_string(out_pc_num) + ".");
             eval = w.reverse();
-            evec = Z.rowwise().reverse();
+            evec = Z(Eigen::all, Eigen::seq(out_pc_num - 1, 0, -1));
         }
     }
 
