@@ -466,18 +466,27 @@ void MLMA::processMain()
         const string out_prefix     = options.at("out");
         const bool   no_adj_covar   = options.count("no_adj_covar") > 0;
         const bool   log_pval       = options.count("log_pval") > 0;
+        // --save-reml only fits/saves the REML state and never streams SNPs,
+        // so the bim (Marker) and genotype (Geno) data are never touched.
+        const bool   reml_only      = options.count("save_reml") > 0;
 
         if (no_adj_covar)
             LOGGER.e(0, "--mlma-no-preadj-covar is not yet supported in --MLMA. "
                         "Re-run without this flag (pre-adjustment is the default).");
 
         // ---- Pheno / Marker / Geno (Geno re-reads pheno state in loopDouble) ----
+        // Pheno alone reads the .fam (sample IDs); Marker/Geno additionally need
+        // the .bim/.bed and are skipped entirely in --save-reml-only mode.
         Pheno*  pheno  = new Pheno();
-        Marker* marker = new Marker();
-        Geno*   geno   = new Geno(pheno, marker);
-        const string model_name = options.count("model") ? options.at("model") : "additive";
-        geno->setGenoCodingModel(model_name);
-        LOGGER.i(0, "MLMA_stream genotype model: " + model_name + ".");
+        Marker* marker = nullptr;
+        Geno*   geno   = nullptr;
+        if (!reml_only) {
+            marker = new Marker();
+            geno   = new Geno(pheno, marker);
+            const string model_name = options.count("model") ? options.at("model") : "additive";
+            geno->setGenoCodingModel(model_name);
+            LOGGER.i(0, "MLMA_stream genotype model: " + model_name + ".");
+        }
 
         // ---- Phenotype ----
         const uint32_t n_init = pheno->count_keep();
