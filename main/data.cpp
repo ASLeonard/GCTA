@@ -369,16 +369,24 @@ void gcta::read_bed_dosage(std::string bedfile)
     const int m = static_cast<int>(_include.size());
     const size_t bytes_per_snp = (static_cast<size_t>(_indi_num) + 3) / 4;
 
-    // Load entire file into memory — avoids repeated disk I/O across SNPs.
-    std::ifstream BIT(bedfile.c_str(), std::ios::in | std::ios::binary);
-    if (!BIT) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
     LOGGER << "Reading PLINK BED file from [" + bedfile + "] in SNP-major format (dosage mode) ..." << std::endl;
-    BIT.seekg(0, std::ios::end);
-    const size_t file_size = static_cast<size_t>(BIT.tellg());
-    BIT.seekg(0, std::ios::beg);
-    std::vector<unsigned char> bed_buf(file_size);
-    BIT.read(reinterpret_cast<char*>(bed_buf.data()), file_size);
-    BIT.close();
+
+    // mmap the bed file — zero-copy, OS pages in on demand, reclaimable
+    // under memory pressure (unlike a private heap buffer of the same size).
+    int bed_fd = open(bedfile.c_str(), O_RDONLY);
+    if (bed_fd < 0) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
+    struct stat bed_st;
+    fstat(bed_fd, &bed_st);
+    size_t file_size = static_cast<size_t>(bed_st.st_size);
+    if (file_size < 3 + static_cast<size_t>(_snp_num) * bytes_per_snp) {
+        close(bed_fd);
+        LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
+    }
+    const unsigned char* bed_buf = static_cast<const unsigned char*>(
+        mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, bed_fd, 0));
+    close(bed_fd);
+    if (bed_buf == MAP_FAILED) LOGGER.e(0, "mmap failed for [" + bedfile + "].");
+    madvise(const_cast<unsigned char*>(bed_buf), file_size, MADV_WILLNEED);
 
     // Size _geno_dose and _mu compactly (dense SNP index 0..m-1).
     _geno_dose.setZero(n, m);
@@ -387,39 +395,28 @@ void gcta::read_bed_dosage(std::string bedfile)
 
     // BED 2-bit encoding (per pair of raw bits, LSB-first within byte):
     //   00 = homA1,  01 = missing,  10 = het,  11 = homA2
-    // Per-SNP LUT maps raw 2-bit value → ref-allele count as float
-    // (or DOSAGE_NA for missing). Built once per SNP.
-    //
-    // Single pass: decode raw ref-allele counts into _geno_dose AND
-    // accumulate allele_count/valid_count for _mu simultaneously.
-    // For the nonadditive model a second O(n×m) in-memory transform is
-    // applied afterward — far cheaper than a second file scan.
+    // lut[raw_2bit] = ref-allele count {0,1,2} or -1 (missing).
+    static constexpr int8_t lut[4] = {
+        2,   // 00 homA1
+        -1,  // 01 missing
+        1,   // 10 het
+        0,   // 11 homA2
+    };
 
     bool missing_warned = false;
-    size_t buf_pos = 3; // skip 3-byte BED magic
 
     int snp_indx = 0;
     for (int j = 0; j < _snp_num; j++) {
-        if (!rsnp[j]) { buf_pos += bytes_per_snp; continue; }
+        if (!rsnp[j]) continue;
 
-        // Build a 4-entry decode LUT for this SNP.
-        const int full_idx = _include[snp_indx];
-                // lut[raw_2bit] = ref-allele count {0,1,2} or -1 (missing).
-        // raw: 00=homA1(2), 01=missing(-1), 10=het(1), 11=homA2(0)
-        const int8_t lut[4] = {
-            2,  // 00 homA1
-            -1,                                  // 01 missing
-            1,                                   // 10 het (same either way)
-            0,  // 11 homA2
-        };
+        const size_t snp_offset = 3 + static_cast<size_t>(j) * bytes_per_snp;
+        const unsigned char* snp_data = bed_buf + snp_offset;
 
         int allele_count = 0, valid_count = 0;
         int indi_indx = 0;
 
         for (int i = 0; i < _indi_num; ) {
-            if (buf_pos >= file_size)
-                LOGGER.e(0, "problem with the BED file ... has the FAM/BIM file been changed?");
-            const unsigned char byte = bed_buf[buf_pos++];
+            const unsigned char byte = snp_data[i / 4];
 
             for (int bit = 0; bit < 8 && i < _indi_num; bit += 2, i++) {
                 if (!rindi[i]) continue;
@@ -447,6 +444,10 @@ void gcta::read_bed_dosage(std::string bedfile)
         snp_indx++;
     }
 
+    // Done with the raw file — release the mapping before the transform pass
+    // rather than holding it through the rest of the function.
+    munmap(const_cast<unsigned char*>(bed_buf), file_size);
+
     // For the nonadditive model transform raw counts in-place using the now-known _mu.
     // Additive: raw ref-allele count IS the dosage; nothing more to do.
     if (_genetic_model == GeneticModel::NONADDITIVE) {
@@ -456,8 +457,8 @@ void gcta::read_bed_dosage(std::string bedfile)
                 float d = _geno_dose(i, sj);
                 if (d >= DOSAGE_NA) continue;
                 if      (d < 0.5f) d = 0.0f;
-                else if (d < 1.5f) d = p2;           // het: 2p
-                else               d = 2.0f * p2 - 2.0f; // homA1: 4p-2
+                else if (d < 1.5f) d = p2;                // het: 2p
+                else               d = 2.0f * p2 - 2.0f;  // homA1: 4p-2
                 _geno_dose(i, sj) = d;
             }
         }
@@ -980,7 +981,7 @@ void read_single_bedfile(std::string bedfile, std::vector<std::pair<int,int>> rs
     std::bitset<8> b;
     std::fstream BIT(bedfile.c_str(), std::ios::in | std::ios::binary);
     if(!BIT) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
-    if(msg_flag) LOGGER.i(0, "Reading PLINK BED file from [" + bedfile + "] in SNP-major format ...");
+    if(msg_flag) LOGGER.i(0, "Reading single PLINK BED file from [" + bedfile + "] in SNP-major format ...");
 
     int bytes_per_snp = (nindi_chr + 3) / 4;
     std::vector<char> snp_buf(bytes_per_snp);
