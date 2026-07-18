@@ -69,6 +69,8 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
         LOGGER.e(0, "no individual is in common among the input files.");
     }
 
+    const bool woodbury_needs_N = (_woodbury_rank == -1);  // only auto-k needs the SNP count
+
     if (skip_grm_loading) {
         if (!grm_file.empty() || m_grm_flag || subtract_grm_flag) {
             LOGGER << "Skipping GRM loading because --load-reml is set. Ensure the saved REML state matches the current sample set." << std::endl;
@@ -85,7 +87,7 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
         else{
             if(grm_flag){
                 grm_files.push_back(grm_file);
-                read_grm(grm_file, grm_id, true, false, true);
+                read_grm(grm_file, grm_id, true, false, !woodbury_needs_N);
                 update_id_map_kp(grm_id, _id_map, _keep);
             }
             else if (m_grm_flag) {
@@ -161,9 +163,6 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
             _A.resize(_r_indx.size());
             if(grm_flag){
                 StrFunc::match(uni_id, grm_id, kp);
-                // If all GRM individuals are kept in original order, swap _grm directly
-                // into _A[0] (O(1), zero extra allocation) instead of an n×n copy.
-                // kp is the identity permutation iff _n == _grm.rows() and kp[i]==i.
                 bool identity_kp = (static_cast<int>(_n) == _grm.rows());
                 if (identity_kp) {
                     for (int ii = 0; ii < static_cast<int>(_n) && identity_kp; ii++)
@@ -171,13 +170,17 @@ void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_
                 }
                 if (identity_kp) {
                     _A[0].swap(_grm);  // O(1): transfers ownership, _grm becomes empty
+                    // _grm_N already matches _n/order 1:1 when identity_kp — nothing to subset.
                 } else {
                     // read_grm_bin/gz fill both triangles, so no selfadjointView copy needed.
                     Eigen::Map<const Eigen::VectorXi> kp_idx(kp.data(), _n);
                     (_A[0]) = _grm(kp_idx, kp_idx);
                     _grm.resize(0,0);
+                    if (woodbury_needs_N)
+                        _grm_N = Eigen::MatrixXf(_grm_N(kp_idx, kp_idx));  // keep in sync with _A[0]'s order
                 }
-                _grm_N.resize(0,0);  // not needed after _A[0] is filled
+                if (!woodbury_needs_N)
+                    _grm_N.resize(0,0);  // not needed after _A[0] is filled, unless Woodbury auto-k needs it later
             }
             else if(m_grm_flag){
                 LOGGER << "There are " << grm_files.size() << " GRM file names specified in the file [" + grm_file + "]." << std::endl;

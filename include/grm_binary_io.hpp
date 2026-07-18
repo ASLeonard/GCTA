@@ -41,10 +41,7 @@ inline void read_grm_binary(const std::string& prefix,
     const size_t tri      = static_cast<size_t>(n) * (n + 1) / 2;
     const size_t byte_len = tri * sizeof(float);
 
-    // ------------------------------------------------------------------ //
-    // 1. mmap .grm.bin with MADV_SEQUENTIAL — kernel read-ahead handles   //
-    //    prefetching; no userspace buffer needed for the raw float data.   //
-    // ------------------------------------------------------------------ //
+    // ---- (unchanged) mmap .grm.bin, fill G -----------------------------
     const std::string bin_path = prefix + ".grm.bin";
     const int fd = ::open(bin_path.c_str(), O_RDONLY);
     if (fd == -1)
@@ -68,21 +65,12 @@ inline void read_grm_binary(const std::string& prefix,
     ::madvise(raw, byte_len, MADV_SEQUENTIAL | MADV_WILLNEED);
     const float* fbuf = static_cast<const float*>(raw);
 
-    // ------------------------------------------------------------------ //
-    // 2. Batch convert float→double in one sequential, vectorisable pass. //
-    //    Compiler will emit AVX2 vcvtps2pd across the contiguous buffer.  //
-    // ------------------------------------------------------------------ //
     std::vector<double> dbuf(tri);
     std::transform(fbuf, fbuf + tri, dbuf.begin(),
                    [](float f) noexcept { return static_cast<double>(f); });
 
     ::munmap(raw, byte_len);
 
-    // ------------------------------------------------------------------ //
-    // 3. Fill only the lower triangle of G (column-major Eigen layout).  //
-    //    selfadjointView<Lower> then materialises the upper half in one   //
-    //    cache-friendly pass — avoids n²/2 scattered column writes.       //
-    // ------------------------------------------------------------------ //
     G.resize(n, n);
     {
         size_t idx = 0;
@@ -93,19 +81,43 @@ inline void read_grm_binary(const std::string& prefix,
     G = G.selfadjointView<Eigen::Lower>();
 
     // ------------------------------------------------------------------ //
-    // 4. Read SNP count (.grm.N.bin) — only element (0,0) is needed.     //
+    // Read SNP count (.grm.N.bin) — same lower-triangle layout as        //
+    // .grm.bin. We only need the diagonal (each individual's own         //
+    // non-missing SNP count), so extract it without materialising the    //
+    // full n×n N matrix.                                                 //
     // ------------------------------------------------------------------ //
     m_snps = 0.0;
     {
         const std::string n_path = prefix + ".grm.N.bin";
         const int nfd = ::open(n_path.c_str(), O_RDONLY);
-        if (nfd != -1) {
-            float v0 = 0.0f;
-            if (::read(nfd, &v0, sizeof(float)) == sizeof(float))
-                m_snps = static_cast<double>(v0);
-            ::close(nfd);
+        if (nfd == -1) {
+            LOGGER.w(0, "GRM N file [" + n_path + "] not found; SNP count "
+                        "unavailable (affects --reml-woodbury auto-k).");
+        } else {
+            struct stat st{};
+            if (::fstat(nfd, &st) != 0 || static_cast<size_t>(st.st_size) < byte_len) {
+                ::close(nfd);
+                LOGGER.w(0, "GRM N file [" + n_path + "] has unexpected size; "
+                            "SNP count unavailable (affects --reml-woodbury auto-k).");
+            } else {
+                void* nraw = ::mmap(nullptr, byte_len, PROT_READ, MAP_PRIVATE, nfd, 0);
+                ::close(nfd);
+                if (nraw == MAP_FAILED) {
+                    LOGGER.w(0, "mmap failed for [" + n_path + "]; SNP count unavailable.");
+                } else {
+                    const float* nbuf = static_cast<const float*>(nraw);
+                    // Diagonal entries sit at triangular indices i*(i+1)/2 + i
+                    // for row i (0-based, lower-triangle-by-row layout).
+                    double sum = 0.0;
+                    for (int i = 0; i < n; ++i) {
+                        const size_t diag_idx = static_cast<size_t>(i) * (i + 1) / 2 + i;
+                        sum += static_cast<double>(nbuf[diag_idx]);
+                    }
+                    ::munmap(nraw, byte_len);
+                    m_snps = sum / n;
+                }
+            }
         }
-        // Missing N file is non-fatal; m_snps remains 0.
     }
 }
 
