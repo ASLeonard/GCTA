@@ -368,6 +368,7 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options_in.erase("--load-reml");
         // REML tuning flags are irrelevant when a saved state is loaded; consume to suppress warnings.
         options_in.erase("--reml-woodbury");
+        options_in.erase("--reml-woodbury-nystrom");
         options_in.erase("--reml-trace-approx");
         options_in.erase("--reml-maxit");
         options_in.erase("--reml-priors");
@@ -394,6 +395,15 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             } else
                 options_d["woodbury_rank"] = -1.0;   // auto-k
             options_in.erase("--reml-woodbury");
+        }
+        // --reml-woodbury-nystrom is a boolean flag (no argument): selects a
+        // single-pass Nystrom basis instead of the default eigendecomposition
+        // for the Woodbury basis. Only meaningful alongside --reml-woodbury.
+        if (options_in.find("--reml-woodbury-nystrom") != options_in.end()) {
+            if (!options_in["--reml-woodbury-nystrom"].empty())
+                LOGGER.w(0, "--reml-woodbury-nystrom takes no argument; ignoring the supplied value.");
+            options["woodbury_nystrom"] = "1";
+            options_in.erase("--reml-woodbury-nystrom");
         }
         if (options_in.find("--reml-trace-approx") != options_in.end()) {
             options["trace_approx"] = "1";
@@ -621,6 +631,7 @@ void MLMA::processMain()
             const int  reml_diagV_adj = options_d.count("reml_diagV_adj")
                 ? static_cast<int>(options_d.at("reml_diagV_adj")) : 0;
             const bool no_constrain   = options.count("no_constrain") > 0;
+            const bool woodbury_nystrom = options.count("woodbury_nystrom") > 0;
 
             if (reml_alg < 0 || reml_alg > 2)
                 LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
@@ -628,6 +639,8 @@ void MLMA::processMain()
                 LOGGER.e(0, "--reml-diagV-adj should be 0, 1, or 2.");
             if (woodbury_rank != 0 && reml_alg == 1)
                 LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML (--reml-alg 1). Use AI-REML (default) or EM-REML (--reml-alg 2).");
+            if (woodbury_nystrom && woodbury_rank == 0)
+                LOGGER.e(0, "--reml-woodbury-nystrom requires --reml-woodbury <k|auto|EIG99>.");
 
             const vector<double> priors =
                 options_vd.count("reml_priors") ? options_vd.at("reml_priors") : vector<double>{};
@@ -661,6 +674,7 @@ void MLMA::processMain()
             ctx.reml_diagV_adj           = reml_diagV_adj;
             ctx.woodbury_rank            = woodbury_rank;
             ctx.woodbury_buffer_factor   = 1.5;
+            ctx.woodbury_nystrom         = woodbury_nystrom;
             ctx.reml_trace_approx        = trace_approx;
             ctx.reml_trace_approx_nprobes = trace_nprobes;
 
