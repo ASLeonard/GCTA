@@ -11,6 +11,7 @@
  */
 
 #include <sstream>
+#include <charconv>
 #include <iterator>
 #include <set>
 #include <fstream>
@@ -1071,7 +1072,7 @@ void gcta::read_imp_info_mach_gz(std::string zinfofile)
     std::ifstream raw_file(zinfofile, std::ios::binary);
     if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + zinfofile + "] to read.");
     boost::iostreams::filtering_istream zinf;
-    zinf.push(boost::iostreams::gzip_decompressor());
+    zinf.push(boost::iostreams::gzip_decompressor(15, 1 << 18)); // 256KB internal buffer
     zinf.push(raw_file);
 
     std::string buf, str_buf, errmsg = "Reading dosage data failed. Please check the format of the std::map file.";
@@ -1100,7 +1101,7 @@ void gcta::read_imp_info_mach_gz(std::string zinfofile)
         double freq1 = 0.0;
         if (!(ss >> freq1)) LOGGER.e(0, nerr);   // Freq1 → _mu (as 2*freq since _mu is 0-2 scale)
         for (i = 0; i < 3; i++) if (!(ss >> f_buf)) LOGGER.e(0, nerr);  // MAF, Quality, Rsq
-        _mu.push_back(2.0 * freq1);   // convert allele frequency to 0-2 scale
+        _mu.push_back(2.0 * freq1);
         _impRsq.push_back(f_buf);
     }
     zinf.reset();
@@ -1167,10 +1168,22 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
     std::vector<int> rsnp;
     get_rsnp(rsnp);
 
+    // Helper: pop the next whitespace-delimited token from a string_view, advancing it.
+    // Returns empty string_view when exhausted.
+    auto next_token = [](std::string_view& sv) -> std::string_view {
+        size_t start = sv.find_first_not_of(' ');
+        if (start == std::string_view::npos) { sv = {}; return {}; }
+        sv.remove_prefix(start);
+        size_t end = sv.find(' ');
+        std::string_view tok = sv.substr(0, end == std::string_view::npos ? sv.size() : end);
+        sv.remove_prefix(end == std::string_view::npos ? sv.size() : end);
+        return tok;
+    };
+
     std::ifstream raw_file(zdosefile, std::ios::binary);
     if (!raw_file.is_open()) LOGGER.e(0, "cannot open the file [" + zdosefile + "] to read.");
     boost::iostreams::filtering_istream zinf;
-    zinf.push(boost::iostreams::gzip_decompressor());
+    zinf.push(boost::iostreams::gzip_decompressor(15, 1 << 18)); // 256KB internal buffer
     zinf.push(raw_file);
 
     std::vector<std::string> indi_ls;
@@ -1184,8 +1197,7 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
     for (i = 0; i < indi_ls.size(); i++) rm_id_map.insert(std::pair<std::string, int>(indi_ls[i], i));
 
     bool missing = false;
-    std::string buf, str_buf, id_buf, err_msg = "reading dosage data failed. Are the std::map file and the dosage file matched?";
-    double f_buf = 0.0;
+    std::string buf, id_buf, err_msg = "reading dosage data failed. Are the map file and the dosage file matched?";
     std::vector<std::string> kept_id, vs_buf;
     LOGGER << "Reading dosage data from [" + zdosefile + "] in individual-major format (Note: may use huge RAM)." << std::endl;
     _fid.clear();
@@ -1195,11 +1207,13 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
     std::vector<int> kp_it;
     while (std::getline(zinf, buf)) {
         bool kp_flag = true;
-        std::stringstream ss(buf);
-        if (!(ss >> str_buf)) break;
-        int ibuf = StrFunc::split_string(str_buf, vs_buf, ">");
+        std::string_view sv(buf);
+        std::string_view id_tok = next_token(sv);
+        if (id_tok.empty()) break;
+
+        int ibuf = StrFunc::split_string(std::string(id_tok), vs_buf, ">");
         if (ibuf > 1) {
-            if (vs_buf[0].empty()) LOGGER.e(0, "the family ID of the individual [" + str_buf + "] is missing.");
+            if (vs_buf[0].empty()) LOGGER.e(0, "the family ID of the individual [" + std::string(id_tok) + "] is missing.");
             else vs_buf[0].erase(vs_buf[0].end() - 1);
         } else if (ibuf == 1) vs_buf.push_back(vs_buf[0]);
         else break;
@@ -1222,27 +1236,45 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
     std::ifstream raw_file2(zdosefile, std::ios::binary);
     if (!raw_file2.is_open()) LOGGER.e(0, "cannot open the file [" + zdosefile + "] to read.");
     boost::iostreams::filtering_istream zinf2;
-    zinf2.push(boost::iostreams::gzip_decompressor());
+    zinf2.push(boost::iostreams::gzip_decompressor(15, 1 << 18));
     zinf2.push(raw_file2);
-    _geno_dose.setZero(_indi_num, static_cast<int>(_include.size()));
+
+    // Row-major staging buffer: matches the file's row-wise layout for
+    // sequential, cache-friendly writes during parsing.
+    Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> tmp;
+    tmp.setZero(_indi_num, static_cast<int>(_include.size()));
+
     for (line = 0, k = 0; line < kp_it.size(); line++) {
         std::getline(zinf2, buf);
         if (kp_it[line] == 0) continue;
-        std::stringstream ss(buf);
-        if (!(ss >> str_buf)) break;
-        if (!(ss >> str_buf)) break;
+
+        std::string_view sv(buf);
+        if (next_token(sv).empty()) break; // family/individual ID token
+        if (next_token(sv).empty()) break; // second header token
+
         for (i = 0, j = 0; i < _snp_num; i++) {
-            ss >> str_buf;
-            f_buf = atof(str_buf.c_str());
-            if (str_buf == "X" || str_buf == "NA") {
+            std::string_view tok = next_token(sv);
+            float f_buf;
+
+            if (tok == "X" || tok == "NA") {
                 if (!missing) {
                     LOGGER.w(0, "missing values detected in the dosage data.");
                     missing = true;
                 }
                 f_buf = DOSAGE_NA;
+            } else {
+                auto [ptr, ec] = std::from_chars(tok.data(), tok.data() + tok.size(), f_buf);
+                if (ec != std::errc()) {
+                    if (!missing) {
+                        LOGGER.w(0, "missing values detected in the dosage data.");
+                        missing = true;
+                    }
+                    f_buf = DOSAGE_NA;
+                }
             }
+
             if (rsnp[i]) {
-                _geno_dose(k, j) = static_cast<float>(f_buf);
+                tmp(k, j) = f_buf;
                 j++;
             }
         }
@@ -1250,6 +1282,11 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
     }
     zinf2.reset();
     raw_file2.close();
+
+    // Single bulk transpose into the column-major storage used downstream.
+    _geno_dose = tmp;
+    if (_geno_dose.rows() != _indi_num || _geno_dose.cols() != static_cast<int>(_include.size()))
+    LOGGER.e(0, "internal error: _geno_dose dimension mismatch after dosage load.");
 
     LOGGER << "Imputed dosage data for " << kept_id.size() << " individuals are included from [" << zdosefile << "]." << std::endl;
     _fa_id.resize(_indi_num);
@@ -1271,7 +1308,6 @@ void gcta::read_imp_dose_mach_gz(std::string zdosefile, std::string kp_indi_file
 
     // update data
     update_bim(rsnp);
-
 }
 
 void gcta::read_imp_dose_mach(std::string dosefile, std::string kp_indi_file, std::string rm_indi_file, std::string blup_indi_file) {
@@ -1281,6 +1317,19 @@ void gcta::read_imp_dose_mach(std::string dosefile, std::string kp_indi_file, st
     int i = 0, j = 0, k = 0, line = 0;
     std::vector<int> rsnp;
     get_rsnp(rsnp);
+
+    // Helper: pop the next whitespace-delimited token from a string_view, advancing it.
+    // Returns empty string_view when exhausted. Same tokenizer used by the gz reader,
+    // avoids stringstream's per-token locale/allocation overhead.
+    auto next_token = [](std::string_view& sv) -> std::string_view {
+        size_t start = sv.find_first_not_of(' ');
+        if (start == std::string_view::npos) { sv = {}; return {}; }
+        sv.remove_prefix(start);
+        size_t end = sv.find(' ');
+        std::string_view tok = sv.substr(0, end == std::string_view::npos ? sv.size() : end);
+        sv.remove_prefix(end == std::string_view::npos ? sv.size() : end);
+        return tok;
+    };
 
     std::ifstream idose(dosefile.c_str());
     if (!idose) LOGGER.e(0, "cannot open the file [" + dosefile + "] to read.");
@@ -1296,8 +1345,7 @@ void gcta::read_imp_dose_mach(std::string dosefile, std::string kp_indi_file, st
     for (i = 0; i < indi_ls.size(); i++) rm_id_map.insert(std::pair<std::string, int>(indi_ls[i], i));
 
     bool missing = false;
-    std::string buf, str_buf, id_buf, err_msg = "reading dosage data failed. Are the std::map file and the dosage file matched?";
-    double f_buf = 0.0;
+    std::string buf, id_buf, err_msg = "reading dosage data failed. Are the map file and the dosage file matched?";
     std::vector<std::string> kept_id, vs_buf;
     LOGGER << "Reading dosage data from [" + dosefile + "] in individual-major format (Note: may use huge RAM)." << std::endl;
     _fid.clear();
@@ -1307,11 +1355,13 @@ void gcta::read_imp_dose_mach(std::string dosefile, std::string kp_indi_file, st
     std::vector<int> kp_it;
     while (std::getline(idose, buf)) {
         bool kp_flag = true;
-        std::stringstream ss(buf);
-        if (!(ss >> str_buf)) break;
-        int ibuf = StrFunc::split_string(str_buf, vs_buf, ">");
+        std::string_view sv(buf);
+        std::string_view id_tok = next_token(sv);
+        if (id_tok.empty()) break;
+
+        int ibuf = StrFunc::split_string(std::string(id_tok), vs_buf, ">");
         if (ibuf > 1) {
-            if (vs_buf[0].empty()) LOGGER.e(0, "the family ID of the individual [" + str_buf + "] is missing.");
+            if (vs_buf[0].empty()) LOGGER.e(0, "the family ID of the individual [" + std::string(id_tok) + "] is missing.");
             else vs_buf[0].erase(vs_buf[0].end() - 1);
         } else if (ibuf == 1) vs_buf.push_back(vs_buf[0]);
         else break;
@@ -1331,31 +1381,58 @@ void gcta::read_imp_dose_mach(std::string dosefile, std::string kp_indi_file, st
     _indi_num = _fid.size();
 
     idose.open(dosefile.c_str());
-    _geno_dose.setZero(_indi_num, static_cast<int>(_include.size()));
+    if (!idose) LOGGER.e(0, "cannot open the file [" + dosefile + "] to read.");
+
+    // Row-major staging buffer: matches the file's row-wise layout for
+    // sequential, cache-friendly writes during parsing. _geno_dose itself
+    // stays column-major (required downstream), so we fill this contiguously
+    // and do one bulk copy/transpose at the end instead of striding through
+    // _geno_dose on every element write.
+    Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> tmp;
+    tmp.setZero(_indi_num, static_cast<int>(_include.size()));
+
     for (line = 0, k = 0; line < kp_it.size(); line++) {
         std::getline(idose, buf);
         if (kp_it[line] == 0) continue;
-        std::stringstream ss(buf);
-        if (!(ss >> str_buf)) break;
-        if (!(ss >> str_buf)) break;
+
+        std::string_view sv(buf);
+        if (next_token(sv).empty()) break; // family/individual ID token
+        if (next_token(sv).empty()) break; // second header token
+
         for (i = 0, j = 0; i < _snp_num; i++) {
-            ss >> str_buf;
-            f_buf = atof(str_buf.c_str());
-            if (str_buf == "X" || str_buf == "NA") {
+            std::string_view tok = next_token(sv);
+            float f_buf;
+
+            if (tok == "X" || tok == "NA") {
                 if (!missing) {
                     LOGGER.w(0, "missing values detected in the dosage data.");
                     missing = true;
                 }
                 f_buf = DOSAGE_NA;
+            } else {
+                auto [ptr, ec] = std::from_chars(tok.data(), tok.data() + tok.size(), f_buf);
+                if (ec != std::errc()) {
+                    if (!missing) {
+                        LOGGER.w(0, "missing values detected in the dosage data.");
+                        missing = true;
+                    }
+                    f_buf = DOSAGE_NA;
+                }
             }
+
             if (rsnp[i]) {
-                _geno_dose(k, j) = static_cast<float>(f_buf);
+                tmp(k, j) = f_buf;
                 j++;
             }
         }
         k++;
     }
     idose.close();
+
+    // Single bulk transpose into the column-major storage used downstream.
+    _geno_dose = tmp;
+    if (_geno_dose.rows() != _indi_num || _geno_dose.cols() != static_cast<int>(_include.size()))
+    LOGGER.e(0, "internal error: _geno_dose dimension mismatch after dosage load.");
 
     LOGGER << "Imputed dosage data for " << kept_id.size() << " individuals are included from [" << dosefile << "]." << std::endl;
     _fa_id.resize(_indi_num);
@@ -2036,7 +2113,8 @@ void gcta::update_freq(std::string freq) {
 }
 
 void gcta::save_freq(bool ssq_flag) {
-    if (_mu.empty()) calcu_mu(ssq_flag);
+    if (_mu.empty()) 
+      calcu_mu(ssq_flag);
     // Prefer _additive_mu (real allele frequency, captured before any nonadditive
     // recoding) when available; falls back to _mu for the additive model.
     const std::vector<double>& freq_mu = _additive_mu.empty() ? _mu : _additive_mu;
