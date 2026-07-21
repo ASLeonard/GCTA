@@ -372,8 +372,6 @@ void gcta::read_bed_dosage(std::string bedfile)
 
     LOGGER << "Reading PLINK BED file from [" + bedfile + "] in SNP-major format (dosage mode) ..." << std::endl;
 
-    // mmap the bed file — zero-copy, OS pages in on demand, reclaimable
-    // under memory pressure (unlike a private heap buffer of the same size).
     int bed_fd = open(bedfile.c_str(), O_RDONLY);
     if (bed_fd < 0) LOGGER.e(0, "cannot open the file [" + bedfile + "] to read.");
     struct stat bed_st;
@@ -389,27 +387,28 @@ void gcta::read_bed_dosage(std::string bedfile)
     if (bed_buf == MAP_FAILED) LOGGER.e(0, "mmap failed for [" + bedfile + "].");
     madvise(const_cast<unsigned char*>(bed_buf), file_size, MADV_WILLNEED);
 
-    // Size _geno_dose and _mu compactly (dense SNP index 0..m-1).
     _geno_dose.setZero(n, m);
     _mu.assign(m, 0.0);
     _additive_mu.assign(m, 0.0);
 
-    // BED 2-bit encoding (per pair of raw bits, LSB-first within byte):
-    //   00 = homA1,  01 = missing,  10 = het,  11 = homA2
-    // lut[raw_2bit] = ref-allele count {0,1,2} or -1 (missing).
-    static constexpr int8_t lut[4] = {
-        2,   // 00 homA1
-        -1,  // 01 missing
-        1,   // 10 het
-        0,   // 11 homA2
-    };
+    static constexpr int8_t lut[4] = { 2, -1, 1, 0 };
 
-    bool missing_warned = false;
+    // Precompute the compact list of kept SNP indices once, so the parallel
+    // loop can index snp_indx directly instead of relying on a serial
+    // increment-under-`continue` (which doesn't parallelize).
+    std::vector<int> kept_snp_idx;
+    kept_snp_idx.reserve(m);
+    for (int j = 0; j < _snp_num; j++) if (rsnp[j]) kept_snp_idx.push_back(j);
 
-    int snp_indx = 0;
-    for (int j = 0; j < _snp_num; j++) {
-        if (!rsnp[j]) continue;
+    std::atomic<bool> missing_warned{false};
 
+    // Each iteration owns a distinct column of _geno_dose (column-major, so
+    // no cross-thread false sharing) and distinct _mu[snp_indx]/_additive_mu[snp_indx]
+    // entries. Per-SNP cost is uniform (same _indi_num scan every time), so
+    // static scheduling avoids dynamic-scheduling overhead for no loss of balance.
+    #pragma omp parallel for schedule(static)
+    for (int snp_indx = 0; snp_indx < m; snp_indx++) {
+        const int j = kept_snp_idx[snp_indx];
         const size_t snp_offset = 3 + static_cast<size_t>(j) * bytes_per_snp;
         const unsigned char* snp_data = bed_buf + snp_offset;
 
@@ -418,14 +417,12 @@ void gcta::read_bed_dosage(std::string bedfile)
 
         for (int i = 0; i < _indi_num; ) {
             const unsigned char byte = snp_data[i / 4];
-
             for (int bit = 0; bit < 8 && i < _indi_num; bit += 2, i++) {
                 if (!rindi[i]) continue;
                 const int8_t g = lut[(byte >> bit) & 3];
                 if (g < 0) {
-                    if (!missing_warned) {
+                    if (!missing_warned.exchange(true, std::memory_order_relaxed)) {
                         LOGGER.w(0, "missing values detected in the genotype data.");
-                        missing_warned = true;
                     }
                     _geno_dose(indi_indx, snp_indx) = DOSAGE_NA;
                 } else {
@@ -437,33 +434,20 @@ void gcta::read_bed_dosage(std::string bedfile)
             }
         }
 
-        _mu[snp_indx] = (valid_count > 0) ? static_cast<double>(allele_count) / valid_count : 0.0;
-        // Capture the real (additive-scale) allele frequency here — after sample
-        // compaction (the loop above only accumulated over kept individuals) but
-        // before the nonadditive recoding below overwrites _geno_dose in place.
-        _additive_mu[snp_indx] = _mu[snp_indx];
-        snp_indx++;
-    }
+        const double mu = (valid_count > 0) ? static_cast<double>(allele_count) / valid_count : 0.0;
+        _mu[snp_indx] = mu;
+        _additive_mu[snp_indx] = mu;
 
-    // Done with the raw file — release the mapping before the transform pass
-    // rather than holding it through the rest of the function.
-    munmap(const_cast<unsigned char*>(bed_buf), file_size);
-
-    // For the nonadditive model transform raw counts in-place using the now-known _mu.
-    // Additive: raw ref-allele count IS the dosage; nothing more to do.
-    if (_genetic_model == GeneticModel::NONADDITIVE) {
-        for (int sj = 0; sj < m; sj++) {
-            const float p2 = static_cast<float>(_mu[sj]); // 2*p in dosage (0-2) scale
-            for (int i = 0; i < n; i++) {
-                float d = _geno_dose(i, sj);
-                if (d >= DOSAGE_NA) continue;
-                if      (d < 0.5f) d = 0.0f;
-                else if (d < 1.5f) d = p2;                // het: 2p
-                else               d = 2.0f * p2 - 2.0f;  // homA1: 4p-2
-                _geno_dose(i, sj) = d;
-            }
+        // Fused, branchless nonadditive transform — runs while this column
+        // is still hot in L2/L3, instead of a second full-matrix pass later.
+        if (_genetic_model == GeneticModel::NONADDITIVE) {
+            const float p2 = static_cast<float>(mu);
+            auto col = _geno_dose.col(snp_indx).array();
+            col = (col < DOSAGE_NA).select(col * (p2 + 1.0f - col), col);
         }
     }
+
+    munmap(const_cast<unsigned char*>(bed_buf), file_size);
 
     LOGGER << "Dosage data for " << n << " individuals and " << m
            << " SNPs loaded from [" + bedfile + "] ("
