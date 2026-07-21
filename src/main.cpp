@@ -92,7 +92,7 @@ int main(int argc, char *argv[]){
         "--bfile", "--bim", "--fam", "--bed", "--keep", "--remove", 
         "--chr", "--autosome-num", "--autosome", "--autosome-sex", "--chr-homogametic", "--extract", "--exclude", "--maf", "--max-maf", 
         "--sex-chr-file", "--homogametic-chr", "--heterogametic-chr",
-        "--freq", "--out", "--make-grm", "--make-grm-part", "--thread-num", "--threads", "--grm",
+        "--freq", "--out", "--make-grm", "--make-grm-part", "--thread-num", "--threads", "--grm", "--nMarkers",
         "--grm-cutoff", "--grm-singleton", "--cutoff-detail", "--make-bK-sparse", "--make-bK", "--pheno",
         "--mpheno", "--ge", "--fastGWA", "--fastGWA-mlm", "--fastGWA-mlm-exact", "--fastGWA-lr", "--save-fastGWA-mlm-residual", "--grm-sparse", "--qcovar", "--covar", "--rcovar", "--covar-maxlevel", "--make-grm-d", "--make-grm-d-part",
         "--cg", "--ldlt", "--llt", "--pardiso", "--tcg", "--lscg", "--save-inv", "--load-inv",

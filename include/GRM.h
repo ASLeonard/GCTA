@@ -67,6 +67,8 @@ public:
     void unify_grm(string mgrm_file, string out_file);
     void subtract_grm(string mgrm_file, string out_file);
 
+    inline static int nMarkerBlock = 128;
+
 private:
     Pheno *pheno = NULL;
     Marker *marker = NULL;
@@ -134,7 +136,6 @@ private:
 
     bool isDominance = false;
     bool isMtd = false;
-    int nMarkerBlock = 1024;
     std::vector<double> sd;
     uint32_t numValidMarkers = 0;
 

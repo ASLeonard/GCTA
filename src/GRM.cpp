@@ -1911,6 +1911,11 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
     addOneFileOption("remove_file", "", "--remove", options_in, options);
     addOneFileOption("mgrm", "", "--mgrm", options_in, options);
 
+    if(options_in.find("--nMarkers") != options_in.end()){
+        vector<string> markers = options_in["--nMarkers"];
+        GRM::nMarkerBlock = std::stoi(markers[0]);
+    }
+
     int num_parts = 1;
     int cur_part = 1;
 
