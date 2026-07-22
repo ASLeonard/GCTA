@@ -966,7 +966,7 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     }
     else if (EIG99_k) {                                                        // NEW BLOCK
         const double trace_K_full = K_dbl.diagonal().sum();
-        const double target_mass  = 0.99 * trace_K_full;
+        const double target_mass  = ctx.reml_eigen_mass / 100.0 * trace_K_full;
         double cumulative = 0.0;
         int k_EIG99 = k_svd;                  // fallback: use all computed eigenmodes
         for (int i = 0; i < static_cast<int>(eval_full.size()); ++i) {

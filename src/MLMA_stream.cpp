@@ -632,6 +632,8 @@ void MLMA::processMain()
                 ? static_cast<int>(options_d.at("reml_diagV_adj")) : 0;
             const bool no_constrain   = options.count("no_constrain") > 0;
             const bool woodbury_nystrom = options.count("woodbury_nystrom") > 0;
+            const float  woodbury_eigen_mass  = options_d.count("woodbury_eigen_mass")
+                ? static_cast<float>(options_d.at("woodbury_eigen_mass")) : 99.0f;
 
             if (reml_alg < 0 || reml_alg > 2)
                 LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
@@ -677,6 +679,7 @@ void MLMA::processMain()
             ctx.woodbury_nystrom         = woodbury_nystrom;
             ctx.reml_trace_approx        = trace_approx;
             ctx.reml_trace_approx_nprobes = trace_nprobes;
+            ctx.reml_eigen_mass             = woodbury_eigen_mass;
 
             reml::compute(ctx, priors, priors_var, no_constrain);
 
