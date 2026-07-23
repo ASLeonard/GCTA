@@ -51,7 +51,26 @@ struct RemlCtx {
     double reml_diag_mul             = 0.01;  // diagonal jitter when V is near-singular
     int    reml_diagV_adj            = 0;     // 0=none, 1=diag jitter, 2=bending
     int    woodbury_rank             = 0;     // >0 fixed k; -1 auto-k; 0 off
-    double woodbury_buffer_factor    = 1.5;   // MP signal buffer for auto-k
+    // auto-k: eigenvalues fall off a cliff at the Marchenko-Pastur bulk edge,
+    // but the exact crossing point is noisy over a band of eigenvalues near
+    // the edge (rSVD tail estimation error + finite-M lambda_plus estimate +
+    // edge fluctuations). That band's *size* doesn't grow with k_signal —
+    // it's a property of the local spectral density at the edge, not of how
+    // far the edge sits from zero — so it's confirmed by scanning past
+    // k_signal for a run of eigenvalues consistently below the margin,
+    // rather than by multiplying k_signal by a fixed factor.
+    double woodbury_edge_margin      = 0.15;  // relative margin below lambda_plus to confirm past the edge
+    int    woodbury_edge_confirm     = 20;    // consecutive sub-margin eigenvalues required to confirm
+    // EIG99-k: trace(K) ~ n (GRM diagonals are ~1), and most of that mass
+    // sits in the Marchenko-Pastur bulk — many eigenvalues of similar size,
+    // not a few outliers — so capturing "the last 0.5%" of trace mass can
+    // require a lot more eigenvalues than capturing the first 99%, not a
+    // proportional bit more. Buffering by raising the mass target (99% ->
+    // 99.5%) inherits that cost. Buffer by a small fixed eigenvalue *count*
+    // past the raw crossing instead: those extra eigenvalues are usually
+    // already sitting in the existing k_svd budget's headroom (oversample /
+    // starting-budget slack), so this is normally free — no extra rSVD pass.
+    int    woodbury_eig99_k_buffer   = 20;    // extra eigenvalues past the raw reml_eigen_mass crossing
     int    woodbury_k_max            = 0;     // rank cap for auto-k (0 → min(n−1,1200))
     bool   woodbury_nystrom          = false; // true → single-pass Nystrom basis
     bool   reml_trace_approx         = false; // Hutch++ trace (skips n x n P)

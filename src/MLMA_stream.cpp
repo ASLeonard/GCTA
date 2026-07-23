@@ -702,6 +702,12 @@ void MLMA::processMain()
             const bool woodbury_nystrom = options.count("woodbury_nystrom") > 0;
             const float  woodbury_eigen_mass  = options_d.count("woodbury_eigen_mass")
                 ? static_cast<float>(options_d.at("woodbury_eigen_mass")) : 99.0f;
+            const double woodbury_edge_margin = options_d.count("woodbury_edge_margin")
+                ? options_d.at("woodbury_edge_margin") : 0.15;
+            const int    woodbury_edge_confirm = options_d.count("woodbury_edge_confirm")
+                ? static_cast<int>(options_d.at("woodbury_edge_confirm")) : 20;
+            const int woodbury_eig99_k_buffer = options_d.count("woodbury_eig99_k_buffer")
+                ? static_cast<int>(options_d.at("woodbury_eig99_k_buffer")) : 20;
 
             if (reml_alg < 0 || reml_alg > 2)
                 LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
@@ -743,7 +749,9 @@ void MLMA::processMain()
             ctx.reml_inv_mtd             = 0;  // LLT
             ctx.reml_diagV_adj           = reml_diagV_adj;
             ctx.woodbury_rank            = woodbury_rank;
-            ctx.woodbury_buffer_factor   = 1.5;
+            ctx.woodbury_edge_margin        = woodbury_edge_margin;
+            ctx.woodbury_edge_confirm       = woodbury_edge_confirm;
+            ctx.woodbury_eig99_k_buffer  = woodbury_eig99_k_buffer;
             ctx.woodbury_nystrom         = woodbury_nystrom;
             ctx.reml_trace_approx        = trace_approx;
             ctx.reml_trace_approx_nprobes = trace_nprobes;
