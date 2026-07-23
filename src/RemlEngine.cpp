@@ -19,6 +19,7 @@
 #include "Logger.h"
 #include "cpu.h"
 #include "mlma_woodbury.hpp"
+#include "symmetric_eigendecomp.hpp"
 
 #include <Eigen/Dense>
 #include <random>
@@ -850,21 +851,30 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     const int  n      = ctx.n;
     int k = ctx.woodbury_rank;
 
+    // For auto-k / EIG99-k, an explicit --reml-woodbury-k-max is a hard
+    // ceiling — the user asked for a specific bound and we respect it,
+    // including the "not reached within k_max" warning below. Without one,
+    // the value below is only a *starting* budget: if the signal/mass
+    // criterion isn't actually satisfied within it, we double the budget
+    // (warm-started from what's already been found) and recompute, rather
+    // than silently truncating the estimated rank. Total cost of this
+    // doubling search is bounded by ~2x the cost of a single direct
+    // computation at the k that was actually needed.
+    const bool k_max_is_hard_ceiling = (ctx.woodbury_k_max > 0);
     int k_svd;
     if (auto_k) {
-        k_svd = (ctx.woodbury_k_max > 0) ? ctx.woodbury_k_max : std::min(n - 1, 1200);
+        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, 1200);
         LOGGER << "\nComputing Woodbury basis (auto-k, k_max=" << k_svd
+            << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
             << ", buffer=" << ctx.woodbury_buffer_factor << ") ..." << std::endl;
-    } else if (EIG99_k) {                                                        // NEW
-        // Conservative upper bound: 2 * Me_theoretical for cattle (Ne~100, L~25M).
-        // Override with woodbury_k_max if the user supplied one.
-        const int me_bound = (ctx.woodbury_k_max > 0)
-                            ? ctx.woodbury_k_max
-                            : std::min(n - 1, 25000);
-        k_svd = me_bound;
+    } else if (EIG99_k) {
+        // Conservative starting point: 2 * Me_theoretical for cattle (Ne~100, L~25M).
+        // Override with woodbury_k_max if the user supplied one (hard ceiling).
+        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, 25000);
         LOGGER << "\nComputing Woodbury basis (EIG99-k, k_max=" << k_svd
+            << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
             << ") ..." << std::endl;
-    } else {                                                                      // unchanged
+    } else {
         if (k <= 0)
             LOGGER.e(0, "--reml-woodbury rank must be positive for fixed-k mode.");
         k_svd = k;
@@ -873,76 +883,10 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     if (k_svd >= n) LOGGER.e(0, "--reml-woodbury rank must be < n.");
 
     const Eigen::MatrixXd& K_dbl = ctx.A[ctx.r_indx[0]];
+    const double trace_K_full = K_dbl.diagonal().sum();
 
-    const int oversample = 20;
-    const int k_ext = std::min(k_svd + oversample, n - 1);
-    Eigen::MatrixXd omega;
-    {
-        const int k_prev = static_cast<int>(ctx.Uk.cols());
-        const bool has_warm = (!ctx.woodbury_nystrom && k_prev > 0 && ctx.Uk.rows() == n);
-        if (has_warm) {
-            omega.resize(n, k_ext);
-            const int k_copy = std::min(k_prev, k_ext);
-            omega.leftCols(k_copy)  = ctx.Uk.leftCols(k_copy);
-            if (k_copy < k_ext)
-                omega.rightCols(k_ext - k_copy) = Eigen::MatrixXd::Random(n, k_ext - k_copy);
-        } else {
-            omega = Eigen::MatrixXd::Random(n, k_ext);
-        }
-    }
-    Eigen::MatrixXd Y = K_dbl.selfadjointView<Eigen::Lower>() * omega;
-
-    Eigen::VectorXd eval_full;
-    Eigen::MatrixXd evec_full;
-
-    if (ctx.woodbury_nystrom) {
-        Eigen::MatrixXd C = omega.transpose() * Y;
-        omega.resize(0, 0);
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_C(C);
-        if (es_C.info() != Eigen::Success)
-            LOGGER.e(0, "Woodbury Nystrom: eigendecomposition of sketch C failed.");
-        const double lam_max = es_C.eigenvalues().maxCoeff();
-        const double eps_C   = 1e-8 * std::max(lam_max, 1.0);
-        Eigen::VectorXd lam_sqrt_inv =
-            es_C.eigenvalues().cwiseMax(eps_C).cwiseSqrt().cwiseInverse();
-        Y = Y * (es_C.eigenvectors() * lam_sqrt_inv.asDiagonal());
-        Eigen::BDCSVD<Eigen::MatrixXd, Eigen::ComputeThinU> svd(Y);
-        Y.resize(0, 0);
-        eval_full = svd.singularValues().head(k_svd).array().square();
-        evec_full = svd.matrixU().leftCols(k_svd);
-    } else {
-        omega.resize(0, 0);
-        // Pre-allocate thin-Q scratch (n x k_ext) once and reuse across all power
-        // iterations and the final QR.  Without this, each Identity(n, k_ext)
-        // construction allocates and zero-inits ~n*k_ext*8 bytes (up to ~4.9 GB at
-        // n=500k, k_ext=1220), totalling 4 such allocations per compute_woodbury_basis call.
-        Eigen::MatrixXd qr_scratch = Eigen::MatrixXd::Identity(n, k_ext);
-        constexpr int power_iter = 3;
-        for (int pi = 0; pi < power_iter; ++pi) {
-            Eigen::HouseholderQR<Eigen::MatrixXd> qr_pi(Y);
-            qr_scratch.setIdentity();
-            Y = K_dbl.selfadjointView<Eigen::Lower>() * (qr_pi.householderQ() * qr_scratch);
-        }
-        {
-            Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
-            qr_scratch.setIdentity();
-            Y = qr.householderQ() * qr_scratch;
-        }
-        Eigen::MatrixXd KY = K_dbl.selfadjointView<Eigen::Lower>() * Y;
-        Eigen::MatrixXd B  = Y.transpose() * KY;
-        KY.resize(0, 0);
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(B);
-        if (es.info() != Eigen::Success)
-            LOGGER.e(0, "Woodbury: eigendecomposition of projected GRM failed.");
-        eval_full = es.eigenvalues().tail(k_svd).reverse();
-        // Materialise the reversed eigenvector block into a plain contiguous matrix
-        // before the n x k_svd DGEMM.  Without this, rowwise().reverse() on a block
-        // expression forces column-by-column scatter during DGEMM, defeating tiling.
-        const Eigen::MatrixXd evecs_sorted =
-            es.eigenvectors().rightCols(k_svd).rowwise().reverse().eval();
-        evec_full = Y * evecs_sorted;
-    }
-
+    // Precompute the criteria that don't depend on k_svd.
+    double lambda_plus = 0.0;
     if (auto_k) {
         double M = 0.0;
         if (ctx.grm_N.rows() == n && ctx.grm_N.cols() == n)
@@ -951,43 +895,126 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             M = ctx.grm_N(0, 0);
         if (M <= 0.0)
             LOGGER.e(0, "--reml-woodbury auto: cannot determine SNP count. Use --reml-woodbury <k>.");
-        const double gamma       = static_cast<double>(n) / M;
-        const double lambda_plus = std::pow(1.0 + std::sqrt(gamma), 2.0);
-        const int    k_signal   = static_cast<int>((eval_full.array() > lambda_plus).count());
-        const int    k_buffered = std::max(20, static_cast<int>(std::ceil(k_signal * ctx.woodbury_buffer_factor)));
+        const double gamma = static_cast<double>(n) / M;
+        lambda_plus = std::pow(1.0 + std::sqrt(gamma), 2.0);
+    }
+    const double target_mass = EIG99_k ? (ctx.reml_eigen_mass / 100.0 * trace_K_full) : 0.0;
+
+    auto apply = [&](const auto& X) -> Eigen::MatrixXd {
+        return K_dbl.selfadjointView<Eigen::Lower>() * X;
+    };
+
+    Eigen::VectorXd eval_full;
+    Eigen::MatrixXd evec_full;
+    int k_signal = 0;  // auto-k: eigenvalues found above lambda_plus
+    int k_EIG99  = 0;  // EIG99-k: eigenmodes needed to reach target_mass
+
+    for (;;) {
+        const int oversample = 20;
+        const int k_ext = std::min(k_svd + oversample, n - 1);
+
+        // Warm-start priority: an in-session Uk from a previous Woodbury call
+        // (including a prior, smaller-budget pass of this same escalation
+        // loop) beats a cold Gaussian draw. If none exists yet but a PCA
+        // basis for this exact GRM was loaded into ctx.Uk up front (see
+        // load_pca_warm_start in MLMA_stream.cpp), that seeds the sketch
+        // instead — same GRM/sample set means the PCA .eigenvec top
+        // eigenvectors are already a subspace of what this call is
+        // trying to recover.
+        const int k_prev = static_cast<int>(ctx.Uk.cols());
+        const bool has_warm = (!ctx.woodbury_nystrom && k_prev > 0 && ctx.Uk.rows() == n);
+        auto [omega, Y_init] = gcta_eigh::build_randomized_sketch(
+            apply, n, k_ext, has_warm ? &ctx.Uk : nullptr);
+        Eigen::MatrixXd Y = std::move(Y_init);
+
+        if (ctx.woodbury_nystrom) {
+            Eigen::MatrixXd C = omega.transpose() * Y;
+            omega.resize(0, 0);
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_C(C);
+            if (es_C.info() != Eigen::Success)
+                LOGGER.e(0, "Woodbury Nystrom: eigendecomposition of sketch C failed.");
+            const double lam_max = es_C.eigenvalues().maxCoeff();
+            const double eps_C   = 1e-8 * std::max(lam_max, 1.0);
+            Eigen::VectorXd lam_sqrt_inv =
+                es_C.eigenvalues().cwiseMax(eps_C).cwiseSqrt().cwiseInverse();
+            Y = Y * (es_C.eigenvectors() * lam_sqrt_inv.asDiagonal());
+            const gcta_eigh::ThinSVDResult svd = gcta_eigh::tall_skinny_thin_svd(Y);
+            Y.resize(0, 0);
+            eval_full = svd.singular_values.head(k_svd).array().square();
+            evec_full = svd.U.leftCols(k_svd);
+        } else {
+            omega.resize(0, 0);
+            constexpr int power_iter = 3;
+            try {
+                gcta_eigh::EighResult res =
+                    gcta_eigh::power_iterate_and_project(apply, std::move(Y), k_svd, power_iter);
+                eval_full = std::move(res.eigenvalues);
+                evec_full = std::move(res.eigenvectors);
+            } catch (const std::exception& e) {
+                LOGGER.e(0, std::string("Woodbury: ") + e.what());
+            }
+        }
+
+        if (!auto_k && !EIG99_k) break;  // fixed-k: no criterion to satisfy, never escalates
+
+        bool satisfied;
+        if (auto_k) {
+            k_signal  = static_cast<int>((eval_full.array() > lambda_plus).count());
+            satisfied = (k_signal < k_svd);
+        } else {
+            double cumulative = 0.0;
+            k_EIG99 = k_svd;  // fallback: mass target not reached within this budget
+            for (int i = 0; i < static_cast<int>(eval_full.size()); ++i) {
+                cumulative += eval_full[i];
+                if (cumulative >= target_mass) { k_EIG99 = i + 1; break; }
+            }
+            satisfied = (k_EIG99 < k_svd);
+        }
+
+        if (satisfied || k_max_is_hard_ceiling || k_svd >= n - 1) break;
+
+        const int k_svd_next = std::min(k_svd * 2, n - 1);
+        LOGGER << "Woodbury " << (auto_k ? "auto-k" : "EIG99-k")
+               << ": signal not resolved within k=" << k_svd
+               << "; expanding budget to k=" << k_svd_next
+               << (ctx.woodbury_nystrom ? " (Nystrom: no warm start, full recompute)" : " (warm-started)")
+               << " ..." << std::endl;
+        if (!ctx.woodbury_nystrom) ctx.Uk = evec_full;   // warm-start the next, larger sketch
+        k_svd = k_svd_next;
+    }
+
+    if (auto_k) {
+        const int k_buffered = std::max(20, static_cast<int>(std::ceil(k_signal * ctx.woodbury_buffer_factor)));
         k = std::min(k_svd, k_buffered);
         LOGGER << "MP bulk edge lambda+ = " << lambda_plus
-               << " (n=" << n << ", M=" << static_cast<long long>(M) << ")"
+               << " (n=" << n << ")"
                << ", eigenvalues above lambda+ = " << k_signal
                << ", using k = " << k << " (buffer=" << ctx.woodbury_buffer_factor << ")" << std::endl;
-        if (k_buffered > k_svd)
+        if (k_buffered > k_svd && k_svd >= n - 1)
+            LOGGER.w(0, "Woodbury auto-k: signal did not saturate even at k=n-1=" + std::to_string(n - 1)
+                     + "; this GRM has near-full effective rank and Woodbury may not offer a "
+                       "computational advantage here.");
+        else if (k_buffered > k_svd)
             LOGGER.w(0, "Woodbury auto-k: buffer-implied k=" + std::to_string(k_buffered)
                      + " exceeds k_max=" + std::to_string(k_svd) + "; clamped to k_max.");
     }
-    else if (EIG99_k) {                                                        // NEW BLOCK
-        const double trace_K_full = K_dbl.diagonal().sum();
-        const double target_mass  = ctx.reml_eigen_mass / 100.0 * trace_K_full;
+    else if (EIG99_k) {
         double cumulative = 0.0;
-        int k_EIG99 = k_svd;                  // fallback: use all computed eigenmodes
-        for (int i = 0; i < static_cast<int>(eval_full.size()); ++i) {
-            cumulative += eval_full[i];
-            if (cumulative >= target_mass) {
-                k_EIG99 = i + 1;
-                break;
-            }
-        }
+        for (int i = 0; i < k_EIG99; ++i) cumulative += eval_full[i];
         const double rho = cumulative / trace_K_full;
-        // Apply a small buffer (default woodbury_buffer_factor, but floor at 1.05)
         const double buf = std::max(1.05, ctx.woodbury_buffer_factor);
-        const int k_buffered = std::min(k_svd,
-                                        static_cast<int>(std::ceil(k_EIG99 * buf)));
+        const int k_buffered = std::min(k_svd, static_cast<int>(std::ceil(k_EIG99 * buf)));
         k = std::max(20, k_buffered);
         LOGGER << "EIG99: trace(K)=" << trace_K_full
             << ", cumulative mass at k=" << k_EIG99
             << " is rho=" << rho
             << ", using k=" << k
             << " (buffer=" << buf << ")" << std::endl;
-        if (k_EIG99 == k_svd)
+        if (k_EIG99 == k_svd && k_svd >= n - 1)
+            LOGGER.w(0, "Woodbury EIG99: 99% mass threshold not reached even at k=n-1="
+                    + std::to_string(n - 1) + "; this GRM has near-full effective rank and "
+                      "Woodbury may not offer a computational advantage here.");
+        else if (k_EIG99 == k_svd)
             LOGGER.w(0, "Woodbury EIG99: 99% mass threshold not reached within k_max="
                     + std::to_string(k_svd) + "; increase --reml-woodbury-k-max.");
     }
@@ -995,7 +1022,7 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     Eigen::VectorXd eval = eval_full.head(k);
     Eigen::MatrixXd evec = evec_full.leftCols(k);
 
-    const double trace_K = K_dbl.diagonal().sum();
+    const double trace_K = trace_K_full;
     ctx.lambda_tail = (trace_K - eval.sum()) / static_cast<double>(n - k);
     if (ctx.lambda_tail < 0.0) {
         LOGGER.w(0, "Woodbury: lambda_tail < 0 (" + std::to_string(ctx.lambda_tail) + "); clamped to 0.");

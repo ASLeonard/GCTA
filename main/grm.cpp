@@ -25,6 +25,7 @@
 #include <Spectra/MatOp/DenseSymMatProd.h>
 #include <cpu.h>   // gcta_dsyevd / gcta_dsyevr wrappers
 #include <Eigen/Core>
+#include "symmetric_eigendecomp.hpp"
 
 void gcta::enable_grm_bin_flag() {
     _grm_bin_flag = true;
@@ -980,19 +981,6 @@ void gcta::grm_denseness(std::string grm_file, std::string keep_indi_file, std::
         }
     }
 }
-struct ParallelSymMatProd {
-    using Scalar = double;
-    const Eigen::MatrixXd& m_mat;
-    int rows() const { return m_mat.rows(); }
-    int cols() const { return m_mat.cols(); }
-
-    void perform_op(const double* x_in, double* y_out) const {
-        Eigen::Map<const Eigen::VectorXd> x(x_in, m_mat.cols());
-        Eigen::Map<Eigen::VectorXd>       y(y_out, m_mat.rows());
-        y.noalias() = m_mat * x;  // full GEMV — MKL/OpenBLAS threaded
-    }
-};
-
 void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string remove_indi_file, double grm_cutoff, bool merge_grm_flag, int out_pc_num, std::string pca_approx)
 {
     manipulate_grm(grm_file, keep_indi_file, remove_indi_file, "", grm_cutoff, -2.0, -2, merge_grm_flag, true);
@@ -1022,62 +1010,31 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
     }
     if (!pca_approx.empty()) {
 
-        if (pca_approx == "rSVD") {
+        // Shared matvec: grm_dbl is fully populated (both triangles), so a
+        // full GEMV/GEMM is used rather than a triangular BLAS2 dsymv/dsymm —
+        // full-matrix multithreaded GEMM tends to beat symmetric BLAS2/3
+        // routines in practice despite the 2x flop count. Generic on X so it
+        // serves both the block sketches (rSVD) and single vectors (Lanczos).
+        auto apply = [&](const auto& X) -> Eigen::MatrixXd {
+            return grm_dbl.selfadjointView<Eigen::Upper>() * X;
+        };
 
-            int oversample    = 20;          // bump from 10
-            int pca_power_iter = 3;          // one extra pass helps GRMs
-            int k = out_pc_num + oversample;
-
-            // Stage A: build a range approximation Q spanning the dominant subspace
-            Eigen::MatrixXd omega = Eigen::MatrixXd::Random(n, k);
-            Eigen::MatrixXd Y = grm_dbl.selfadjointView<Eigen::Upper>() * omega;
-
-            for (int i = 0; i < pca_power_iter; ++i) {
-                // Re-orthogonalize before each multiply — this is the critical fix
-                {
-                    Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
-                    Y = qr.householderQ() * Eigen::MatrixXd::Identity(n, k);
-                }
-                Y = grm_dbl.selfadjointView<Eigen::Upper>() * Y;
+        try {
+            gcta_eigh::EighResult res;
+            if (pca_approx == "rSVD") {
+                const int oversample     = 20;
+                const int pca_power_iter = 3;
+                res = gcta_eigh::randomized_symmetric_eigh(apply, n, out_pc_num, oversample, pca_power_iter);
+            } else if (pca_approx == "Lanczos") {
+                const int ncv = std::min(n, std::max(3 * out_pc_num + 1, 30));
+                res = gcta_eigh::lanczos_symmetric_eigh(apply, n, out_pc_num, ncv);
+            } else {
+                LOGGER.e(0, "--pca-approx: unrecognised method '" + pca_approx + "'. Use 'Lanczos' or 'rSVD'.");
             }
-
-            // Final QR to get orthonormal basis
-            Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
-            Eigen::MatrixXd Q = qr.householderQ() * Eigen::MatrixXd::Identity(n, k);
-
-            // Stage B: project to small k×k matrix; reuse AQ from last multiply
-            // grm_dbl * Q is the last Y before final QR, but Q has been re-orthogonalized,
-            // so we need one more multiply here
-            Eigen::MatrixXd AQ = grm_dbl.selfadjointView<Eigen::Upper>() * Q;
-            Eigen::MatrixXd B  = Q.transpose() * AQ;   // k×k, symmetric
-
-            // Eigen decomposition of the small projected problem
-            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(B);
-
-            // Eigenvalues come out ascending — reverse to get descending
-            eval = es.eigenvalues().reverse().head(out_pc_num);
-            evec = Q * es.eigenvectors().rowwise().reverse().leftCols(out_pc_num);
-
-        }
- 
-        else if (pca_approx == "Lanczos") {
-            // Spectra Lanczos path
-            int ncv = std::min(n, std::max(3 * out_pc_num + 1, 30));
-
-            // We use a custom operation struct here to exploit multithreaded GEMV, rather than Spectra's sequential approach.
-            // This inccurs a 2x flop penalty, but the threading generally wins out.
-            ParallelSymMatProd op(grm_dbl);
-            Spectra::SymEigsSolver<ParallelSymMatProd> eigs(op, out_pc_num, ncv);
-            //Spectra::DenseSymMatProd<double> op(grm_dbl);
-            //Spectra::SymEigsSolver<Spectra::DenseSymMatProd<double>> eigs(op, out_pc_num, ncv);
-            eigs.init();
-            eigs.compute(Spectra::SortRule::LargestAlge);
-            if (eigs.info() != Spectra::CompInfo::Successful)
-                LOGGER.e(0, "eigenvalue decomposition failed.");
-            eval = eigs.eigenvalues();
-            evec = eigs.eigenvectors();
-        } else {
-            LOGGER.e(0, "--pca-approx: unrecognised method '" + pca_approx + "'. Use 'Lanczos' or 'SVD'.");
+            eval = std::move(res.eigenvalues);
+            evec = std::move(res.eigenvectors);
+        } catch (const std::exception& e) {
+            LOGGER.e(0, std::string("--pca-approx failed: ") + e.what());
         }
     } else {
         if (out_pc_num == n && n >= 32766)
@@ -1392,4 +1349,3 @@ void gcta::project_loading(std::string pc_load, int N){
     
     LOGGER << "\nFinished, and the PCs have all been saved to " << out_filename << std::endl;
 }
-

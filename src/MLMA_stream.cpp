@@ -27,6 +27,8 @@
 
 #include <Eigen/Dense>
 #include <fstream>
+#include <sstream>
+#include <unordered_map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -309,6 +311,60 @@ void write_hsq_from_ctx(const string& out_prefix, const RemlCtx& ctx)
     LOGGER.i(0, "Summary REML results saved to [" + hsq_file + "].");
 }
 
+// Load a "<prefix>.eigenvec" written by --pca-approx (rSVD or Lanczos) and
+// align its rows to `analysis_ids` (the same FID\tIID order used to build
+// ctx.y / ctx.X / ctx.A[0]), for use as ctx.Uk before reml::compute() so
+// compute_woodbury_basis()'s existing has_warm path seeds its rSVD sketch
+// from it instead of a cold Gaussian draw.
+//
+// A silently misaligned warm start would seed the sketch with the wrong
+// individual's eigenvector — worse than no warm start at all — so any
+// mismatch between the file's sample set and the current analysis sample
+// set is a hard error, not a fallback.
+Eigen::MatrixXd load_pca_warm_start(const string& eigenvec_prefix,
+                                     const vector<string>& analysis_ids)
+{
+    const string path = eigenvec_prefix + ".eigenvec";
+    std::ifstream in(path);
+    if (!in) LOGGER.e(0, "--reml-woodbury-warm-start: cannot open [" + path + "].");
+
+    std::unordered_map<string, vector<double>> by_id;
+    by_id.reserve(analysis_ids.size() * 2);
+
+    string line, fid, iid;
+    int k = -1;
+    while (std::getline(in, line)) {
+        if (line.empty()) continue;
+        std::istringstream ss(line);
+        if (!(ss >> fid >> iid))
+            LOGGER.e(0, "--reml-woodbury-warm-start: malformed line in [" + path + "].");
+        vector<double> pcs;
+        double v;
+        while (ss >> v) pcs.push_back(v);
+        if (k < 0) k = static_cast<int>(pcs.size());
+        else if (static_cast<int>(pcs.size()) != k)
+            LOGGER.e(0, "--reml-woodbury-warm-start: inconsistent eigenvector count in [" + path + "].");
+        by_id.emplace(fid + "\t" + iid, std::move(pcs));
+    }
+    if (k <= 0)
+        LOGGER.e(0, "--reml-woodbury-warm-start: no eigenvectors read from [" + path + "].");
+
+    const int n = static_cast<int>(analysis_ids.size());
+    Eigen::MatrixXd Uk(n, k);
+    for (int i = 0; i < n; ++i) {
+        const auto it = by_id.find(analysis_ids[i]);
+        if (it == by_id.end())
+            LOGGER.e(0, "--reml-woodbury-warm-start: individual [" + analysis_ids[i] +
+                        "] not found in [" + path + "]. The warm-start file must come from "
+                        "the same sample set (e.g. --pca-approx run on the same --grm).");
+        for (int j = 0; j < k; ++j) Uk(i, j) = it->second[j];
+    }
+
+    LOGGER.i(0, "Woodbury warm-start: loaded " + to_string(k) + " eigenvector(s) for " +
+                to_string(n) + " individuals from [" + path + "].");
+    return Uk;
+}
+
 } // anonymous namespace
 
 
@@ -404,6 +460,18 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
                 LOGGER.w(0, "--reml-woodbury-nystrom takes no argument; ignoring the supplied value.");
             options["woodbury_nystrom"] = "1";
             options_in.erase("--reml-woodbury-nystrom");
+        }
+        // --reml-woodbury-warm-start <prefix>: seed the Woodbury rSVD sketch
+        // with eigenvectors from a prior "<prefix>.eigenvec" (e.g. written by
+        // --pca-approx rSVD on the same GRM/sample set), instead of a cold
+        // Gaussian draw. Ignored when --reml-woodbury-nystrom is set, since
+        // the Nystrom path doesn't use power iteration.
+        if (options_in.find("--reml-woodbury-warm-start") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-warm-start"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-warm-start requires a file prefix argument.");
+            options["woodbury_warm_start"] = vals[0];
+            options_in.erase("--reml-woodbury-warm-start");
         }
         if (options_in.find("--reml-trace-approx") != options_in.end()) {
             options["trace_approx"] = "1";
@@ -680,6 +748,16 @@ void MLMA::processMain()
             ctx.reml_trace_approx        = trace_approx;
             ctx.reml_trace_approx_nprobes = trace_nprobes;
             ctx.reml_eigen_mass             = woodbury_eigen_mass;
+
+            if (options.count("woodbury_warm_start")) {
+                if (woodbury_rank == 0)
+                    LOGGER.w(0, "--reml-woodbury-warm-start given without --reml-woodbury; ignoring.");
+                else if (woodbury_nystrom)
+                    LOGGER.w(0, "--reml-woodbury-warm-start has no effect with --reml-woodbury-nystrom "
+                                "(the Nystrom path doesn't use power iteration); ignoring.");
+                else
+                    ctx.Uk = load_pca_warm_start(options.at("woodbury_warm_start"), analysis_ids);
+            }
 
             reml::compute(ctx, priors, priors_var, no_constrain);
 
