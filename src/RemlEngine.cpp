@@ -851,26 +851,16 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     const int  n      = ctx.n;
     int k = ctx.woodbury_rank;
 
-    // For auto-k / EIG99-k, an explicit --reml-woodbury-k-max is a hard
-    // ceiling — the user asked for a specific bound and we respect it,
-    // including the "not reached within k_max" warning below. Without one,
-    // the value below is only a *starting* budget: if the signal/mass
-    // criterion isn't actually satisfied within it, we double the budget
-    // (warm-started from what's already been found) and recompute, rather
-    // than silently truncating the estimated rank. Total cost of this
-    // doubling search is bounded by ~2x the cost of a single direct
-    // computation at the k that was actually needed.
     const bool k_max_is_hard_ceiling = (ctx.woodbury_k_max > 0);
-    int k_svd;
+    // Conservative starting point: 2 * Me_theoretical for cattle (Ne~100, L~25M).
+    int k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, 25000);
     if (auto_k) {
-        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, 1200);
         LOGGER << "\nComputing Woodbury basis (auto-k, k_max=" << k_svd
             << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
             << ", buffer=" << ctx.woodbury_buffer_factor << ") ..." << std::endl;
     } else if (EIG99_k) {
         // Conservative starting point: 2 * Me_theoretical for cattle (Ne~100, L~25M).
         // Override with woodbury_k_max if the user supplied one (hard ceiling).
-        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, 25000);
         LOGGER << "\nComputing Woodbury basis (EIG99-k, k_max=" << k_svd
             << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
             << ") ..." << std::endl;
@@ -910,7 +900,7 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     int k_EIG99  = 0;  // EIG99-k: eigenmodes needed to reach target_mass
 
     for (;;) {
-        const int oversample = 20;
+        const int oversample = gcta_eigh::recommended_oversample(k_svd);
         const int k_ext = std::min(k_svd + oversample, n - 1);
 
         // Warm-start priority: an in-session Uk from a previous Woodbury call

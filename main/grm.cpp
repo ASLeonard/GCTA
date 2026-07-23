@@ -1022,7 +1022,7 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
         try {
             gcta_eigh::EighResult res;
             if (pca_approx == "rSVD") {
-                const int oversample     = 20;
+                const int oversample     = gcta_eigh::recommended_oversample(out_pc_num);
                 const int pca_power_iter = 3;
                 res = gcta_eigh::randomized_symmetric_eigh(apply, n, out_pc_num, oversample, pca_power_iter);
             } else if (pca_approx == "Lanczos") {

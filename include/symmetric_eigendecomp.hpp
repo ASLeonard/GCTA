@@ -42,6 +42,21 @@ struct EighResult {
     Eigen::MatrixXd eigenvectors;  // n x k_target, columns match eigenvalues
 };
 
+// Oversampling doesn't need to grow with k_target for generic top-k subspace
+// accuracy (HMT's error bound doesn't require it). But callers that use
+// eigenvalues near the *tail* of a large k_target block to locate a spectral
+// threshold (e.g. Woodbury's auto-k Marchenko-Pastur edge, or its EIG99 mass
+// target) are relying on exactly the estimates that are least accurate —
+// Rayleigh-Ritz quality degrades toward the edge of the requested block, and
+// GRM eigenvalues cluster tightly there by construction (that's the point of
+// the MP bulk edge). A fixed p=20 is a 3x buffer at k=6 (PCA; top eigenvalues
+// are well-separated population-structure signal, not the bottleneck) but a
+// 0.4% buffer at k=5000. Scale with k_target instead; the extra sketch
+// columns are cheap once k_ext is already in the thousands.
+inline int recommended_oversample(int k_target, int floor = 20, int cap = 200) {
+    return std::clamp(k_target / 10, floor, cap);
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Randomized range finder + power iteration + Rayleigh-Ritz (rSVD)
 // ─────────────────────────────────────────────────────────────────────────
