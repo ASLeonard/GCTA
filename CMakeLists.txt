@@ -272,7 +272,7 @@ if(NOT CMAKE_BUILD_TYPE)
     message(STATUS "Defaulting to Release build")
 endif()
 
-# Release-build arch flags are applied per-target on gcta64 below,
+# Release-build arch flags are applied per-target on GCTAg below,
 # after add_executable, so they don't bleed into FetchContent dependencies.
 
 set(GCTA_BLAS_BACKEND "" CACHE STRING "BLAS/LAPACK backend (required): OpenBLAS, MKL, Accelerate, or AOCL")
@@ -659,9 +659,9 @@ if(CMAKE_VERBOSE_MAKEFILE OR GCTA_VERBOSE_BLAS)
     message(STATUS "---- end BLAS detection details ----")
 endif()
 
-add_executable(gcta64)
+add_executable(GCTAg)
 
-target_sources(gcta64 PRIVATE
+target_sources(GCTAg PRIVATE
             # entry point
         src/main.cpp
         # src/ module
@@ -711,7 +711,7 @@ target_sources(gcta64 PRIVATE
         main/reml_within_family.cpp
         main/sbat.cpp)
 
-target_include_directories(gcta64 PRIVATE
+target_include_directories(GCTAg PRIVATE
     ${CMAKE_SOURCE_DIR}
     include
     ${GCTA_BLAS_INCLUDE_DIRS}
@@ -722,7 +722,7 @@ target_include_directories(gcta64 PRIVATE
 
 # Boost: prefer modern config-mode targets; fall back to module-mode Boost_LIBRARIES.
 # $<TARGET_EXISTS:...> (3.27) avoids the imperative if(TARGET)/list(APPEND) pattern.
-target_link_libraries(gcta64 PRIVATE
+target_link_libraries(GCTAg PRIVATE
     $<$<TARGET_EXISTS:Boost::iostreams>:Boost::iostreams>
     $<$<TARGET_EXISTS:Boost::headers>:Boost::headers>
     $<$<BOOL:${Boost_LIBRARIES}>:${Boost_LIBRARIES}>
@@ -732,12 +732,12 @@ target_link_libraries(gcta64 PRIVATE
     STDEXEC::stdexec
     ${GCTA_ZSTD_LIBS})
 
-target_precompile_headers(gcta64 PRIVATE
+target_precompile_headers(GCTAg PRIVATE
     <Eigen/Dense>
     <boost/algorithm/string.hpp>
     <boost/math/distributions.hpp>)
 
-# ── gcta64 target properties ───────────────────────────────────────────────
+# ── GCTAg target properties ───────────────────────────────────────────────
 # IPO check must run before set_target_properties.
 set(GCTA_IPO_ENABLED OFF)
 if(GCTA_ENABLE_IPO AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
@@ -750,15 +750,15 @@ if(GCTA_ENABLE_IPO AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
     endif()
 endif()
 
-set_target_properties(gcta64 PROPERTIES
+set_target_properties(GCTAg PROPERTIES
     UNITY_BUILD                   ${GCTA_UNITY_BUILD}
     INTERPROCEDURAL_OPTIMIZATION  ${GCTA_IPO_ENABLED})
 
-target_include_directories(gcta64 PRIVATE
+target_include_directories(GCTAg PRIVATE
     ${GCTA_ZSTD_INCLUDE_DIRS}
     ${GCTA_BLAS_INCLUDE_DIRS})
 
-target_compile_definitions(gcta64 PRIVATE
+target_compile_definitions(GCTAg PRIVATE
     ${GCTA_BLAS_DEFINES}
     GCTA_BLAS_BACKEND_STR="${GCTA_BLAS_PROVIDER}")
 
@@ -781,17 +781,17 @@ if(GCTA_IPO_ENABLED)
     endif()
 endif()
 
-target_compile_options(gcta64 PRIVATE
+target_compile_options(GCTAg PRIVATE
     $<$<BOOL:${APPLE}>:-Wno-nullability-completeness>
     -pipe
     $<$<CONFIG:Release>:$<IF:$<BOOL:${APPLE}>,-mcpu=native,-march=native>>
     $<$<CONFIG:Release>:-O3>
     $<$<AND:$<CONFIG:Release>,$<BOOL:${_lto_compile_flag}>>:${_lto_compile_flag}>)
 
-target_link_options(gcta64 PRIVATE
+target_link_options(GCTAg PRIVATE
     $<$<AND:$<CONFIG:Release>,$<BOOL:${_lto_link_flag}>>:${_lto_link_flag}>)
 
-target_link_libraries(gcta64 PRIVATE OpenMP::OpenMP_CXX)
+target_link_libraries(GCTAg PRIVATE OpenMP::OpenMP_CXX)
 
 # Both GCC (GNU ld) and Clang (lld or GNU ld) default to DT_RUNPATH (--enable-new-dtags).
 # DT_RUNPATH is searched *after* LD_LIBRARY_PATH, so HPC module paths prepended
@@ -799,8 +799,8 @@ target_link_libraries(gcta64 PRIVATE OpenMP::OpenMP_CXX)
 # --disable-new-dtags writes DT_RPATH instead, searched *before* LD_LIBRARY_PATH.
 # Applied to all Linux builds regardless of Clang variant (AOCC or upstream).
 if(LINUX)
-    target_link_options(gcta64 PRIVATE "LINKER:--disable-new-dtags")
-    message(STATUS "gcta64: using DT_RPATH (--disable-new-dtags) for HPC library pinning")
+    target_link_options(GCTAg PRIVATE "LINKER:--disable-new-dtags")
+    message(STATUS "GCTAg: using DT_RPATH (--disable-new-dtags) for HPC library pinning")
 endif()
 
 
@@ -827,7 +827,7 @@ target_sources(Pgenlib PRIVATE
         third_party/plink-ng/2.0/include/plink2_zstfile.cc
         third_party/plink-ng/2.0/include/pvar_ffi_support.cc)
 # Unity builds must be disabled for Pgenlib: it is a separate static library
-# with its own include paths and must never be merged into a gcta64 unity TU.
+# with its own include paths and must never be merged into a GCTAg unity TU.
 # Without this, CMake can concatenate PgenReader.cpp and PgenBackend.cpp into
 # the same translation unit, causing PgenReader.cpp to fail to find GCTA
 # headers such as GenoBackendFactory.h.
@@ -840,19 +840,19 @@ endif()
 
 
 if(BGEN_SUPPORT)
-    target_link_libraries(gcta64 PRIVATE sqlite3)
-    target_compile_definitions(gcta64 PRIVATE BGEN_SUPPORT)
+    target_link_libraries(GCTAg PRIVATE sqlite3)
+    target_compile_definitions(GCTAg PRIVATE BGEN_SUPPORT)
 endif()
-target_link_libraries(gcta64 PRIVATE Pgenlib Threads::Threads)
+target_link_libraries(GCTAg PRIVATE Pgenlib Threads::Threads)
 
 # Link BLAS early so OpenBLAS/Accelerate/MKL cblas symbols take precedence
 # over other cblas implementations in dyld (macOS) and ld.so (Linux) symbol resolution order
-target_link_libraries(gcta64 PRIVATE ${GCTA_BLAS_LIBS})
+target_link_libraries(GCTAg PRIVATE ${GCTA_BLAS_LIBS})
 
 # On Linux, re-link BLAS to ensure it appears last in NEEDED and
 # its cblas symbols take precedence via ld.so's first-match ordering.
 if(LINUX)
-    target_link_libraries(gcta64 PRIVATE ${GCTA_BLAS_LIBS})
+    target_link_libraries(GCTAg PRIVATE ${GCTA_BLAS_LIBS})
 endif()
 
 # List all targets (verbose, only if requested)
@@ -883,20 +883,20 @@ endif()
 if(LINUX OR APPLE)
     set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
-    install(TARGETS gcta64
+    install(TARGETS GCTAg
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)
 endif()
 
 if(LINUX)
-    install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.desktop
+    install(FILES ${CMAKE_SOURCE_DIR}/resources/GCTAg.desktop
         DESTINATION share/applications)
     install(FILES
-        ${CMAKE_SOURCE_DIR}/resources/gcta64.png
+        ${CMAKE_SOURCE_DIR}/resources/GCTAg.png
         DESTINATION share/icons/hicolor/256x256/apps)
     install(FILES
-        ${CMAKE_SOURCE_DIR}/resources/gcta64.svg
+        ${CMAKE_SOURCE_DIR}/resources/GCTAg.svg
         DESTINATION share/icons/hicolor/scalable/apps)
 endif()
 
