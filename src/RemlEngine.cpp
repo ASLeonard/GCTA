@@ -840,9 +840,9 @@ namespace reml {
 
 void compute_woodbury_basis(RemlCtx& ctx) {
     if (ctx.reml_mtd == 1)
-        LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML.");
+        LOGGER.e(0, "--reml-woodbury-basis is incompatible with Fisher-scoring REML.");
     if ((int)ctx.r_indx.size() != 2)
-        LOGGER.e(0, "--reml-woodbury supports only single-GRM models.");
+        LOGGER.e(0, "--reml-woodbury-basis supports only single-GRM models.");
     if (ctx.A[ctx.r_indx[0]].size() == 0 && !ctx.reml_svd_chunked)
         LOGGER.e(0, "--reml-woodbury: GRM component is identity; cannot compute basis.");
     if (ctx.reml_svd_chunked && !ctx.grm_tile_reader)
@@ -884,11 +884,11 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             << ") ..." << std::endl;
     } else {
         if (k <= 0)
-            LOGGER.e(0, "--reml-woodbury rank must be positive for fixed-k mode.");
+            LOGGER.e(0, "--reml-woodbury-basis rank must be positive for fixed-k mode.");
         k_svd = k;
         LOGGER << "\nComputing Woodbury low-rank basis (k=" << k << ") ..." << std::endl;
     }
-    if (k_svd >= n) LOGGER.e(0, "--reml-woodbury rank must be < n.");
+    if (k_svd >= n) LOGGER.e(0, "--reml-woodbury-basis rank must be < n.");
 
     const Eigen::MatrixXd& K_dbl = ctx.A[ctx.r_indx[0]];  // empty when reml_svd_chunked
     const double trace_K_full = ctx.reml_svd_chunked
@@ -909,7 +909,7 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             M = ctx.grm_N(0, 0);
         }
         if (M <= 0.0)
-            LOGGER.e(0, "--reml-woodbury auto: cannot determine SNP count. Use --reml-woodbury <k>.");
+            LOGGER.e(0, "--reml-woodbury-basis auto: cannot determine SNP count. Use --reml-woodbury-basis <k>.");
         const double gamma = static_cast<double>(n) / M;
         lambda_plus = std::pow(1.0 + std::sqrt(gamma), 2.0);
     }
