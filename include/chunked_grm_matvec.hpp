@@ -96,7 +96,7 @@ inline Eigen::MatrixXd chunked_symmetric_matvec(
 }
 
 // Diagonal of K, needed for trace(K) (used by both auto-k's lambda_plus
-// bookkeeping-adjacent checks and EIG99's target mass) without reading any
+// bookkeeping-adjacent checks and EIGMASS's target mass) without reading any
 // off-diagonal data at all — just the m diagonal tiles' own diagonals.
 inline Eigen::VectorXd chunked_diagonal(const TileReader& read_tile, int n, int block_size) {
     const BlockPartition part(n, block_size);
@@ -110,7 +110,7 @@ inline Eigen::VectorXd chunked_diagonal(const TileReader& read_tile, int n, int 
     return d;
 }
 
-// trace(K^2) = sum of squares of every entry of K. Needed by the non-EIG99
+// trace(K^2) = sum of squares of every entry of K. Needed by the non-EIGMASS
 // tail-variance correction (tail_d_var), which — unlike trace(K) — genuinely
 // needs every off-diagonal entry, not just the diagonal. Reuses the same
 // lower-triangular tile grid: a diagonal tile's contribution is the squared

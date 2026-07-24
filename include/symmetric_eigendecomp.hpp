@@ -45,7 +45,7 @@ struct EighResult {
 // Oversampling doesn't need to grow with k_target for generic top-k subspace
 // accuracy (HMT's error bound doesn't require it). But callers that use
 // eigenvalues near the *tail* of a large k_target block to locate a spectral
-// threshold (e.g. Woodbury's auto-k Marchenko-Pastur edge, or its EIG99 mass
+// threshold (e.g. Woodbury's auto-k Marchenko-Pastur edge, or its EIGMASS mass
 // target) are relying on exactly the estimates that are least accurate —
 // Rayleigh-Ritz quality degrades toward the edge of the requested block, and
 // GRM eigenvalues cluster tightly there by construction (that's the point of

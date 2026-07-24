@@ -438,11 +438,11 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options["grm"] = options_in["--grm"][0];
         options_in.erase("--grm");
 
-        // --reml-woodbury [k]  (k optional; -1 = auto-k, -2 = EIG99)
+        // --reml-woodbury [k]  (k optional; -1 = auto-k, -2 = EIGMASS)
         if (options_in.find("--reml-woodbury") != options_in.end()) {
             const auto& vals = options_in["--reml-woodbury"];
             if (!vals.empty() && !vals[0].empty()) {
-                if (vals[0] == "EIG99")
+                if (vals[0] == "EIGMASS")
                     options_d["woodbury_rank"] = -2.0;  // Eigenvalue mass k
                 else if (vals[0] == "auto")
                     options_d["woodbury_rank"] = -1.0;  // auto-k
@@ -490,6 +490,13 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
                 LOGGER.e(0, "--reml-svd-chunk-size requires a row-count argument.");
             options_d["svd_chunk_size"] = std::stod(vals[0]);
             options_in.erase("--reml-svd-chunk-size");
+        }
+        if (options_in.find("--reml-eigen-mass") != options_in.end()) {
+            const auto& vals = options_in["--reml-eigen-mass"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-eigen-mass requires a value between 0 and 1.");
+            options_d["reml_eigen_mass"] = std::stod(vals[0]);
+            options_in.erase("--reml-eigen-mass");
         }
         if (options_in.find("--reml-trace-approx") != options_in.end()) {
             options["trace_approx"] = "1";
@@ -740,8 +747,8 @@ void MLMA::processMain()
                 ? options_d.at("woodbury_edge_margin") : 0.15;
             const int    woodbury_edge_confirm = options_d.count("woodbury_edge_confirm")
                 ? static_cast<int>(options_d.at("woodbury_edge_confirm")) : 20;
-            const int woodbury_eig99_k_buffer = options_d.count("woodbury_eig99_k_buffer")
-                ? static_cast<int>(options_d.at("woodbury_eig99_k_buffer")) : 20;
+            const int woodbury_eigmass_k_buffer = options_d.count("woodbury_eigmass_k_buffer")
+                ? static_cast<int>(options_d.at("woodbury_eigmass_k_buffer")) : 20;
 
             if (reml_alg < 0 || reml_alg > 2)
                 LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
@@ -750,7 +757,7 @@ void MLMA::processMain()
             if (woodbury_rank != 0 && reml_alg == 1)
                 LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML (--reml-alg 1). Use AI-REML (default) or EM-REML (--reml-alg 2).");
             if (woodbury_nystrom && woodbury_rank == 0)
-                LOGGER.e(0, "--reml-woodbury-nystrom requires --reml-woodbury <k|auto|EIG99>.");
+                LOGGER.e(0, "--reml-woodbury-nystrom requires --reml-woodbury <k|auto|EIGMASS>.");
 
             const vector<double> priors =
                 options_vd.count("reml_priors") ? options_vd.at("reml_priors") : vector<double>{};
@@ -793,7 +800,7 @@ void MLMA::processMain()
             ctx.woodbury_rank            = woodbury_rank;
             ctx.woodbury_edge_margin        = woodbury_edge_margin;
             ctx.woodbury_edge_confirm       = woodbury_edge_confirm;
-            ctx.woodbury_eig99_k_buffer  = woodbury_eig99_k_buffer;
+            ctx.woodbury_eigmass_k_buffer  = woodbury_eigmass_k_buffer;
             ctx.woodbury_nystrom         = woodbury_nystrom;
             ctx.reml_svd_chunked         = svd_chunked;
             ctx.reml_svd_chunk_size      = options_d.count("svd_chunk_size")

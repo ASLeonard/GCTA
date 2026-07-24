@@ -73,7 +73,7 @@ struct RemlCtx {
     // rather than by multiplying k_signal by a fixed factor.
     double woodbury_edge_margin      = 0.15;  // relative margin below lambda_plus to confirm past the edge
     int    woodbury_edge_confirm     = 20;    // consecutive sub-margin eigenvalues required to confirm
-    // EIG99-k: trace(K) ~ n (GRM diagonals are ~1), and most of that mass
+    // EIGMASS-k: trace(K) ~ n (GRM diagonals are ~1), and most of that mass
     // sits in the Marchenko-Pastur bulk — many eigenvalues of similar size,
     // not a few outliers — so capturing "the last 0.5%" of trace mass can
     // require a lot more eigenvalues than capturing the first 99%, not a
@@ -82,7 +82,7 @@ struct RemlCtx {
     // past the raw crossing instead: those extra eigenvalues are usually
     // already sitting in the existing k_svd budget's headroom (oversample /
     // starting-budget slack), so this is normally free — no extra rSVD pass.
-    int    woodbury_eig99_k_buffer   = 20;    // extra eigenvalues past the raw reml_eigen_mass crossing
+    int    woodbury_eigmass_k_buffer = 20;    // extra eigenvalues past the raw reml_eigen_mass crossing
     int    woodbury_k_max            = 0;     // rank cap for auto-k (0 → min(n−1,1200))
     bool   woodbury_nystrom          = false; // true → single-pass Nystrom basis
     bool   reml_trace_approx         = false; // Hutch++ trace (skips n x n P)
@@ -102,7 +102,7 @@ struct RemlCtx {
     // ── Woodbury basis (set by reml::compute_woodbury_basis()) ───────────────
     bool    Vi_use_woodbury = false;
     int     woodbury_rank_  = 0;     // actual rank used (<= woodbury_rank or auto)
-    float   reml_eigen_mass = 0;     // fraction of eigenvalue mass captured by Uk
+    float   reml_eigen_mass = 0.99f; // fraction of eigenvalue mass captured by Uk
     RemlMat Uk;                      // n x k leading eigenvectors of K
     RemlVec dk;                      // k eigenvalues (clamped >= 0)
     double  lambda_tail     = 0.0;   // average bulk eigenvalue
