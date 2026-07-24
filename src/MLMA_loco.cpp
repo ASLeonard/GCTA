@@ -495,7 +495,6 @@ void MLMALoco::processMain()
             ctx.reml_inv_mtd   = 0;  // LLT
             ctx.reml_diagV_adj = reml_diagV_adj;
             ctx.woodbury_rank  = woodbury_rank;
-            ctx.woodbury_buffer_factor = 1.5;
             ctx.reml_trace_approx = trace_approx;
             ctx.reml_trace_approx_nprobes = trace_nprobes;
 

@@ -457,7 +457,7 @@ void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, int m_probes) {
                 return applyP_mat(ctx, KZ);
             }
             return is_I ? applyP_mat(ctx, Z)
-                        : applyP_mat(ctx, RemlMat(ctx.A[ctx.r_indx[ci]].selfadjointView<Eigen::Lower>() * Z));
+                        : applyP_mat(ctx, RemlMat(ctx.A[ctx.r_indx[ci]] * Z));
         };
 
         RemlMat K = applyPA_mat(ctx.hutchpp_S);
@@ -526,7 +526,7 @@ void calcu_Hi(RemlCtx& ctx, RemlMat& P, RemlMat& Hi) {
             // already-full P) to avoid reading uninitialised upper-triangle elements.
             // A is symmetric so A*P == P*A; pass P.transpose() (==P) as the dense
             // RHS so dsymm fires with A as the symmetric operand.
-            PA[i].noalias() = ctx.A[ctx.r_indx[i]].selfadjointView<Eigen::Lower>() * P;
+            PA[i].noalias() = ctx.A[ctx.r_indx[i]] * P;
         }
     }
 
@@ -568,7 +568,7 @@ void reml_equation(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py, RemlVec& 
         if (ctx.A[ctx.r_indx[i]].size() == 0) {
             R(i) = Py.squaredNorm();
         } else {
-            tmp.noalias() = ctx.A[ctx.r_indx[i]].selfadjointView<Eigen::Lower>() * Py;
+            tmp.noalias() = ctx.A[ctx.r_indx[i]] * Py;
             R(i) = Py.dot(tmp);
         }
     }
@@ -595,7 +595,7 @@ void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
         else if (ctx.A[ctx.r_indx[i]].size() == 0)
             APy.col(i) = Py;
         else
-            APy.col(i).noalias() = ctx.A[ctx.r_indx[i]].selfadjointView<Eigen::Lower>() * Py;
+            APy.col(i).noalias() = ctx.A[ctx.r_indx[i]] * Py;
     }
 
     RemlVec R(m);
@@ -671,7 +671,7 @@ void em_reml(RemlCtx& ctx, RemlMat& P, RemlVec& Py,
         } else if (ctx.A[ctx.r_indx[i]].size() == 0) {
             R(i) = Py.squaredNorm();
         } else {
-            tmp.noalias() = ctx.A[ctx.r_indx[i]].selfadjointView<Eigen::Lower>() * Py;
+            tmp.noalias() = ctx.A[ctx.r_indx[i]] * Py;
             R(i) = Py.dot(tmp);
         }
         varcmp(i) = prev_varcmp(i) - prev_varcmp(i) * prev_varcmp(i) * (tr_PA(i) - R(i)) / ctx.n;
@@ -863,15 +863,20 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     const bool k_max_is_hard_ceiling = (ctx.woodbury_k_max > 0);
     int k_svd;
     if (auto_k) {
-        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, 1200);
+        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, 2500);
         LOGGER << "\nComputing Woodbury basis (auto-k, k_max=" << k_svd
             << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
             << ", edge_margin=" << ctx.woodbury_edge_margin
             << ", edge_confirm=" << ctx.woodbury_edge_confirm << ") ..." << std::endl;
     } else if (EIG99_k) {
-        // Conservative starting point: 2 * Me_theoretical for cattle (Ne~100, L~25M).
-        // Override with woodbury_k_max if the user supplied one (hard ceiling).
-        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, 25000);
+        // Starting guess scales with n (5% of n) instead of a flat constant,
+        // floored at auto-k's 2500 and capped at 25000. The escalation loop
+        // below doubles this (warm-started) if the mass target isn't reached
+        // within budget, so this only needs to be in the right ballpark —
+        // but a flat large default actively hurts small/medium cohorts.
+        // search). At n=500k, 5% still lands at the original 25000.
+        const int start_guess = std::clamp(n / 20, 2500, 25000);
+        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, start_guess);
         LOGGER << "\nComputing Woodbury basis (EIG99-k, k_max=" << k_svd
             << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
             << ") ..." << std::endl;
@@ -901,8 +906,15 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     }
     const double target_mass = EIG99_k ? (ctx.reml_eigen_mass / 100.0 * trace_K_full) : 0.0;
 
+    // K_dbl is fully populated (both triangles) by the GRM loader, which
+    // scatter-fills the lower triangle then explicitly mirrors it via
+    // selfadjointView<Lower> once at load time to avoid cache-hostile
+    // scattered writes — see the loader's own comment. So there's nothing to
+    // gain from a symmetric-aware BLAS call here (dsymm/dsymv) versus a
+    // plain dgemm/dgemv, and dsymm has historically been the less-tuned
+    // kernel in some BLAS backends; use the plain product.
     auto apply = [&](const auto& X) -> Eigen::MatrixXd {
-        return K_dbl.selfadjointView<Eigen::Lower>() * X;
+        return K_dbl * X;
     };
 
     Eigen::VectorXd eval_full;
@@ -1046,6 +1058,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
 
     Eigen::VectorXd eval = eval_full.head(k);
     Eigen::MatrixXd evec = evec_full.leftCols(k);
+    eval_full.resize(0);
+    evec_full.resize(0, 0);
 
     const double trace_K = trace_K_full;
     ctx.lambda_tail = (trace_K - eval.sum()) / static_cast<double>(n - k);
