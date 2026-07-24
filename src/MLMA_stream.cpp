@@ -473,6 +473,24 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             options["woodbury_warm_start"] = vals[0];
             options_in.erase("--reml-woodbury-warm-start");
         }
+        // --reml-svd-chunked: read K in lower-triangular tiles for the
+        // Woodbury basis rSVD instead of holding a dense n x n K resident —
+        // see chunked_grm_matvec.hpp. Requires the caller (below, once
+        // grm_binary_io.hpp's reader is wired up) to populate
+        // ctx.grm_tile_reader; RemlEngine enforces this at runtime.
+        if (options_in.find("--reml-svd-chunked") != options_in.end()) {
+            if (!options_in["--reml-svd-chunked"].empty())
+                LOGGER.w(0, "--reml-svd-chunked takes no argument; ignoring the supplied value.");
+            options["svd_chunked"] = "1";
+            options_in.erase("--reml-svd-chunked");
+        }
+        if (options_in.find("--reml-svd-chunk-size") != options_in.end()) {
+            const auto& vals = options_in["--reml-svd-chunk-size"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-svd-chunk-size requires a row-count argument.");
+            options_d["svd_chunk_size"] = std::stod(vals[0]);
+            options_in.erase("--reml-svd-chunk-size");
+        }
         if (options_in.find("--reml-trace-approx") != options_in.end()) {
             options["trace_approx"] = "1";
             const auto& v = options_in["--reml-trace-approx"];
@@ -651,23 +669,39 @@ void MLMA::processMain()
             const string grm_pfx = options.at("grm");
             LOGGER.i(0, "Running inline REML using GRM [" + grm_pfx + "] ...");
 
-            vector<string> grm_ids;
-            Eigen::MatrixXd G_n;
-            double m_all = 0.0;
-            read_grm_binary(grm_pfx, grm_ids, G_n, m_all);
-
-            // Get post-filter analysis IDs (FID\tIID) and match to GRM
             const vector<string> analysis_ids = pheno->get_id(0, n - 1, "\t");
-            const vector<int>    kp           = match_ids_to_grm(analysis_ids, grm_ids);
-            for (int i = 0; i < n; ++i)
-                if (kp[i] < 0)
-                    LOGGER.e(0, "Individual [" + analysis_ids[i] +
-                                "] not found in GRM [" + grm_pfx + "]. "
-                                "Re-build the GRM from the same sample set.");
+            const bool svd_chunked = options.count("svd_chunked") > 0;
 
-            // Subset GRM to the n analysis individuals.
-            // Fast path: if GRM sample == analysis sample (in order), no copy needed.
-            {
+            vector<string> grm_ids;
+            Eigen::MatrixXd G_n;      // left empty when svd_chunked
+            double m_all = 0.0;
+            gcta_grm_io::ChunkedGrmHandle chunked_grm;  // only populated when svd_chunked
+
+            if (svd_chunked) {
+                // Skip the dense O(n_grm^2) load entirely — the whole point
+                // of --reml-svd-chunked. make_chunked_grm_reader does its
+                // own ID validation (same fail-loud contract as the dense
+                // path below) and reads m_snps from .grm.N.bin's diagonal
+                // without touching .grm.bin.
+                chunked_grm = gcta_grm_io::make_chunked_grm_reader(grm_pfx, analysis_ids);
+                m_all = chunked_grm.m_snps;
+                LOGGER.i(0, "--reml-svd-chunked: GRM will be read in " +
+                            to_string(options_d.count("svd_chunk_size")
+                                          ? static_cast<int>(options_d.at("svd_chunk_size")) : 8000) +
+                            "-row tiles from [" + grm_pfx + "] as needed, not loaded densely.");
+            } else {
+                read_grm_binary(grm_pfx, grm_ids, G_n, m_all);
+
+                // Get post-filter analysis IDs (FID\tIID) and match to GRM
+                const vector<int> kp = match_ids_to_grm(analysis_ids, grm_ids);
+                for (int i = 0; i < n; ++i)
+                    if (kp[i] < 0)
+                        LOGGER.e(0, "Individual [" + analysis_ids[i] +
+                                    "] not found in GRM [" + grm_pfx + "]. "
+                                    "Re-build the GRM from the same sample set.");
+
+                // Subset GRM to the n analysis individuals.
+                // Fast path: if GRM sample == analysis sample (in order), no copy needed.
                 const int  n_grm        = static_cast<int>(grm_ids.size());
                 bool       is_identity  = (n_grm == n);
                 for (int i = 0; i < n && is_identity; ++i)
@@ -735,7 +769,15 @@ void MLMA::processMain()
                 ctx.y_Ssq = ctx.y.squaredNorm();
             }
             ctx.A.resize(2);
-            ctx.A[0] = std::move(G_n);
+            if (svd_chunked) {
+                // ctx.A[0] stays empty (default RemlMat()); RemlEngine reads
+                // K through ctx.grm_tile_reader instead. See the guard in
+                // compute_woodbury_basis that errors out if this flag is set
+                // without a reader.
+                ctx.grm_tile_reader = std::move(chunked_grm.reader);
+            } else {
+                ctx.A[0] = std::move(G_n);
+            }
             ctx.grm_N.resize(1, 1);
             ctx.grm_N(0, 0) = m_all;
             // ctx.A[1] left default (size 0 == identity convention for residual)
@@ -753,6 +795,9 @@ void MLMA::processMain()
             ctx.woodbury_edge_confirm       = woodbury_edge_confirm;
             ctx.woodbury_eig99_k_buffer  = woodbury_eig99_k_buffer;
             ctx.woodbury_nystrom         = woodbury_nystrom;
+            ctx.reml_svd_chunked         = svd_chunked;
+            ctx.reml_svd_chunk_size      = options_d.count("svd_chunk_size")
+                ? static_cast<int>(options_d.at("svd_chunk_size")) : 8000;
             ctx.reml_trace_approx        = trace_approx;
             ctx.reml_trace_approx_nprobes = trace_nprobes;
             ctx.reml_eigen_mass             = woodbury_eigen_mass;

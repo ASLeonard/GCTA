@@ -7,9 +7,12 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#include "chunked_grm_matvec.hpp"
 
 namespace gcta_grm_io {
 
@@ -140,6 +143,170 @@ inline std::vector<int> match_ids_to_grm(const std::vector<std::string>& ref_ids
             kp[i] = it->second;
     }
     return kp;
+}
+
+// Tile reader for --reml-svd-chunked: returns K in ANALYSIS sample order
+// (post-kp reindexing) directly from the mmap'd .grm.bin file, without ever
+// materializing a dense matrix — not even transiently, and not just the
+// n x n analysis-subsetted one, unlike read_grm_binary() above.
+//
+// Why mmap rather than manual pread(): kp (analysis index -> GRM-file row
+// index) is an arbitrary permutation in general — match_ids_to_grm doesn't
+// promise anything about ordering — so a tile that's contiguous in analysis
+// space can touch scattered, non-monotonic file rows. Rather than trying to
+// batch reads under that uncertainty, mmap the whole file (cheap: virtual
+// address space only, RSS is driven by which pages actually get touched,
+// not file size) and index it directly per entry — the kernel's page cache
+// absorbs any locality that's there and does the right thing regardless of
+// how scrambled kp turns out to be. MADV_RANDOM (not SEQUENTIAL/WILLNEED,
+// unlike read_grm_binary's dense path) since access here is tile-scattered
+// by construction, not a single top-to-bottom pass.
+class ChunkedGrmMmap {
+public:
+    // kp[i] = GRM-file row index for analysis individual i (see
+    // match_ids_to_grm). Every entry must be >= 0 — validate before
+    // constructing, since a -1 here means "individual not in this GRM" and
+    // silently reading garbage at that index is far worse than refusing to
+    // start.
+    ChunkedGrmMmap(const std::string& prefix, std::vector<int> kp, int n_grm)
+        : kp_(std::move(kp))
+    {
+        const size_t tri = static_cast<size_t>(n_grm) * (n_grm + 1) / 2;
+        byte_len_ = tri * sizeof(float);
+
+        const std::string bin_path = prefix + ".grm.bin";
+        fd_ = ::open(bin_path.c_str(), O_RDONLY);
+        if (fd_ == -1)
+            LOGGER.e(0, "--reml-svd-chunked: cannot open [" + bin_path + "].");
+
+        struct stat st{};
+        if (::fstat(fd_, &st) != 0 || static_cast<size_t>(st.st_size) < byte_len_) {
+            ::close(fd_);
+            LOGGER.e(0, "--reml-svd-chunked: unexpected size in [" + bin_path + "].");
+        }
+
+        void* raw = ::mmap(nullptr, byte_len_, PROT_READ, MAP_PRIVATE, fd_, 0);
+        if (raw == MAP_FAILED) {
+            ::close(fd_);
+            LOGGER.e(0, "--reml-svd-chunked: mmap failed for [" + bin_path + "].");
+        }
+        ::madvise(raw, byte_len_, MADV_RANDOM);
+        fbuf_ = static_cast<const float*>(raw);
+    }
+
+    ~ChunkedGrmMmap() {
+        if (fbuf_) ::munmap(const_cast<float*>(fbuf_), byte_len_);
+        if (fd_ != -1) ::close(fd_);
+    }
+    ChunkedGrmMmap(const ChunkedGrmMmap&)            = delete;
+    ChunkedGrmMmap& operator=(const ChunkedGrmMmap&) = delete;
+
+    // K_analysis[rs:re, cs:ce]. No assumption that cs-block <= rs-block
+    // implies file-row >= file-col — kp can reorder that relationship
+    // entirely — so every entry independently resolves which physical file
+    // row (the larger of the two mapped indices) it lives in. This means
+    // the returned tile is always fully symmetric on its own, even for a
+    // diagonal-block call — chunked_symmetric_matvec's selfadjointView
+    // mirroring step is a safe no-op on it, not required for correctness
+    // here specifically, but left untouched since that's a general contract
+    // other readers may need.
+    Eigen::MatrixXd read_tile(int rs, int re, int cs, int ce) const {
+        const int tile_rows = re - rs, tile_cols = ce - cs;
+        Eigen::MatrixXd tile(tile_rows, tile_cols);
+        for (int lp = 0; lp < tile_rows; ++lp) {
+            const int gi = kp_[rs + lp];
+            for (int lq = 0; lq < tile_cols; ++lq) {
+                const int gj = kp_[cs + lq];
+                const int file_row = std::max(gi, gj);
+                const int file_col = std::min(gi, gj);
+                const size_t idx = static_cast<size_t>(file_row) * (file_row + 1) / 2
+                                  + static_cast<size_t>(file_col);
+                tile(lp, lq) = static_cast<double>(fbuf_[idx]);
+            }
+        }
+        return tile;
+    }
+
+private:
+    std::vector<int> kp_;
+    int fd_ = -1;
+    size_t byte_len_ = 0;
+    const float* fbuf_ = nullptr;
+};
+
+// .grm.N.bin diagonal only (mean SNP count) — same file, same packed layout,
+// same lower-triangle-by-row indexing as .grm.bin, but this touches only n
+// scattered diagonal entries via mmap+MADV_RANDOM, same "RSS follows touched
+// pages, not file size" argument as ChunkedGrmMmap. Kept as its own function
+// rather than factored out of read_grm_binary()'s existing N-file handling
+// above, so that function's contract for its current callers doesn't change.
+inline double read_grm_N_mean(const std::string& prefix, int n_grm) {
+    const size_t tri = static_cast<size_t>(n_grm) * (n_grm + 1) / 2;
+    const size_t byte_len = tri * sizeof(float);
+    const std::string n_path = prefix + ".grm.N.bin";
+
+    const int nfd = ::open(n_path.c_str(), O_RDONLY);
+    if (nfd == -1) {
+        LOGGER.w(0, "GRM N file [" + n_path + "] not found; SNP count "
+                    "unavailable (affects --reml-woodbury auto-k).");
+        return 0.0;
+    }
+    struct stat st{};
+    if (::fstat(nfd, &st) != 0 || static_cast<size_t>(st.st_size) < byte_len) {
+        ::close(nfd);
+        LOGGER.w(0, "GRM N file [" + n_path + "] has unexpected size; "
+                    "SNP count unavailable (affects --reml-woodbury auto-k).");
+        return 0.0;
+    }
+    void* nraw = ::mmap(nullptr, byte_len, PROT_READ, MAP_PRIVATE, nfd, 0);
+    ::close(nfd);
+    if (nraw == MAP_FAILED) {
+        LOGGER.w(0, "mmap failed for [" + n_path + "]; SNP count unavailable.");
+        return 0.0;
+    }
+    ::madvise(nraw, byte_len, MADV_RANDOM);
+    const float* nbuf = static_cast<const float*>(nraw);
+    double sum = 0.0;
+    for (int i = 0; i < n_grm; ++i) {
+        const size_t diag_idx = static_cast<size_t>(i) * (i + 1) / 2 + i;
+        sum += static_cast<double>(nbuf[diag_idx]);
+    }
+    ::munmap(nraw, byte_len);
+    return sum / n_grm;
+}
+
+struct ChunkedGrmHandle {
+    gcta_chunked::TileReader reader;
+    double m_snps = 0.0;
+};
+
+// Build the chunked reader (+ m_snps, read the same way read_grm_binary()
+// reads it) for RemlCtx::grm_tile_reader. analysis_ids must be in the exact
+// row/column order ctx.y/ctx.X/ctx.A would be built in — same requirement
+// as load_pca_warm_start's alignment in MLMA_stream.cpp. Fails loudly (not
+// a fallback) on any individual missing from the GRM: a silent misalignment
+// here corrupts every downstream REML result without any obvious symptom.
+inline ChunkedGrmHandle make_chunked_grm_reader(
+    const std::string& prefix,
+    const std::vector<std::string>& analysis_ids)
+{
+    const std::vector<std::string> grm_ids = Pheno::read_sublist(prefix + ".grm.id");
+    const int n_grm = static_cast<int>(grm_ids.size());
+
+    std::vector<int> kp = match_ids_to_grm(analysis_ids, grm_ids);
+    for (int i = 0; i < static_cast<int>(analysis_ids.size()); ++i) {
+        if (kp[i] < 0)
+            LOGGER.e(0, "--reml-svd-chunked: individual [" + analysis_ids[i] +
+                        "] not found in GRM [" + prefix + ".grm.id].");
+    }
+
+    ChunkedGrmHandle handle;
+    handle.m_snps = read_grm_N_mean(prefix, n_grm);
+    auto file = std::make_shared<ChunkedGrmMmap>(prefix, std::move(kp), n_grm);
+    handle.reader = [file](int rs, int re, int cs, int ce) -> Eigen::MatrixXd {
+        return file->read_tile(rs, re, cs, ce);
+    };
+    return handle;
 }
 
 } // namespace gcta_grm_io

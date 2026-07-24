@@ -15,6 +15,7 @@
 #pragma once
 
 #include "mlma_woodbury.hpp"
+#include "chunked_grm_matvec.hpp"
 #include <Eigen/Dense>
 #include <string>
 #include <vector>
@@ -43,6 +44,17 @@ struct RemlCtx {
     std::vector<RemlMat> A;
     std::vector<int>     r_indx;  // typically {0, 1}
     RemlMat grm_N;   // from _grm_N — used only for Woodbury auto-k M estimation
+
+    // ── Chunked K@X (avoids a dense n x n K resident during basis construction) ──
+    // Only affects compute_woodbury_basis's matvecs. When enabled, ctx.A[...]
+    // is expected to stay EMPTY (never densely loaded) and grm_tile_reader
+    // must be set by the caller before reml::compute() — see
+    // chunked_grm_matvec.hpp for the exact callback contract (reads a single
+    // lower-triangular tile; float32-on-disk should be widened to double at
+    // the tile level, not for the whole file up front).
+    bool                     reml_svd_chunked    = false;
+    int                      reml_svd_chunk_size = 8000;   // rows/cols per tile
+    gcta_chunked::TileReader grm_tile_reader;               // caller-populated when chunked
 
     // ── Config (algorithm control) ────────────────────────────────────────────
     int    reml_mtd                  = 0;     // 0=AI-REML, 1=Fisher, 2=EM-REML

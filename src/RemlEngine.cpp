@@ -843,8 +843,11 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML.");
     if ((int)ctx.r_indx.size() != 2)
         LOGGER.e(0, "--reml-woodbury supports only single-GRM models.");
-    if (ctx.A[ctx.r_indx[0]].size() == 0)
+    if (ctx.A[ctx.r_indx[0]].size() == 0 && !ctx.reml_svd_chunked)
         LOGGER.e(0, "--reml-woodbury: GRM component is identity; cannot compute basis.");
+    if (ctx.reml_svd_chunked && !ctx.grm_tile_reader)
+        LOGGER.e(0, "--reml-woodbury: --reml-svd-chunked is set but ctx.grm_tile_reader is empty "
+                    "— the GRM component wasn't actually loaded either way.");
 
     const bool auto_k = (ctx.woodbury_rank == -1.0);
     const bool EIG99_k = (ctx.woodbury_rank == -2.0);
@@ -863,19 +866,24 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     const bool k_max_is_hard_ceiling = (ctx.woodbury_k_max > 0);
     int k_svd;
     if (auto_k) {
-        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, 2500);
+        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, 1200);
         LOGGER << "\nComputing Woodbury basis (auto-k, k_max=" << k_svd
             << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
             << ", edge_margin=" << ctx.woodbury_edge_margin
             << ", edge_confirm=" << ctx.woodbury_edge_confirm << ") ..." << std::endl;
     } else if (EIG99_k) {
         // Starting guess scales with n (5% of n) instead of a flat constant,
-        // floored at auto-k's 2500 and capped at 25000. The escalation loop
+        // floored at auto-k's 1200 and capped at 25000. The escalation loop
         // below doubles this (warm-started) if the mass target isn't reached
         // within budget, so this only needs to be in the right ballpark —
-        // but a flat large default actively hurts small/medium cohorts.
+        // but a flat large default actively hurts small/medium cohorts: the
+        // previous default of min(n-1, 25000) collapses to ~n-1 whenever
+        // n < 25000, forcing a near-full-rank rSVD on the very first pass
+        // (e.g. n=15306 started at k_svd=15305 — a ~16800-column sketch —
+        // just to discover the true crossing was k=868; 1880s and 14.7GB RSS
+        // vs. 20s and 2.76GB for an equivalent fixed-k=1302 call with no
         // search). At n=500k, 5% still lands at the original 25000.
-        const int start_guess = std::clamp(n / 20, 2500, 25000);
+        const int start_guess = std::clamp(n / 20, 1200, 25000);
         k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, start_guess);
         LOGGER << "\nComputing Woodbury basis (EIG99-k, k_max=" << k_svd
             << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
@@ -888,17 +896,24 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     }
     if (k_svd >= n) LOGGER.e(0, "--reml-woodbury rank must be < n.");
 
-    const Eigen::MatrixXd& K_dbl = ctx.A[ctx.r_indx[0]];
-    const double trace_K_full = K_dbl.diagonal().sum();
+    const Eigen::MatrixXd& K_dbl = ctx.A[ctx.r_indx[0]];  // empty when reml_svd_chunked
+    const double trace_K_full = ctx.reml_svd_chunked
+        ? gcta_chunked::chunked_diagonal(ctx.grm_tile_reader, n, ctx.reml_svd_chunk_size).sum()
+        : K_dbl.diagonal().sum();
 
     // Precompute the criteria that don't depend on k_svd.
     double lambda_plus = 0.0;
     if (auto_k) {
         double M = 0.0;
-        if (ctx.grm_N.rows() == n && ctx.grm_N.cols() == n)
+        if (ctx.grm_N.rows() == n && ctx.grm_N.cols() == n) {
+            if (ctx.reml_svd_chunked)
+                LOGGER.w(0, "--reml-svd-chunked: ctx.grm_N is a dense n x n matrix — this defeats "
+                            "the memory savings from chunking K. If your SNP-count-per-pair GRM_N "
+                            "is roughly constant, pass it as a 1x1 scalar via ctx.grm_N instead.");
             M = ctx.grm_N.diagonal().mean();
-        else if (ctx.grm_N.size() == 1)
+        } else if (ctx.grm_N.size() == 1) {
             M = ctx.grm_N(0, 0);
+        }
         if (M <= 0.0)
             LOGGER.e(0, "--reml-woodbury auto: cannot determine SNP count. Use --reml-woodbury <k>.");
         const double gamma = static_cast<double>(n) / M;
@@ -912,8 +927,14 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     // scattered writes — see the loader's own comment. So there's nothing to
     // gain from a symmetric-aware BLAS call here (dsymm/dsymv) versus a
     // plain dgemm/dgemv, and dsymm has historically been the less-tuned
-    // kernel in some BLAS backends; use the plain product.
+    // kernel in some BLAS backends; use the plain product. In chunked mode,
+    // K is never densely resident — apply() reads lower-triangular tiles on
+    // demand instead (see chunked_grm_matvec.hpp for the accumulation math).
     auto apply = [&](const auto& X) -> Eigen::MatrixXd {
+        if (ctx.reml_svd_chunked) {
+            const Eigen::MatrixXd Xd = X;  // materialize once; chunked path re-reads K per call regardless
+            return gcta_chunked::chunked_symmetric_matvec(ctx.grm_tile_reader, n, ctx.reml_svd_chunk_size, Xd);
+        }
         return K_dbl * X;
     };
 
@@ -1071,12 +1092,21 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     if (EIG99_k)
         ctx.tail_d_var = 0.0;  // tail mass < 1% by construction; correction negligible
     else {
-        double diag_sq = K_dbl.diagonal().squaredNorm();
-        double off_sq  = 0.0;
-        #pragma omp parallel for reduction(+:off_sq) schedule(static)
-        for (int j = 0; j < n; ++j)
-            off_sq += K_dbl.col(j).tail(n - j - 1).squaredNorm();
-        const double trace_K2    = diag_sq + 2.0 * off_sq;
+        double trace_K2;
+        if (ctx.reml_svd_chunked) {
+            // One extra full pass over every tile — comparable cost to a
+            // single apply() call, done once here rather than per
+            // escalation round. Unlike trace(K), this genuinely needs every
+            // off-diagonal entry, so there's no cheaper chunked shortcut.
+            trace_K2 = gcta_chunked::chunked_trace_K_squared(ctx.grm_tile_reader, n, ctx.reml_svd_chunk_size);
+        } else {
+            double diag_sq = K_dbl.diagonal().squaredNorm();
+            double off_sq  = 0.0;
+            #pragma omp parallel for reduction(+:off_sq) schedule(static)
+            for (int j = 0; j < n; ++j)
+                off_sq += K_dbl.col(j).tail(n - j - 1).squaredNorm();
+            trace_K2 = diag_sq + 2.0 * off_sq;
+        }
         const double tail_sum_sq = trace_K2 - eval.squaredNorm();
         ctx.tail_d_var = std::max(0.0, tail_sum_sq / static_cast<double>(n - k)
                                         - ctx.lambda_tail * ctx.lambda_tail);
