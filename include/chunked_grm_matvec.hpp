@@ -81,7 +81,8 @@ inline Eigen::MatrixXd chunked_symmetric_matvec(
             if (i == j) {
                 // Diagonal block: only its own lower triangle is valid data
                 // (mirrors how it was written); mirror locally before use.
-                const Eigen::MatrixXd tile_full = tile.selfadjointView<Eigen::Lower>();
+                Eigen::MatrixXd tile_full = tile.selfadjointView<Eigen::Lower>();
+                tile.resize(0, 0);  // fully absorbed into tile_full; not needed for the GEMM below
                 Y.middleRows(rs, re - rs).noalias() += tile_full * X.middleRows(rs, re - rs);
             } else {
                 // Off-diagonal: tile = K[B_i, B_j]; reflect its transpose
@@ -96,7 +97,7 @@ inline Eigen::MatrixXd chunked_symmetric_matvec(
 }
 
 // Diagonal of K, needed for trace(K) (used by both auto-k's lambda_plus
-// bookkeeping-adjacent checks and EIGMASS's target mass) without reading any
+// bookkeeping-adjacent checks and EIG99's target mass) without reading any
 // off-diagonal data at all — just the m diagonal tiles' own diagonals.
 inline Eigen::VectorXd chunked_diagonal(const TileReader& read_tile, int n, int block_size) {
     const BlockPartition part(n, block_size);
@@ -110,7 +111,7 @@ inline Eigen::VectorXd chunked_diagonal(const TileReader& read_tile, int n, int 
     return d;
 }
 
-// trace(K^2) = sum of squares of every entry of K. Needed by the non-EIGMASS
+// trace(K^2) = sum of squares of every entry of K. Needed by the non-EIG99
 // tail-variance correction (tail_d_var), which — unlike trace(K) — genuinely
 // needs every off-diagonal entry, not just the diagonal. Reuses the same
 // lower-triangular tile grid: a diagonal tile's contribution is the squared
@@ -127,9 +128,10 @@ inline double chunked_trace_K_squared(const TileReader& read_tile, int n, int bl
         const int rs = part.block_start(i), re = part.block_end(i);
         for (int j = 0; j <= i; ++j) {
             const int cs = part.block_start(j), ce = part.block_end(j);
-            const Eigen::MatrixXd tile = read_tile(rs, re, cs, ce);
+            Eigen::MatrixXd tile = read_tile(rs, re, cs, ce);
             if (i == j) {
-                const Eigen::MatrixXd tile_full = tile.selfadjointView<Eigen::Lower>();
+                Eigen::MatrixXd tile_full = tile.selfadjointView<Eigen::Lower>();
+                tile.resize(0, 0);
                 total += tile_full.squaredNorm();
             } else {
                 total += 2.0 * tile.squaredNorm();

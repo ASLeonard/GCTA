@@ -925,10 +925,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     // K is never densely resident — apply() reads lower-triangular tiles on
     // demand instead (see chunked_grm_matvec.hpp for the accumulation math).
     auto apply = [&](const auto& X) -> Eigen::MatrixXd {
-        if (ctx.reml_svd_chunked) {
-            const Eigen::MatrixXd Xd = X;  // materialize once; chunked path re-reads K per call regardless
-            return gcta_chunked::chunked_symmetric_matvec(ctx.grm_tile_reader, n, ctx.reml_svd_chunk_size, Xd);
-        }
+        if (ctx.reml_svd_chunked)
+            return gcta_chunked::chunked_symmetric_matvec(ctx.grm_tile_reader, n, ctx.reml_svd_chunk_size, X);
         return K_dbl * X;
     };
 

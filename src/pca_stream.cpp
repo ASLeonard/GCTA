@@ -206,17 +206,41 @@ void PCAStream::processMain()
             for (int i = 0; i < n; ++i)
                 if (kp[i] < 0)
                     LOGGER.e(0, "--pca-stream: individual [" + analysis_ids[i] + "] not found in GRM.");
-            G_dense.resize(n, n);
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < n; ++i)
-                    G_dense(i, j) = G_full(kp[i], kp[j]);
+
+            // Fast path: no --keep/--remove (or a --keep/--remove that
+            // happens to preserve GRM order) means kp is the identity — skip
+            // the copy entirely rather than holding G_full and G_dense both
+            // fully resident at once for no reason.
+            const int n_grm = static_cast<int>(loaded_ids.size());
+            bool is_identity = (n_grm == n);
+            for (int i = 0; i < n && is_identity; ++i)
+                if (kp[i] != i) is_identity = false;
+
+            if (is_identity) {
+                G_dense = std::move(G_full);
+            } else {
+                G_dense.resize(n, n);
+                // Column-first traversal for column-major Eigen storage —
+                // same pattern as MLMA_stream.cpp's G_n subsetting: for fixed
+                // j, varying i reads down one column of G_full (contiguous
+                // range, even though kp[i] visits it out of order), rather
+                // than jumping across the whole matrix.
+                for (int j = 0; j < n; ++j) {
+                    const int src_col = kp[j];
+                    for (int i = 0; i < n; ++i)
+                        G_dense(i, j) = G_full(kp[i], src_col);
+                }
+                // G_full (n_grm x n_grm, potentially much larger than G_dense
+                // when heavily filtered) goes out of scope at the end of this
+                // else-block regardless, but free it explicitly right here —
+                // no reason to keep it alive through the rest of this branch.
+                G_full.resize(0, 0);
+            }
         }
 
         auto apply = [&](const auto& X) -> Eigen::MatrixXd {
-            if (svd_chunked) {
-                const Eigen::MatrixXd Xd = X;  // materialize once regardless of X's expression type
-                return gcta_chunked::chunked_symmetric_matvec(chunked_reader, n, chunk_size, Xd);
-            }
+            if (svd_chunked)
+                return gcta_chunked::chunked_symmetric_matvec(chunked_reader, n, chunk_size, X);
             return G_dense * X;
         };
 
@@ -235,6 +259,12 @@ void PCAStream::processMain()
             LOGGER.e(0, string("--pca-stream failed: ") + e.what());
         }
 
+        // Neither is needed past this point — G_dense (up to n x n) and the
+        // chunked reader's mmap can both be released before the O(n) file
+        // writes below, rather than sitting at peak size through them.
+        G_dense.resize(0, 0);
+        chunked_reader = nullptr;
+
         // ---- Write .eigenval / .eigenvec — identical format to gcta::pca()'s writer ----
         const string eval_file = out_prefix + ".eigenval";
         std::ofstream o_eval(eval_file);
@@ -246,6 +276,16 @@ void PCAStream::processMain()
         const string evec_file = out_prefix + ".eigenvec";
         std::ofstream o_evec(evec_file);
         if (!o_evec) LOGGER.e(0, "cannot open the file [" + evec_file + "] to write.");
+
+        // res.eigenvectors is n x out_pc_num, column-major: reading it row by
+        // row (one individual's full PC vector at a time, which is what the
+        // output format needs) strides by n elements between each PC value.
+        // Materializing the transpose once (out_pc_num x n, still
+        // column-major) makes each individual's PCs a contiguous column
+        // instead — one O(n*out_pc_num) sequential copy up front in exchange
+        // for a cache-friendly access pattern in the n-times-larger write
+        // loop that follows.
+        const Eigen::MatrixXd evec_t = res.eigenvectors.transpose();
         for (int i = 0; i < n; ++i) {
             // analysis_ids[i] is "FID\tIID" (Pheno::read_sublist convention,
             // same as match_ids_to_grm's expected input elsewhere); V1's
@@ -254,7 +294,7 @@ void PCAStream::processMain()
             const size_t tab = id.find('\t');
             if (tab != string::npos) id[tab] = ' ';
             o_evec << id;
-            for (int j = 0; j < out_pc_num; ++j) o_evec << " " << res.eigenvectors(i, j);
+            for (int j = 0; j < out_pc_num; ++j) o_evec << " " << evec_t(j, i);
             o_evec << "\n";
         }
         o_evec.close();

@@ -45,7 +45,7 @@ struct EighResult {
 // Oversampling doesn't need to grow with k_target for generic top-k subspace
 // accuracy (HMT's error bound doesn't require it). But callers that use
 // eigenvalues near the *tail* of a large k_target block to locate a spectral
-// threshold (e.g. Woodbury's auto-k Marchenko-Pastur edge, or its EIGMASS mass
+// threshold (e.g. Woodbury's auto-k Marchenko-Pastur edge, or its EIG99 mass
 // target) are relying on exactly the estimates that are least accurate —
 // Rayleigh-Ritz quality degrades toward the edge of the requested block, and
 // GRM eigenvalues cluster tightly there by construction (that's the point of
@@ -112,17 +112,33 @@ EighResult power_iterate_and_project(
 
     for (int pi = 0; pi < power_iter; ++pi) {
         Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
+        Y.resize(0, 0);  // qr(Y)'s constructor already copied what it needs internally
         qr_scratch.setIdentity();
         Y = apply(qr.householderQ() * qr_scratch);
     }
 
     Eigen::HouseholderQR<Eigen::MatrixXd> qr(Y);
+    Y.resize(0, 0);  // same: redundant with qr's internal copy from here on
     qr_scratch.setIdentity();
     Eigen::MatrixXd Q = qr.householderQ() * qr_scratch;
 
     Eigen::MatrixXd AQ = apply(Q);
     Eigen::MatrixXd B  = Q.transpose() * AQ;   // k_ext x k_ext, symmetric
     AQ.resize(0, 0);
+
+    // B can legitimately reach the tens-of-thousands under EIG99 escalation
+    // on a slowly-decaying spectrum. SelfAdjointEigenSolver, when
+    // EIGEN_USE_LAPACKE is defined, routes to LAPACKE_dsyevd — whose O(n^2)
+    // workspace size calculation overflows int32 at n >= 32766 (same
+    // threshold and same underlying issue as grm.cpp's dsyevd path; see the
+    // warning there). Unlike that path, this one doesn't yet have the
+    // gcta_dsyevr-based fix — flagging rather than silently risking it.
+    if (k_ext >= 32766)
+        throw std::runtime_error(
+            "power_iterate_and_project: k_ext=" + std::to_string(k_ext) +
+            " reaches SelfAdjointEigenSolver's known int32 workspace overflow threshold "
+            "(dsyevd, n>=32766 — see grm.cpp's equivalent warning). This needs the "
+            "gcta_dsyevr-based fix wired in before it's safe to run at this k_ext.");
 
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(B);
     if (es.info() != Eigen::Success)
