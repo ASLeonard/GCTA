@@ -438,11 +438,11 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options["grm"] = options_in["--grm"][0];
         options_in.erase("--grm");
 
-        // --reml-woodbury-basis [k]  (k optional; -1 = auto-k, -2 = EIGMASS)
+        // --reml-woodbury [k]  (k optional; -1 = auto-k, -2 = EIG99)
         if (options_in.find("--reml-woodbury") != options_in.end()) {
             const auto& vals = options_in["--reml-woodbury"];
             if (!vals.empty() && !vals[0].empty()) {
-                if (vals[0] == "EIGMASS")
+                if (vals[0] == "EIG99")
                     options_d["woodbury_rank"] = -2.0;  // Eigenvalue mass k
                 else if (vals[0] == "auto")
                     options_d["woodbury_rank"] = -1.0;  // auto-k
@@ -491,12 +491,57 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             options_d["svd_chunk_size"] = std::stod(vals[0]);
             options_in.erase("--reml-svd-chunk-size");
         }
-        if (options_in.find("--reml-woodbury-eigen-mass") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury-eigen-mass"];
+        // These three were previously read from options_d further down
+        // (woodbury_edge_margin / woodbury_edge_confirm / woodbury_eig99_k_buffer)
+        // with no CLI parsing block actually populating them — silently
+        // always falling back to their hardcoded defaults regardless of what
+        // was passed on the command line. Fixed alongside adding the new
+        // memory-budget flag, since all four are the same kind of numeric
+        // --reml-woodbury-* option and belong together.
+        if (options_in.find("--reml-woodbury-edge-margin") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-edge-margin"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--reml-woodbury-eigen-mass requires a value between 0 and 1.");
-            options_d["reml_eigen_mass"] = std::stod(vals[0]);
-            options_in.erase("--reml-woodbury-eigen-mass");
+                LOGGER.e(0, "--reml-woodbury-edge-margin requires a fractional argument (e.g. 0.15).");
+            options_d["woodbury_edge_margin"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-edge-margin");
+        }
+        if (options_in.find("--reml-woodbury-edge-confirm") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-edge-confirm"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-edge-confirm requires an integer argument.");
+            options_d["woodbury_edge_confirm"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-edge-confirm");
+        }
+        if (options_in.find("--reml-woodbury-eig99-k-buffer") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-eig99-k-buffer"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-eig99-k-buffer requires an integer argument.");
+            options_d["woodbury_eig99_k_buffer"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-eig99-k-buffer");
+        }
+        // Reliability threshold for Nystrom's C-eigenvalue truncated
+        // pseudo-inverse (relative to C's largest eigenvalue); directions at
+        // or below it are masked to zero rather than clamped-and-divided.
+        // Default 1e-4 — see the field comment in RemlCtx.hpp. Increase if a
+        // "sum of eigenvalues exceeds trace(K)" error fires.
+        if (options_in.find("--reml-woodbury-nystrom-reg") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-nystrom-reg"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-nystrom-reg requires a fractional argument (e.g. 1e-4).");
+            options_d["woodbury_nystrom_reg"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-nystrom-reg");
+        }
+        // --reml-woodbury-mem-budget <GB>: hard cap on k_svd derived from an
+        // approximate rSVD sketch memory budget, independent of n-1. See the
+        // reml_svd_mem_budget_gb comment in RemlCtx.hpp — chunking K does
+        // nothing to bound this, since the sketch buffers scale with k_ext
+        // regardless of whether K itself is chunked or dense.
+        if (options_in.find("--reml-woodbury-mem-budget") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-mem-budget"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-mem-budget requires a GB argument (e.g. 32).");
+            options_d["woodbury_mem_budget_gb"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-mem-budget");
         }
         if (options_in.find("--reml-trace-approx") != options_in.end()) {
             options["trace_approx"] = "1";
@@ -747,17 +792,19 @@ void MLMA::processMain()
                 ? options_d.at("woodbury_edge_margin") : 0.15;
             const int    woodbury_edge_confirm = options_d.count("woodbury_edge_confirm")
                 ? static_cast<int>(options_d.at("woodbury_edge_confirm")) : 20;
-            const int woodbury_eigmass_k_buffer = options_d.count("woodbury_eigmass_k_buffer")
-                ? static_cast<int>(options_d.at("woodbury_eigmass_k_buffer")) : 20;
+            const int woodbury_eig99_k_buffer = options_d.count("woodbury_eig99_k_buffer")
+                ? static_cast<int>(options_d.at("woodbury_eig99_k_buffer")) : 20;
+            const double woodbury_mem_budget_gb = options_d.count("woodbury_mem_budget_gb")
+                ? options_d.at("woodbury_mem_budget_gb") : 0.0;
 
             if (reml_alg < 0 || reml_alg > 2)
                 LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
             if (reml_diagV_adj < 0 || reml_diagV_adj > 2)
                 LOGGER.e(0, "--reml-diagV-adj should be 0, 1, or 2.");
             if (woodbury_rank != 0 && reml_alg == 1)
-                LOGGER.e(0, "--reml-woodbury-basis is incompatible with Fisher-scoring REML (--reml-alg 1). Use AI-REML (default) or EM-REML (--reml-alg 2).");
+                LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML (--reml-alg 1). Use AI-REML (default) or EM-REML (--reml-alg 2).");
             if (woodbury_nystrom && woodbury_rank == 0)
-                LOGGER.e(0, "--reml-woodbury-nystrom requires --reml-woodbury-basis <k|auto|EIGMASS>.");
+                LOGGER.e(0, "--reml-woodbury-nystrom requires --reml-woodbury <k|auto|EIG99>.");
 
             const vector<double> priors =
                 options_vd.count("reml_priors") ? options_vd.at("reml_priors") : vector<double>{};
@@ -798,9 +845,18 @@ void MLMA::processMain()
             ctx.reml_inv_mtd             = 0;  // LLT
             ctx.reml_diagV_adj           = reml_diagV_adj;
             ctx.woodbury_rank            = woodbury_rank;
+            if (svd_chunked && woodbury_rank == 0)
+                LOGGER.e(0, "--reml-svd-chunked requires --reml-woodbury. Every REML code path "
+                            "outside compute_woodbury_basis (the trace/projection machinery, "
+                            "Hutch++, dense/exact REML) still reads ctx.A[...] directly and treats "
+                            "an empty component as \"identity\" — chunked mode leaves it empty for "
+                            "a different reason, and nothing else knows the difference yet.");
             ctx.woodbury_edge_margin        = woodbury_edge_margin;
             ctx.woodbury_edge_confirm       = woodbury_edge_confirm;
-            ctx.woodbury_eigmass_k_buffer  = woodbury_eigmass_k_buffer;
+            ctx.woodbury_eig99_k_buffer  = woodbury_eig99_k_buffer;
+            ctx.woodbury_nystrom_reg     = options_d.count("woodbury_nystrom_reg")
+                ? options_d.at("woodbury_nystrom_reg") : 1e-4;
+            ctx.reml_svd_mem_budget_gb   = woodbury_mem_budget_gb;
             ctx.woodbury_nystrom         = woodbury_nystrom;
             ctx.reml_svd_chunked         = svd_chunked;
             ctx.reml_svd_chunk_size      = options_d.count("svd_chunk_size")

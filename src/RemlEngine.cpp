@@ -840,9 +840,9 @@ namespace reml {
 
 void compute_woodbury_basis(RemlCtx& ctx) {
     if (ctx.reml_mtd == 1)
-        LOGGER.e(0, "--reml-woodbury-basis is incompatible with Fisher-scoring REML.");
+        LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML.");
     if ((int)ctx.r_indx.size() != 2)
-        LOGGER.e(0, "--reml-woodbury-basis supports only single-GRM models.");
+        LOGGER.e(0, "--reml-woodbury supports only single-GRM models.");
     if (ctx.A[ctx.r_indx[0]].size() == 0 && !ctx.reml_svd_chunked)
         LOGGER.e(0, "--reml-woodbury: GRM component is identity; cannot compute basis.");
     if (ctx.reml_svd_chunked && !ctx.grm_tile_reader)
@@ -850,11 +850,11 @@ void compute_woodbury_basis(RemlCtx& ctx) {
                     "— the GRM component wasn't actually loaded either way.");
 
     const bool auto_k = (ctx.woodbury_rank == -1.0);
-    const bool EIGMASS_k = (ctx.woodbury_rank == -2.0);
+    const bool EIG99_k = (ctx.woodbury_rank == -2.0);
     const int  n      = ctx.n;
     int k = ctx.woodbury_rank;
 
-    // For auto-k / EIGMASS-k, an explicit --reml-woodbury-k-max is a hard
+    // For auto-k / EIG99-k, an explicit --reml-woodbury-k-max is a hard
     // ceiling — the user asked for a specific bound and we respect it,
     // including the "not reached within k_max" warning below. Without one,
     // the value below is only a *starting* budget: if the signal/mass
@@ -863,32 +863,63 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     // than silently truncating the estimated rank. Total cost of this
     // doubling search is bounded by ~2x the cost of a single direct
     // computation at the k that was actually needed.
+    // Memory-budget-derived ceiling on k_svd, independent of n-1. Chunking K
+    // (reml_svd_chunked) does nothing to bound this — Omega/Y/qr_scratch/Q
+    // scale as n*k_ext regardless of whether K itself is chunked or dense.
+    int k_svd_budget_ceiling = n - 1;
+    if (ctx.reml_svd_mem_budget_gb > 0.0) {
+        const double budget_bytes = ctx.reml_svd_mem_budget_gb * 1e9;
+        const int max_k_ext = static_cast<int>(budget_bytes / (5.0 * n * 8.0));
+        // k_ext = k_svd + oversample, oversample capped at 200 (see
+        // recommended_oversample) — subtract a fixed margin to get a k_svd
+        // ceiling without a circular dependency on that function.
+        k_svd_budget_ceiling = std::min(k_svd_budget_ceiling, std::max(20, max_k_ext - 200));
+        LOGGER << "--reml-woodbury-mem-budget=" << ctx.reml_svd_mem_budget_gb
+               << "GB -> k_svd capped at " << k_svd_budget_ceiling << std::endl;
+    }
+
     const bool k_max_is_hard_ceiling = (ctx.woodbury_k_max > 0);
     int k_svd;
     if (auto_k) {
-        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, 2500);
+        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min({n - 1, k_svd_budget_ceiling, 1200});
         LOGGER << "\nComputing Woodbury basis (auto-k, k_max=" << k_svd
             << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
             << ", edge_margin=" << ctx.woodbury_edge_margin
             << ", edge_confirm=" << ctx.woodbury_edge_confirm << ") ..." << std::endl;
-    } else if (EIGMASS_k) {
+    } else if (EIG99_k) {
         // Starting guess scales with n (5% of n) instead of a flat constant,
-        // floored at auto-k's 2500 and capped at 25000. The escalation loop
+        // floored at auto-k's 1200 and capped at 25000. The escalation loop
         // below doubles this (warm-started) if the mass target isn't reached
         // within budget, so this only needs to be in the right ballpark —
-        // but a flat large default actively hurts small/medium cohorts.
-        const int start_guess = std::clamp(n / 20, 2500, 25000);
-        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min(n - 1, start_guess);
-        LOGGER << "\nComputing Woodbury basis (EIGMASS-k, k_max=" << k_svd
+        // but a flat large default actively hurts small/medium cohorts: the
+        // previous default of min(n-1, 25000) collapses to ~n-1 whenever
+        // n < 25000, forcing a near-full-rank rSVD on the very first pass
+        // (e.g. n=15306 started at k_svd=15305 — a ~16800-column sketch —
+        // just to discover the true crossing was k=868; 1880s and 14.7GB RSS
+        // vs. 20s and 2.76GB for an equivalent fixed-k=1302 call with no
+        // search). At n=500k, 5% still lands at the original 25000.
+        const int start_guess = std::clamp(n / 20, 1200, 25000);
+        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min({n - 1, k_svd_budget_ceiling, start_guess});
+        LOGGER << "\nComputing Woodbury basis (EIG99-k, k_max=" << k_svd
             << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
             << ") ..." << std::endl;
     } else {
         if (k <= 0)
-            LOGGER.e(0, "--reml-woodbury-basis rank must be positive for fixed-k mode.");
+            LOGGER.e(0, "--reml-woodbury rank must be positive for fixed-k mode.");
+        if (k > k_svd_budget_ceiling)
+            LOGGER.e(0, "--reml-woodbury " + std::to_string(k) + " exceeds the k_svd ceiling ("
+                        + std::to_string(k_svd_budget_ceiling) + ") implied by --reml-woodbury-mem-budget="
+                        + std::to_string(ctx.reml_svd_mem_budget_gb) + "GB; raise the budget or lower the rank.");
         k_svd = k;
         LOGGER << "\nComputing Woodbury low-rank basis (k=" << k << ") ..." << std::endl;
     }
-    if (k_svd >= n) LOGGER.e(0, "--reml-woodbury-basis rank must be < n.");
+    if (k_max_is_hard_ceiling && k_svd > k_svd_budget_ceiling) {
+        LOGGER.w(0, "--reml-woodbury-k-max=" + std::to_string(k_svd) +
+                    " exceeds the --reml-woodbury-mem-budget-implied ceiling ("
+                    + std::to_string(k_svd_budget_ceiling) + "); clamping to the budget.");
+        k_svd = k_svd_budget_ceiling;
+    }
+    if (k_svd >= n) LOGGER.e(0, "--reml-woodbury rank must be < n.");
 
     const Eigen::MatrixXd& K_dbl = ctx.A[ctx.r_indx[0]];  // empty when reml_svd_chunked
     const double trace_K_full = ctx.reml_svd_chunked
@@ -909,11 +940,11 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             M = ctx.grm_N(0, 0);
         }
         if (M <= 0.0)
-            LOGGER.e(0, "--reml-woodbury-basis auto: cannot determine SNP count. Use --reml-woodbury-basis <k>.");
+            LOGGER.e(0, "--reml-woodbury auto: cannot determine SNP count. Use --reml-woodbury <k>.");
         const double gamma = static_cast<double>(n) / M;
         lambda_plus = std::pow(1.0 + std::sqrt(gamma), 2.0);
     }
-    const double target_mass = EIGMASS_k ? (ctx.reml_eigen_mass * trace_K_full) : 0.0;
+    const double target_mass = EIG99_k ? (ctx.reml_eigen_mass / 100.0 * trace_K_full) : 0.0;
 
     // K_dbl is fully populated (both triangles) by the GRM loader, which
     // scatter-fills the lower triangle then explicitly mirrors it via
@@ -934,7 +965,7 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     Eigen::MatrixXd evec_full;
     int k_signal = 0;  // auto-k: eigenvalues found strictly above lambda_plus
     int k_edge   = 0;  // auto-k: k after confirming the edge band is cleared
-    int k_EIGMASS  = 0;  // EIGMASS-k: eigenmodes needed to reach the buffered mass target
+    int k_EIG99  = 0;  // EIG99-k: eigenmodes needed to reach the buffered mass target
 
     for (;;) {
         const int oversample = gcta_eigh::recommended_oversample(k_svd);
@@ -948,8 +979,20 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         // instead — same GRM/sample set means the PCA .eigenvec top
         // eigenvectors are already a subspace of what this call is
         // trying to recover.
+        // EIG99-k does NOT warm-start, unlike auto-k. Unlike auto-k's target
+        // (a well-separated edge), EIG99-k needs to accurately sum well into
+        // the bulk — and if a previous, smaller-k_ext round's eigenvector
+        // estimates were imperfect there (bulk/closely-spaced eigenvalues are
+        // inherently the hardest case for power iteration to resolve), warm
+        // starting from them risks carrying that imperfection forward rather
+        // than correcting it in the 3 power iterations that follow. A fresh
+        // random probe each round matches what a genuinely independent
+        // top-k_svd computation would do. This is a testable hypothesis for
+        // the "escalates to n-1 without ever converging" failure mode, not a
+        // certainty — worth confirming against a direct exact/manual check
+        // at a specific k_svd if it recurs.
         const int k_prev = static_cast<int>(ctx.Uk.cols());
-        const bool has_warm = (!ctx.woodbury_nystrom && k_prev > 0 && ctx.Uk.rows() == n);
+        const bool has_warm = (!ctx.woodbury_nystrom && !EIG99_k && k_prev > 0 && ctx.Uk.rows() == n);
         auto [omega, Y_init] = gcta_eigh::build_randomized_sketch(
             apply, n, k_ext, has_warm ? &ctx.Uk : nullptr);
         Eigen::MatrixXd Y = std::move(Y_init);
@@ -961,14 +1004,40 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             if (es_C.info() != Eigen::Success)
                 LOGGER.e(0, "Woodbury Nystrom: eigendecomposition of sketch C failed.");
             const double lam_max = es_C.eigenvalues().maxCoeff();
-            const double eps_C   = 1e-8 * std::max(lam_max, 1.0);
-            Eigen::VectorXd lam_sqrt_inv =
-                es_C.eigenvalues().cwiseMax(eps_C).cwiseSqrt().cwiseInverse();
+            const double eps_C   = ctx.woodbury_nystrom_reg * std::max(lam_max, 1.0);
+            // Truncated pseudo-inverse, not clamp-then-invert: C = Omega^T A
+            // Omega need not be PSD when A itself isn't (a real, estimated
+            // GRM commonly has a genuinely negative eigenvalue tail, not
+            // just floating-point noise near zero) — cwiseMax(eps_C) forces
+            // an unreliable direction up to eps_C and then still divides by
+            // it, amplifying whatever's there by a bounded-but-real factor.
+            // Masking those directions to zero instead means they simply
+            // stop contributing to Z, the standard Moore-Penrose-style
+            // truncated-SVD approach to inverting a near-singular operator,
+            // rather than a bounded version of the same amplification.
+            Eigen::VectorXd lam_sqrt_inv = es_C.eigenvalues().unaryExpr([eps_C](double lam) {
+                return (lam > eps_C) ? 1.0 / std::sqrt(lam) : 0.0;
+            });
             Y = Y * (es_C.eigenvectors() * lam_sqrt_inv.asDiagonal());
             const gcta_eigh::ThinSVDResult svd = gcta_eigh::tall_skinny_thin_svd(Y);
             Y.resize(0, 0);
             eval_full = svd.singular_values.head(k_svd).array().square();
             evec_full = svd.U.leftCols(k_svd);
+
+            // Sanity check kept as defense-in-depth: with masking instead of
+            // clamping, this should no longer be reachable in the way it was
+            // before (there's no division that can amplify past trace(K)),
+            // but a subset of eigenvalues summing past the trace is still an
+            // impossible result worth catching if it ever occurs from some
+            // other numerical path.
+            const double eval_sum = eval_full.sum();
+            if (eval_sum > trace_K_full * 1.01)
+                throw std::runtime_error(
+                    "Woodbury Nystrom: sum of estimated eigenvalues (" + std::to_string(eval_sum) +
+                    ") exceeds trace(K) (" + std::to_string(trace_K_full) + ") — impossible for real "
+                    "eigenvalues. Increase --reml-woodbury-nystrom-reg (currently " +
+                    std::to_string(ctx.woodbury_nystrom_reg) + ") or use the power-iteration path "
+                    "instead of Nystrom for this GRM.");
         } else {
             omega.resize(0, 0);
             constexpr int power_iter = 3;
@@ -982,7 +1051,7 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             }
         }
 
-        if (!auto_k && !EIGMASS_k) break;  // fixed-k: no criterion to satisfy, never escalates
+        if (!auto_k && !EIG99_k) break;  // fixed-k: no criterion to satisfy, never escalates
 
         bool satisfied;
         if (auto_k) {
@@ -1009,26 +1078,28 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             k_edge    = satisfied ? run_start : k_svd;
         } else {
             double cumulative = 0.0;
-            k_EIGMASS = k_svd;  // fallback: raw mass target not reached within this budget
+            k_EIG99 = k_svd;  // fallback: raw mass target not reached within this budget
             for (int i = 0; i < static_cast<int>(eval_full.size()); ++i) {
                 cumulative += eval_full[i];
-                if (cumulative >= target_mass) { k_EIGMASS = i + 1; break; }
+                if (cumulative >= target_mass) { k_EIG99 = i + 1; break; }
             }
             // Satisfied only if the buffer eigenvalues past the raw crossing
             // are also within budget — cheap to check since they're usually
             // already sitting in eval_full/evec_full from the current k_svd.
-            satisfied = (k_EIGMASS + ctx.woodbury_eigmass_k_buffer <= k_svd);
+            satisfied = (k_EIG99 + ctx.woodbury_eig99_k_buffer <= k_svd);
         }
 
-        if (satisfied || k_max_is_hard_ceiling || k_svd >= n - 1) break;
+        if (satisfied || k_max_is_hard_ceiling || k_svd >= n - 1 || k_svd >= k_svd_budget_ceiling) break;
 
-        const int k_svd_next = std::min(k_svd * 2, n - 1);
-        LOGGER << "Woodbury " << (auto_k ? "auto-k" : "EIGMASS-k")
+        const int k_svd_next = std::min({k_svd * 2, n - 1, k_svd_budget_ceiling});
+        const char* warm_status = ctx.woodbury_nystrom ? " (Nystrom: no warm start, full recompute)"
+                                 : EIG99_k              ? " (EIG99-k: no warm start, fresh probe)"
+                                                         : " (warm-started)";
+        LOGGER << "Woodbury " << (auto_k ? "auto-k" : "EIG99-k")
                << ": signal not resolved within k=" << k_svd
                << "; expanding budget to k=" << k_svd_next
-               << (ctx.woodbury_nystrom ? " (Nystrom: no warm start, full recompute)" : " (warm-started)")
-               << " ..." << std::endl;
-        if (!ctx.woodbury_nystrom) ctx.Uk = evec_full;   // warm-start the next, larger sketch
+               << warm_status << " ..." << std::endl;
+        if (!ctx.woodbury_nystrom && !EIG99_k) ctx.Uk = evec_full;   // warm-start the next, larger sketch
         k_svd = k_svd_next;
     }
 
@@ -1046,26 +1117,36 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             LOGGER.w(0, "Woodbury auto-k: edge band not confirmed even at k=n-1=" + std::to_string(n - 1)
                      + "; this GRM has near-full effective rank and Woodbury may not offer a "
                        "computational advantage here.");
+        else if (k_edge >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
+            LOGGER.w(0, "Woodbury auto-k: edge band not confirmed within the memory-budget-implied "
+                        "ceiling k=" + std::to_string(k_svd) + " (--reml-woodbury-mem-budget="
+                     + std::to_string(ctx.reml_svd_mem_budget_gb) + "GB); raise the budget if the "
+                       "true signal rank is larger, or accept this truncation.");
         else if (k_edge >= k_svd)
             LOGGER.w(0, "Woodbury auto-k: edge band not confirmed within k_max=" + std::to_string(k_svd)
                      + "; clamped to k_max. Consider a larger --reml-woodbury-k-max or a wider "
                        "--reml-woodbury-edge-margin.");
     }
-    else if (EIGMASS_k) {
-        k = std::max(20, std::min(k_svd, k_EIGMASS + ctx.woodbury_eigmass_k_buffer));
+    else if (EIG99_k) {
+        k = std::max(20, std::min(k_svd, k_EIG99 + ctx.woodbury_eig99_k_buffer));
         double cumulative = 0.0;
         for (int i = 0; i < k; ++i) cumulative += eval_full[i];
         const double rho = cumulative / trace_K_full;
-        LOGGER << "EIGMASS: trace(K)=" << trace_K_full
-            << ", raw " << ctx.reml_eigen_mass << "% mass crossing at k=" << k_EIGMASS
-            << ", using k=" << k << " (+" << ctx.woodbury_eigmass_k_buffer << " eigenvalue buffer)"
+        LOGGER << "EIG99: trace(K)=" << trace_K_full
+            << ", raw " << ctx.reml_eigen_mass << "% mass crossing at k=" << k_EIG99
+            << ", using k=" << k << " (+" << ctx.woodbury_eig99_k_buffer << " eigenvalue buffer)"
             << ", captured mass rho=" << rho << std::endl;
-        if (k_EIGMASS >= k_svd && k_svd >= n - 1)
-            LOGGER.w(0, "Woodbury EIGMASS: mass target not reached even at k=n-1="
+        if (k_EIG99 >= k_svd && k_svd >= n - 1)
+            LOGGER.w(0, "Woodbury EIG99: mass target not reached even at k=n-1="
                     + std::to_string(n - 1) + "; this GRM has near-full effective rank and "
                       "Woodbury may not offer a computational advantage here.");
-        else if (k_EIGMASS >= k_svd)
-            LOGGER.w(0, "Woodbury EIGMASS: mass target not reached within k_max="
+        else if (k_EIG99 >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
+            LOGGER.w(0, "Woodbury EIG99: mass target not reached within the memory-budget-implied "
+                        "ceiling k=" + std::to_string(k_svd) + " (--reml-woodbury-mem-budget="
+                     + std::to_string(ctx.reml_svd_mem_budget_gb) + "GB); raise the budget if the "
+                       "true mass target needs a larger rank, or accept this truncation.");
+        else if (k_EIG99 >= k_svd)
+            LOGGER.w(0, "Woodbury EIG99: mass target not reached within k_max="
                     + std::to_string(k_svd) + "; increase --reml-woodbury-k-max.");
     }
 
@@ -1081,9 +1162,15 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         ctx.lambda_tail = 0.0;
     }
 
-    if (EIGMASS_k)
-        ctx.tail_d_var = 0.0;  // tail mass < 1% by construction; correction negligible
-    else {
+    // tail_d_var was previously skipped for EIG99 on the reasoning that tail
+    // mass < 1% of trace makes the correction negligible — but mass and
+    // variance aren't the same thing. A tail spanning small positive
+    // eigenvalues through zero into a substantial negative region (as this
+    // GRM's does, past index ~8941) can have real spread even while summing
+    // to under 1% of trace and averaging to something as small as
+    // lambda_tail itself. Computing it costs one extra O(n^2) pass
+    // (trace(K^2)), the same one the non-EIG99 path already pays for.
+    {
         double trace_K2;
         if (ctx.reml_svd_chunked) {
             // One extra full pass over every tile — comparable cost to a

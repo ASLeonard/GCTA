@@ -56,6 +56,16 @@ struct RemlCtx {
     int                      reml_svd_chunk_size = 8000;   // rows/cols per tile
     gcta_chunked::TileReader grm_tile_reader;               // caller-populated when chunked
 
+    // Hard cap on rSVD sketch memory (Omega/Y/qr_scratch/Q, each ~n*k_ext*8
+    // bytes, several live simultaneously during power iteration) as k_ext
+    // escalates. Chunking K (reml_svd_chunked) removes K's own O(n^2)
+    // footprint but does nothing to bound this — it scales with k_ext
+    // identically whether K is chunked or dense, and unbounded escalation on
+    // a pathological (near-full-rank) GRM can reach hundreds of GB before
+    // the "may not offer a computational advantage" warning below even
+    // fires. 0 = no explicit cap (only bounded by n-1, as before).
+    double reml_svd_mem_budget_gb = 0.0;
+
     // ── Config (algorithm control) ────────────────────────────────────────────
     int    reml_mtd                  = 0;     // 0=AI-REML, 1=Fisher, 2=EM-REML
     int    reml_max_iter             = 100;
@@ -73,7 +83,7 @@ struct RemlCtx {
     // rather than by multiplying k_signal by a fixed factor.
     double woodbury_edge_margin      = 0.15;  // relative margin below lambda_plus to confirm past the edge
     int    woodbury_edge_confirm     = 20;    // consecutive sub-margin eigenvalues required to confirm
-    // EIGMASS-k: trace(K) ~ n (GRM diagonals are ~1), and most of that mass
+    // EIG99-k: trace(K) ~ n (GRM diagonals are ~1), and most of that mass
     // sits in the Marchenko-Pastur bulk — many eigenvalues of similar size,
     // not a few outliers — so capturing "the last 0.5%" of trace mass can
     // require a lot more eigenvalues than capturing the first 99%, not a
@@ -82,9 +92,26 @@ struct RemlCtx {
     // past the raw crossing instead: those extra eigenvalues are usually
     // already sitting in the existing k_svd budget's headroom (oversample /
     // starting-budget slack), so this is normally free — no extra rSVD pass.
-    int    woodbury_eigmass_k_buffer = 20;    // extra eigenvalues past the raw reml_eigen_mass crossing
+    int    woodbury_eig99_k_buffer   = 20;    // extra eigenvalues past the raw reml_eigen_mass crossing
     int    woodbury_k_max            = 0;     // rank cap for auto-k (0 → min(n−1,1200))
     bool   woodbury_nystrom          = false; // true → single-pass Nystrom basis
+    // Reliability threshold for C's eigenvalues (relative to C's largest
+    // eigenvalue) before Y*V*Lambda^{-1/2}. C = Omega^T A Omega is PSD in
+    // exact arithmetic only if A itself is — a real, *estimated* GRM
+    // (unlike a clean synthetic PSD matrix) commonly has a genuinely
+    // negative eigenvalue tail, not just floating-point noise, and a random
+    // projection of an indefinite A generically produces an indefinite C.
+    // Directions at or below this threshold are masked to zero contribution
+    // (truncated pseudo-inverse, standard practice for inverting a
+    // near-singular operator) rather than clamped up and still divided —
+    // clamping still amplifies whatever noise sits in that direction by a
+    // bounded factor; masking means it simply stops contributing. This is
+    // why Nystrom (inversion-based) is structurally more fragile here than
+    // the power-iteration path (projection-based, B=Q^TAQ, no division at
+    // all). 1e-4 discards directions more than ~4 orders of magnitude
+    // smaller than the largest as unreliable given a k_ext-sized random
+    // projection.
+    double woodbury_nystrom_reg      = 1e-4;
     bool   reml_trace_approx         = false; // Hutch++ trace (skips n x n P)
     int    reml_trace_approx_nprobes = 90;
     int    reml_trace_power_iter     = 0;     // power-iter for Hutch++ range sketch
@@ -102,7 +129,7 @@ struct RemlCtx {
     // ── Woodbury basis (set by reml::compute_woodbury_basis()) ───────────────
     bool    Vi_use_woodbury = false;
     int     woodbury_rank_  = 0;     // actual rank used (<= woodbury_rank or auto)
-    float   reml_eigen_mass = 0.99f; // fraction of eigenvalue mass captured by Uk
+    float   reml_eigen_mass = 0;     // fraction of eigenvalue mass captured by Uk
     RemlMat Uk;                      // n x k leading eigenvectors of K
     RemlVec dk;                      // k eigenvalues (clamped >= 0)
     double  lambda_tail     = 0.0;   // average bulk eigenvalue
