@@ -314,7 +314,7 @@ void write_hsq_from_ctx(const string& out_prefix, const RemlCtx& ctx)
 // Load a "<prefix>.eigenvec" written by --pca-approx (rSVD or Lanczos) and
 // align its rows to `analysis_ids` (the same FID\tIID order used to build
 // ctx.y / ctx.X / ctx.A[0]), for use as ctx.Uk before reml::compute() so
-// compute_woodbury_basis()'s existing has_warm path seeds its rSVD sketch
+// compute_woodbury_basis_basis()'s existing has_warm path seeds its rSVD sketch
 // from it instead of a cold Gaussian draw.
 //
 // A silently misaligned warm start would seed the sketch with the wrong
@@ -326,7 +326,7 @@ Eigen::MatrixXd load_pca_warm_start(const string& eigenvec_prefix,
 {
     const string path = eigenvec_prefix + ".eigenvec";
     std::ifstream in(path);
-    if (!in) LOGGER.e(0, "--reml-woodbury-warm-start: cannot open [" + path + "].");
+    if (!in) LOGGER.e(0, "--reml-woodbury-basis-warm-start: cannot open [" + path + "].");
 
     std::unordered_map<string, vector<double>> by_id;
     by_id.reserve(analysis_ids.size() * 2);
@@ -337,24 +337,24 @@ Eigen::MatrixXd load_pca_warm_start(const string& eigenvec_prefix,
         if (line.empty()) continue;
         std::istringstream ss(line);
         if (!(ss >> fid >> iid))
-            LOGGER.e(0, "--reml-woodbury-warm-start: malformed line in [" + path + "].");
+            LOGGER.e(0, "--reml-woodbury-basis-warm-start: malformed line in [" + path + "].");
         vector<double> pcs;
         double v;
         while (ss >> v) pcs.push_back(v);
         if (k < 0) k = static_cast<int>(pcs.size());
         else if (static_cast<int>(pcs.size()) != k)
-            LOGGER.e(0, "--reml-woodbury-warm-start: inconsistent eigenvector count in [" + path + "].");
+            LOGGER.e(0, "--reml-woodbury-basis-warm-start: inconsistent eigenvector count in [" + path + "].");
         by_id.emplace(fid + "\t" + iid, std::move(pcs));
     }
     if (k <= 0)
-        LOGGER.e(0, "--reml-woodbury-warm-start: no eigenvectors read from [" + path + "].");
+        LOGGER.e(0, "--reml-woodbury-basis-warm-start: no eigenvectors read from [" + path + "].");
 
     const int n = static_cast<int>(analysis_ids.size());
     Eigen::MatrixXd Uk(n, k);
     for (int i = 0; i < n; ++i) {
         const auto it = by_id.find(analysis_ids[i]);
         if (it == by_id.end())
-            LOGGER.e(0, "--reml-woodbury-warm-start: individual [" + analysis_ids[i] +
+            LOGGER.e(0, "--reml-woodbury-basis-warm-start: individual [" + analysis_ids[i] +
                         "] not found in [" + path + "]. The warm-start file must come from "
                         "the same sample set (e.g. --pca-approx run on the same --grm).");
         for (int j = 0; j < k; ++j) Uk(i, j) = it->second[j];
@@ -423,8 +423,8 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options["load_reml"] = options_in["--load-reml"][0];
         options_in.erase("--load-reml");
         // REML tuning flags are irrelevant when a saved state is loaded; consume to suppress warnings.
-        options_in.erase("--reml-woodbury");
-        options_in.erase("--reml-woodbury-nystrom");
+        options_in.erase("--reml-woodbury-basis");
+        options_in.erase("--reml-woodbury-basis-nystrom");
         options_in.erase("--reml-trace-approx");
         options_in.erase("--reml-maxit");
         options_in.erase("--reml-priors");
@@ -438,40 +438,47 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options["grm"] = options_in["--grm"][0];
         options_in.erase("--grm");
 
-        // --reml-woodbury [k]  (k optional; -1 = auto-k, -2 = EIG99)
-        if (options_in.find("--reml-woodbury") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury"];
+        // --reml-woodbury [k]  (k optional; -1 = auto-k, -2 = EIGMASS)
+        if (options_in.find("--reml-woodbury-basis") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis"];
             if (!vals.empty() && !vals[0].empty()) {
-                if (vals[0] == "EIG99")
-                    options_d["woodbury_rank"] = -2.0;  // Eigenvalue mass k
+                if (vals[0] == "EIGMASS")
+                    options_d["woodbury_basis_rank"] = -2.0;  // Eigenvalue mass k
                 else if (vals[0] == "auto")
-                    options_d["woodbury_rank"] = -1.0;  // auto-k
+                    options_d["woodbury_basis_rank"] = -1.0;  // auto-k
                 else
-                    options_d["woodbury_rank"] = std::stod(vals[0]);
+                    options_d["woodbury_basis_rank"] = std::stod(vals[0]);
             } else
-                options_d["woodbury_rank"] = -1.0;   // auto-k
-            options_in.erase("--reml-woodbury");
+                options_d["woodbury_basis_rank"] = -1.0;   // auto-k
+            options_in.erase("--reml-woodbury-basis");
         }
-        // --reml-woodbury-nystrom is a boolean flag (no argument): selects a
+        if (options_in.find("--reml-woodbury-basis-eigen-mass") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-eigen-mass"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-basis-eigen-mass requires a fractional argument (e.g. 0.15).");
+            options_d["woodbury_basis_eigen_mass"] = std::stof(vals[0]);
+            options_in.erase("--reml-woodbury-basis-eigen-mass");
+        }
+        // --reml-woodbury-basis-nystrom is a boolean flag (no argument): selects a
         // single-pass Nystrom basis instead of the default eigendecomposition
         // for the Woodbury basis. Only meaningful alongside --reml-woodbury.
-        if (options_in.find("--reml-woodbury-nystrom") != options_in.end()) {
-            if (!options_in["--reml-woodbury-nystrom"].empty())
-                LOGGER.w(0, "--reml-woodbury-nystrom takes no argument; ignoring the supplied value.");
-            options["woodbury_nystrom"] = "1";
-            options_in.erase("--reml-woodbury-nystrom");
+        if (options_in.find("--reml-woodbury-basis-nystrom") != options_in.end()) {
+            if (!options_in["--reml-woodbury-basis-nystrom"].empty())
+                LOGGER.w(0, "--reml-woodbury-basis-nystrom takes no argument; ignoring the supplied value.");
+            options["woodbury_basis_nystrom"] = "1";
+            options_in.erase("--reml-woodbury-basis-nystrom");
         }
-        // --reml-woodbury-warm-start <prefix>: seed the Woodbury rSVD sketch
+        // --reml-woodbury-basis-warm-start <prefix>: seed the Woodbury rSVD sketch
         // with eigenvectors from a prior "<prefix>.eigenvec" (e.g. written by
         // --pca-approx rSVD on the same GRM/sample set), instead of a cold
-        // Gaussian draw. Ignored when --reml-woodbury-nystrom is set, since
+        // Gaussian draw. Ignored when --reml-woodbury-basis-nystrom is set, since
         // the Nystrom path doesn't use power iteration.
-        if (options_in.find("--reml-woodbury-warm-start") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury-warm-start"];
+        if (options_in.find("--reml-woodbury-basis-warm-start") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-warm-start"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--reml-woodbury-warm-start requires a file prefix argument.");
-            options["woodbury_warm_start"] = vals[0];
-            options_in.erase("--reml-woodbury-warm-start");
+                LOGGER.e(0, "--reml-woodbury-basis-warm-start requires a file prefix argument.");
+            options["woodbury_basis_warm_start"] = vals[0];
+            options_in.erase("--reml-woodbury-basis-warm-start");
         }
         // --reml-svd-chunked: read K in lower-triangular tiles for the
         // Woodbury basis rSVD instead of holding a dense n x n K resident —
@@ -492,56 +499,56 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             options_in.erase("--reml-svd-chunk-size");
         }
         // These three were previously read from options_d further down
-        // (woodbury_edge_margin / woodbury_edge_confirm / woodbury_eig99_k_buffer)
+        // (woodbury_basis_edge_margin / woodbury_basis_edge_confirm / woodbury_basis_EIGMASS_k_buffer)
         // with no CLI parsing block actually populating them — silently
         // always falling back to their hardcoded defaults regardless of what
         // was passed on the command line. Fixed alongside adding the new
         // memory-budget flag, since all four are the same kind of numeric
-        // --reml-woodbury-* option and belong together.
-        if (options_in.find("--reml-woodbury-edge-margin") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury-edge-margin"];
+        // --reml-woodbury-basis-* option and belong together.
+        if (options_in.find("--reml-woodbury-basis-edge-margin") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-edge-margin"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--reml-woodbury-edge-margin requires a fractional argument (e.g. 0.15).");
-            options_d["woodbury_edge_margin"] = std::stod(vals[0]);
-            options_in.erase("--reml-woodbury-edge-margin");
+                LOGGER.e(0, "--reml-woodbury-basis-edge-margin requires a fractional argument (e.g. 0.15).");
+            options_d["woodbury_basis_edge_margin"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-basis-edge-margin");
         }
-        if (options_in.find("--reml-woodbury-edge-confirm") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury-edge-confirm"];
+        if (options_in.find("--reml-woodbury-basis-edge-confirm") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-edge-confirm"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--reml-woodbury-edge-confirm requires an integer argument.");
-            options_d["woodbury_edge_confirm"] = std::stod(vals[0]);
-            options_in.erase("--reml-woodbury-edge-confirm");
+                LOGGER.e(0, "--reml-woodbury-basis-edge-confirm requires an integer argument.");
+            options_d["woodbury_basis_edge_confirm"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-basis-edge-confirm");
         }
-        if (options_in.find("--reml-woodbury-eig99-k-buffer") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury-eig99-k-buffer"];
+        if (options_in.find("--reml-woodbury-basis-EIGMASS-k-buffer") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-EIGMASS-k-buffer"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--reml-woodbury-eig99-k-buffer requires an integer argument.");
-            options_d["woodbury_eig99_k_buffer"] = std::stod(vals[0]);
-            options_in.erase("--reml-woodbury-eig99-k-buffer");
+                LOGGER.e(0, "--reml-woodbury-basis-EIGMASS-k-buffer requires an integer argument.");
+            options_d["woodbury_basis_EIGMASS_k_buffer"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-basis-EIGMASS-k-buffer");
         }
         // Reliability threshold for Nystrom's C-eigenvalue truncated
         // pseudo-inverse (relative to C's largest eigenvalue); directions at
         // or below it are masked to zero rather than clamped-and-divided.
         // Default 1e-4 — see the field comment in RemlCtx.hpp. Increase if a
         // "sum of eigenvalues exceeds trace(K)" error fires.
-        if (options_in.find("--reml-woodbury-nystrom-reg") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury-nystrom-reg"];
+        if (options_in.find("--reml-woodbury-basis-nystrom-reg") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-nystrom-reg"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--reml-woodbury-nystrom-reg requires a fractional argument (e.g. 1e-4).");
-            options_d["woodbury_nystrom_reg"] = std::stod(vals[0]);
-            options_in.erase("--reml-woodbury-nystrom-reg");
+                LOGGER.e(0, "--reml-woodbury-basis-nystrom-reg requires a fractional argument (e.g. 1e-4).");
+            options_d["woodbury_basis_nystrom_reg"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-basis-nystrom-reg");
         }
-        // --reml-woodbury-mem-budget <GB>: hard cap on k_svd derived from an
+        // --reml-woodbury-basis-mem-budget <GB>: hard cap on k_svd derived from an
         // approximate rSVD sketch memory budget, independent of n-1. See the
         // reml_svd_mem_budget_gb comment in RemlCtx.hpp — chunking K does
         // nothing to bound this, since the sketch buffers scale with k_ext
         // regardless of whether K itself is chunked or dense.
-        if (options_in.find("--reml-woodbury-mem-budget") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury-mem-budget"];
+        if (options_in.find("--reml-woodbury-basis-mem-budget") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-mem-budget"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--reml-woodbury-mem-budget requires a GB argument (e.g. 32).");
-            options_d["woodbury_mem_budget_gb"] = std::stod(vals[0]);
-            options_in.erase("--reml-woodbury-mem-budget");
+                LOGGER.e(0, "--reml-woodbury-basis-mem-budget requires a GB argument (e.g. 32).");
+            options_d["woodbury_basis_mem_budget_gb"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-basis-mem-budget");
         }
         if (options_in.find("--reml-trace-approx") != options_in.end()) {
             options["trace_approx"] = "1";
@@ -773,8 +780,8 @@ void MLMA::processMain()
             }
 
             // REML tuning parameters
-            const int  woodbury_rank  = options_d.count("woodbury_rank")
-                ? static_cast<int>(options_d.at("woodbury_rank")) : 0;
+            const int  woodbury_basis_rank  = options_d.count("woodbury_basis_rank")
+                ? static_cast<int>(options_d.at("woodbury_basis_rank")) : 0;
             const bool trace_approx   = options.count("trace_approx") > 0;
             const int  trace_nprobes  = options_d.count("trace_approx_nprobes")
                 ? static_cast<int>(options_d.at("trace_approx_nprobes")) : 100;
@@ -785,26 +792,26 @@ void MLMA::processMain()
             const int  reml_diagV_adj = options_d.count("reml_diagV_adj")
                 ? static_cast<int>(options_d.at("reml_diagV_adj")) : 0;
             const bool no_constrain   = options.count("no_constrain") > 0;
-            const bool woodbury_nystrom = options.count("woodbury_nystrom") > 0;
-            const float  woodbury_eigen_mass  = options_d.count("woodbury_eigen_mass")
-                ? static_cast<float>(options_d.at("woodbury_eigen_mass")) : 99.0f;
-            const double woodbury_edge_margin = options_d.count("woodbury_edge_margin")
-                ? options_d.at("woodbury_edge_margin") : 0.15;
-            const int    woodbury_edge_confirm = options_d.count("woodbury_edge_confirm")
-                ? static_cast<int>(options_d.at("woodbury_edge_confirm")) : 20;
-            const int woodbury_eig99_k_buffer = options_d.count("woodbury_eig99_k_buffer")
-                ? static_cast<int>(options_d.at("woodbury_eig99_k_buffer")) : 20;
-            const double woodbury_mem_budget_gb = options_d.count("woodbury_mem_budget_gb")
-                ? options_d.at("woodbury_mem_budget_gb") : 0.0;
+            const bool woodbury_basis_nystrom = options.count("woodbury_basis_nystrom") > 0;
+            const float  woodbury_basis_eigen_mass  = options_d.count("woodbury_basis_eigen_mass")
+                ? static_cast<float>(options_d.at("woodbury_basis_eigen_mass")) : 99.0f;
+            const double woodbury_basis_edge_margin = options_d.count("woodbury_basis_edge_margin")
+                ? options_d.at("woodbury_basis_edge_margin") : 0.15;
+            const int    woodbury_basis_edge_confirm = options_d.count("woodbury_basis_edge_confirm")
+                ? static_cast<int>(options_d.at("woodbury_basis_edge_confirm")) : 20;
+            const int woodbury_basis_EIGMASS_k_buffer = options_d.count("woodbury_basis_EIGMASS_k_buffer")
+                ? static_cast<int>(options_d.at("woodbury_basis_EIGMASS_k_buffer")) : 20;
+            const double woodbury_basis_mem_budget_gb = options_d.count("woodbury_basis_mem_budget_gb")
+                ? options_d.at("woodbury_basis_mem_budget_gb") : 0.0;
 
             if (reml_alg < 0 || reml_alg > 2)
                 LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
             if (reml_diagV_adj < 0 || reml_diagV_adj > 2)
                 LOGGER.e(0, "--reml-diagV-adj should be 0, 1, or 2.");
-            if (woodbury_rank != 0 && reml_alg == 1)
+            if (woodbury_basis_rank != 0 && reml_alg == 1)
                 LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML (--reml-alg 1). Use AI-REML (default) or EM-REML (--reml-alg 2).");
-            if (woodbury_nystrom && woodbury_rank == 0)
-                LOGGER.e(0, "--reml-woodbury-nystrom requires --reml-woodbury <k|auto|EIG99>.");
+            if (woodbury_basis_nystrom && woodbury_basis_rank == 0)
+                LOGGER.e(0, "--reml-woodbury-basis-nystrom requires --reml-woodbury <k|auto|EIGMASS>.");
 
             const vector<double> priors =
                 options_vd.count("reml_priors") ? options_vd.at("reml_priors") : vector<double>{};
@@ -826,7 +833,7 @@ void MLMA::processMain()
             if (svd_chunked) {
                 // ctx.A[0] stays empty (default RemlMat()); RemlEngine reads
                 // K through ctx.grm_tile_reader instead. See the guard in
-                // compute_woodbury_basis that errors out if this flag is set
+                // compute_woodbury_basis_basis that errors out if this flag is set
                 // without a reader.
                 ctx.grm_tile_reader = std::move(chunked_grm.reader);
             } else {
@@ -844,35 +851,35 @@ void MLMA::processMain()
             ctx.reml_max_iter            = reml_maxit;
             ctx.reml_inv_mtd             = 0;  // LLT
             ctx.reml_diagV_adj           = reml_diagV_adj;
-            ctx.woodbury_rank            = woodbury_rank;
-            if (svd_chunked && woodbury_rank == 0)
+            ctx.woodbury_basis_rank            = woodbury_basis_rank;
+            if (svd_chunked && woodbury_basis_rank == 0)
                 LOGGER.e(0, "--reml-svd-chunked requires --reml-woodbury. Every REML code path "
-                            "outside compute_woodbury_basis (the trace/projection machinery, "
+                            "outside compute_woodbury_basis_basis (the trace/projection machinery, "
                             "Hutch++, dense/exact REML) still reads ctx.A[...] directly and treats "
                             "an empty component as \"identity\" — chunked mode leaves it empty for "
                             "a different reason, and nothing else knows the difference yet.");
-            ctx.woodbury_edge_margin        = woodbury_edge_margin;
-            ctx.woodbury_edge_confirm       = woodbury_edge_confirm;
-            ctx.woodbury_eig99_k_buffer  = woodbury_eig99_k_buffer;
-            ctx.woodbury_nystrom_reg     = options_d.count("woodbury_nystrom_reg")
-                ? options_d.at("woodbury_nystrom_reg") : 1e-4;
-            ctx.reml_svd_mem_budget_gb   = woodbury_mem_budget_gb;
-            ctx.woodbury_nystrom         = woodbury_nystrom;
+            ctx.woodbury_basis_edge_margin        = woodbury_basis_edge_margin;
+            ctx.woodbury_basis_edge_confirm       = woodbury_basis_edge_confirm;
+            ctx.woodbury_basis_eigmass_k_buffer  = woodbury_basis_EIGMASS_k_buffer;
+            ctx.woodbury_basis_nystrom_reg     = options_d.count("woodbury_basis_nystrom_reg")
+                ? options_d.at("woodbury_basis_nystrom_reg") : 1e-4;
+            ctx.reml_svd_mem_budget_gb   = woodbury_basis_mem_budget_gb;
+            ctx.woodbury_basis_nystrom         = woodbury_basis_nystrom;
             ctx.reml_svd_chunked         = svd_chunked;
             ctx.reml_svd_chunk_size      = options_d.count("svd_chunk_size")
                 ? static_cast<int>(options_d.at("svd_chunk_size")) : 8000;
             ctx.reml_trace_approx        = trace_approx;
             ctx.reml_trace_approx_nprobes = trace_nprobes;
-            ctx.reml_eigen_mass             = woodbury_eigen_mass;
+            ctx.woodbury_basis_eigen_mass             = woodbury_basis_eigen_mass;
 
-            if (options.count("woodbury_warm_start")) {
-                if (woodbury_rank == 0)
-                    LOGGER.w(0, "--reml-woodbury-warm-start given without --reml-woodbury; ignoring.");
-                else if (woodbury_nystrom)
-                    LOGGER.w(0, "--reml-woodbury-warm-start has no effect with --reml-woodbury-nystrom "
+            if (options.count("woodbury_basis_warm_start")) {
+                if (woodbury_basis_rank == 0)
+                    LOGGER.w(0, "--reml-woodbury-basis-warm-start given without --reml-woodbury; ignoring.");
+                else if (woodbury_basis_nystrom)
+                    LOGGER.w(0, "--reml-woodbury-basis-warm-start has no effect with --reml-woodbury-basis-nystrom "
                                 "(the Nystrom path doesn't use power iteration); ignoring.");
                 else
-                    ctx.Uk = load_pca_warm_start(options.at("woodbury_warm_start"), analysis_ids);
+                    ctx.Uk = load_pca_warm_start(options.at("woodbury_basis_warm_start"), analysis_ids);
             }
 
             reml::compute(ctx, priors, priors_var, no_constrain);

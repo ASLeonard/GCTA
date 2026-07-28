@@ -44,22 +44,22 @@ using RemlVec = Eigen::VectorXd;
 
 namespace {
 
-// Woodbury helpers — mirrors gcta::woodbury_Kv / woodbury_Viv / woodbury_ViZ
+// Woodbury helpers — mirrors gcta::woodbury_basis_Kv / woodbury_basis_Viv / woodbury_basis_ViZ
 // but takes ctx by const ref instead of reading this->_ members.
 
-RemlVec woodbury_Kv(const RemlCtx& ctx, const RemlVec& v) {
+RemlVec woodbury_basis_Kv(const RemlCtx& ctx, const RemlVec& v) {
     RemlVec Ukv = ctx.Uk.transpose() * v;
     Ukv.array() *= (ctx.dk.array() - ctx.lambda_tail);
     return ctx.lambda_tail * v + ctx.Uk * Ukv;
 }
 
-RemlVec woodbury_Viv(const RemlCtx& ctx, const RemlVec& v) {
+RemlVec woodbury_basis_Viv(const RemlCtx& ctx, const RemlVec& v) {
     RemlVec Ukv = ctx.Uk.transpose() * v;
     Ukv.array() *= ctx.ck.array();
     return (v - ctx.Uk * Ukv) / ctx.sigma2_eff;
 }
 
-RemlMat woodbury_ViZ(const RemlCtx& ctx, const RemlMat& Z) {
+RemlMat woodbury_basis_ViZ(const RemlCtx& ctx, const RemlMat& Z) {
     RemlMat UkZ = ctx.Uk.transpose() * Z;
     UkZ.array().colwise() *= ctx.ck.array();
     return (Z - ctx.Uk * UkZ) / ctx.sigma2_eff;
@@ -68,8 +68,8 @@ RemlMat woodbury_ViZ(const RemlCtx& ctx, const RemlMat& Z) {
 // Implicit P*v without materialising n×n P
 RemlVec applyP_vec(const RemlCtx& ctx, const RemlVec& v) {
     RemlVec w;
-    if (ctx.Vi_use_woodbury) {
-        w = woodbury_Viv(ctx, v);
+    if (ctx.Vi_use_woodbury_basis) {
+        w = woodbury_basis_Viv(ctx, v);
     } else if (ctx.Vi_use_llt) {
         w = v;
         ctx.Vi_L.triangularView<Eigen::Lower>().solveInPlace(w);
@@ -85,8 +85,8 @@ RemlVec applyP_vec(const RemlCtx& ctx, const RemlVec& v) {
 
 RemlMat applyP_mat(const RemlCtx& ctx, const RemlMat& Z) {
     RemlMat W;
-    if (ctx.Vi_use_woodbury) {
-        W = woodbury_ViZ(ctx, Z);
+    if (ctx.Vi_use_woodbury_basis) {
+        W = woodbury_basis_ViZ(ctx, Z);
     } else if (ctx.Vi_use_llt) {
         W = Z;
         ctx.Vi_L.triangularView<Eigen::Lower>().solveInPlace(W);
@@ -183,15 +183,15 @@ void init_varcomp(const RemlCtx& ctx,
     }
 
     // Woodbury HE warm-start (single-GRM, no priors)
-    if (ctx.Vi_use_woodbury && (int)ctx.r_indx.size() == 2
+    if (ctx.Vi_use_woodbury_basis && (int)ctx.r_indx.size() == 2
             && priors.empty() && priors_var.empty()) {
         const int n = ctx.n;
-        const int k = ctx.woodbury_rank_;
+        const int k = ctx.woodbury_basis_rank_;
         const double Vy = ctx.y_Ssq;
         const double trK  = ctx.dk.sum() + static_cast<double>(n - k) * ctx.lambda_tail;
         const double trK2 = ctx.dk.squaredNorm()
                           + static_cast<double>(n - k) * (ctx.tail_d_var + ctx.lambda_tail * ctx.lambda_tail);
-        const RemlVec Ky = woodbury_Kv(ctx, ctx.y);
+        const RemlVec Ky = woodbury_basis_Kv(ctx, ctx.y);
         const double yKy = ctx.y.dot(Ky);
         const double yy  = ctx.y.squaredNorm();
         const double denom = static_cast<double>(n) * trK2 - trK * trK;
@@ -227,7 +227,7 @@ void assemble_V_lower(RemlCtx& ctx, const RemlVec& varcmp) {
 bool calcu_Vi(RemlCtx& ctx, RemlVec& prev_varcmp, double& logdet, int& iter, bool factorize_only) {
     ctx.Vi_use_llt = false;
 
-    if (ctx.Vi_use_woodbury) {
+    if (ctx.Vi_use_woodbury_basis) {
         if (!factorize_only)
             LOGGER.e(0, "Woodbury REML is incompatible with explicit V^{-1} materialisation.");
         ctx.Vi.resize(0, 0);
@@ -236,7 +236,7 @@ bool calcu_Vi(RemlCtx& ctx, RemlVec& prev_varcmp, double& logdet, int& iter, boo
         ctx.sigma2_eff = sg2 * ctx.lambda_tail + se2;
         if (ctx.sigma2_eff <= 0.0) return false;
         ctx.sg2 = sg2;
-        const int k = ctx.woodbury_rank_;
+        const int k = ctx.woodbury_basis_rank_;
         ctx.ck.resize(k);
         logdet = static_cast<double>(ctx.n - k) * std::log(ctx.sigma2_eff);
         for (int j = 0; j < k; ++j) {
@@ -327,10 +327,10 @@ bool calcu_Vi(RemlCtx& ctx, RemlVec& prev_varcmp, double& logdet, int& iter, boo
 
 double calcu_P_impl(RemlCtx& ctx, RemlMat* P) {
     // Build Vi_X = V^{-1} X
-    if (ctx.Vi_use_woodbury) {
-        if (ctx.UkTX.rows() != ctx.woodbury_rank_ || ctx.UkTX.cols() != ctx.X_c)
+    if (ctx.Vi_use_woodbury_basis) {
+        if (ctx.UkTX.rows() != ctx.woodbury_basis_rank_ || ctx.UkTX.cols() != ctx.X_c)
             ctx.UkTX.noalias() = ctx.Uk.transpose() * ctx.X;
-        if ((int)ctx.UkTy.size() != ctx.woodbury_rank_)
+        if ((int)ctx.UkTy.size() != ctx.woodbury_basis_rank_)
             ctx.UkTy.noalias() = ctx.Uk.transpose() * ctx.y;
         const RemlMat ck_UkTX = ctx.ck.asDiagonal() * ctx.UkTX;
         ctx.Vi_X = (ctx.X - ctx.Uk * ck_UkTX) / ctx.sigma2_eff;
@@ -353,12 +353,12 @@ double calcu_P_impl(RemlCtx& ctx, RemlMat* P) {
     if (!P) return logdet_Xt_Vi_X;
 
     // Materialise V^{-1} if we need the full P matrix
-    if (ctx.Vi_use_woodbury) {
+    if (ctx.Vi_use_woodbury_basis) {
         ctx.Vi.resize(ctx.n, ctx.n);
         ctx.Vi.setIdentity();
         ctx.Vi /= ctx.sigma2_eff;
         RemlMat Uk_scaled = ctx.Uk;
-        for (int j = 0; j < ctx.woodbury_rank_; ++j)
+        for (int j = 0; j < ctx.woodbury_basis_rank_; ++j)
             Uk_scaled.col(j) *= std::sqrt(ctx.ck[j] / ctx.sigma2_eff);
         ctx.Vi.selfadjointView<Eigen::Lower>().rankUpdate(Uk_scaled, -1.0);
         ctx.Vi.triangularView<Eigen::Upper>() = ctx.Vi.transpose();
@@ -396,7 +396,7 @@ void calcu_tr_PA_woodbury(const RemlCtx& ctx, RemlVec& tr_PA) {
     const double se2        = sigma2_eff - sg2 * ctx.lambda_tail;
     const double lambda_t   = ctx.lambda_tail;
     const int    n          = ctx.n;
-    const int    k          = ctx.woodbury_rank_;
+    const int    k          = ctx.woodbury_basis_rank_;
     const double sum_ck     = ctx.ck.sum();
     const double tr_Vinv    = (n - sum_ck) / sigma2_eff;
     const double tr_Vinv_K  = (sg2 > 1e-15)
@@ -450,7 +450,7 @@ void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, int m_probes) {
         const bool is_I = (ctx.A[ctx.r_indx[ci]].size() == 0);
 
         auto applyPA_mat = [&](const RemlMat& Z) -> RemlMat {
-            if (ctx.Vi_use_woodbury && ci == 0) {
+            if (ctx.Vi_use_woodbury_basis && ci == 0) {
                 RemlMat UkZ = ctx.Uk.transpose() * Z;
                 UkZ.array().colwise() *= (ctx.dk.array() - ctx.lambda_tail);
                 RemlMat KZ = ctx.lambda_tail * Z + ctx.Uk * UkZ;
@@ -511,10 +511,10 @@ void calcu_Hi(RemlCtx& ctx, RemlMat& P, RemlMat& Hi) {
 
     std::vector<RemlMat> PA(m);
     for (int i = 0; i < m; i++) {
-        if (ctx.Vi_use_woodbury && i == 0) {
+        if (ctx.Vi_use_woodbury_basis && i == 0) {
             // P is fully symmetrized above; use plain product for dgemm dispatch
             // (dsymm is slower than dgemm for rectangular Uk on AOCL/Zen4).
-            RemlMat PUk(ctx.n, ctx.woodbury_rank_);
+            RemlMat PUk(ctx.n, ctx.woodbury_basis_rank_);
             PUk.noalias() = P * ctx.Uk;
             RemlVec delta_v = ctx.dk.array() - ctx.lambda_tail;
             PA[i] = ctx.lambda_tail * P;
@@ -580,9 +580,9 @@ void reml_equation(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py, RemlVec& 
 void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
              RemlVec& prev_varcmp, RemlVec& varcmp, double dlogL) {
     const bool use_approx     = ctx.reml_trace_approx;
-    const bool woodbury_active = ctx.Vi_use_woodbury;
+    const bool woodbury_basis_active = ctx.Vi_use_woodbury_basis;
 
-    if (use_approx || woodbury_active)
+    if (use_approx || woodbury_basis_active)
         Py = applyP_vec(ctx, ctx.y);
     else
         Py.noalias() = P.selfadjointView<Eigen::Lower>() * ctx.y;
@@ -590,8 +590,8 @@ void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
     const int m = static_cast<int>(ctx.r_indx.size());
     RemlMat APy(ctx.n, m);
     for (int i = 0; i < m; i++) {
-        if (woodbury_active && i == 0)
-            APy.col(i) = woodbury_Kv(ctx, Py);
+        if (woodbury_basis_active && i == 0)
+            APy.col(i) = woodbury_basis_Kv(ctx, Py);
         else if (ctx.A[ctx.r_indx[i]].size() == 0)
             APy.col(i) = Py;
         else
@@ -599,7 +599,7 @@ void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
     }
 
     RemlVec R(m);
-    if (use_approx || woodbury_active) {
+    if (use_approx || woodbury_basis_active) {
         R.noalias() = APy.transpose() * Py;
         const RemlMat PAPy = applyP_mat(ctx, APy);
         Hi.noalias() = APy.transpose() * PAPy;
@@ -615,7 +615,7 @@ void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
     Hi = 0.5 * Hi;
 
     RemlVec tr_PA;
-    if (woodbury_active) {
+    if (woodbury_basis_active) {
         calcu_tr_PA_woodbury(ctx, tr_PA);
     } else if (use_approx) {
         const int eff_nprobes = (std::fabs(dlogL) < 1.0)
@@ -643,11 +643,11 @@ void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
 
 void em_reml(RemlCtx& ctx, RemlMat& P, RemlVec& Py,
              RemlVec& prev_varcmp, RemlVec& varcmp, double dlogL) {
-    const bool woodbury_active = ctx.Vi_use_woodbury;
+    const bool woodbury_basis_active = ctx.Vi_use_woodbury_basis;
     const bool use_approx     = ctx.reml_trace_approx;
 
     RemlVec tr_PA;
-    if (woodbury_active) {
+    if (woodbury_basis_active) {
         calcu_tr_PA_woodbury(ctx, tr_PA);
         Py = applyP_vec(ctx, ctx.y);
     } else if (use_approx) {
@@ -665,8 +665,8 @@ void em_reml(RemlCtx& ctx, RemlMat& P, RemlVec& Py,
     RemlVec R(m);
     RemlVec tmp(ctx.n);
     for (int i = 0; i < m; i++) {
-        if (woodbury_active && i == 0) {
-            tmp = woodbury_Kv(ctx, Py);
+        if (woodbury_basis_active && i == 0) {
+            tmp = woodbury_basis_Kv(ctx, Py);
             R(i) = Py.dot(tmp);
         } else if (ctx.A[ctx.r_indx[i]].size() == 0) {
             R(i) = Py.squaredNorm();
@@ -691,7 +691,7 @@ double reml_iteration(RemlCtx& ctx,
     double prev_lgL = -1e20, lgL = -1e20, dlogL = 1000.0;
     RemlVec prev_prev_varcmp(varcmp), prev_varcmp(varcmp), varcomp_init(varcmp);
 
-    if (ctx.reml_trace_approx && !ctx.Vi_use_woodbury) {
+    if (ctx.reml_trace_approx && !ctx.Vi_use_woodbury_basis) {
         LOGGER << "Using Hutch++ stochastic trace estimator with "
                << ctx.reml_trace_approx_nprobes << " probes." << std::endl;
     }
@@ -717,7 +717,7 @@ double reml_iteration(RemlCtx& ctx,
             LOGGER << std::endl;
         }
 
-        const bool skip_P_this_iter = (ctx.reml_trace_approx || ctx.Vi_use_woodbury) && ctx.reml_mtd != 1;
+        const bool skip_P_this_iter = (ctx.reml_trace_approx || ctx.Vi_use_woodbury_basis) && ctx.reml_mtd != 1;
         if (!calcu_Vi(ctx, prev_varcmp, logdet, iter, skip_P_this_iter)) {
             LOGGER << "Warning: V matrix is not positive-definite." << std::endl;
             varcmp = prev_prev_varcmp;
@@ -840,21 +840,21 @@ namespace reml {
 
 void compute_woodbury_basis(RemlCtx& ctx) {
     if (ctx.reml_mtd == 1)
-        LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML.");
+        LOGGER.e(0, "--reml-woodbury-basis is incompatible with Fisher-scoring REML.");
     if ((int)ctx.r_indx.size() != 2)
-        LOGGER.e(0, "--reml-woodbury supports only single-GRM models.");
+        LOGGER.e(0, "--reml-woodbury-basis supports only single-GRM models.");
     if (ctx.A[ctx.r_indx[0]].size() == 0 && !ctx.reml_svd_chunked)
         LOGGER.e(0, "--reml-woodbury: GRM component is identity; cannot compute basis.");
     if (ctx.reml_svd_chunked && !ctx.grm_tile_reader)
         LOGGER.e(0, "--reml-woodbury: --reml-svd-chunked is set but ctx.grm_tile_reader is empty "
                     "— the GRM component wasn't actually loaded either way.");
 
-    const bool auto_k = (ctx.woodbury_rank == -1.0);
-    const bool EIG99_k = (ctx.woodbury_rank == -2.0);
+    const bool auto_k = (ctx.woodbury_basis_rank == -1.0);
+    const bool EIGMASS_k = (ctx.woodbury_basis_rank == -2.0);
     const int  n      = ctx.n;
-    int k = ctx.woodbury_rank;
+    int k = ctx.woodbury_basis_rank;
 
-    // For auto-k / EIG99-k, an explicit --reml-woodbury-k-max is a hard
+    // For auto-k / EIGMASS-k, an explicit --reml-woodbury-basis-k-max is a hard
     // ceiling — the user asked for a specific bound and we respect it,
     // including the "not reached within k_max" warning below. Without one,
     // the value below is only a *starting* budget: if the signal/mass
@@ -874,19 +874,19 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         // recommended_oversample) — subtract a fixed margin to get a k_svd
         // ceiling without a circular dependency on that function.
         k_svd_budget_ceiling = std::min(k_svd_budget_ceiling, std::max(20, max_k_ext - 200));
-        LOGGER << "--reml-woodbury-mem-budget=" << ctx.reml_svd_mem_budget_gb
+        LOGGER << "--reml-woodbury-basis-mem-budget=" << ctx.reml_svd_mem_budget_gb
                << "GB -> k_svd capped at " << k_svd_budget_ceiling << std::endl;
     }
 
-    const bool k_max_is_hard_ceiling = (ctx.woodbury_k_max > 0);
+    const bool k_max_is_hard_ceiling = (ctx.woodbury_basis_k_max > 0);
     int k_svd;
     if (auto_k) {
-        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min({n - 1, k_svd_budget_ceiling, 1200});
+        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_basis_k_max : std::min({n - 1, k_svd_budget_ceiling, 1200});
         LOGGER << "\nComputing Woodbury basis (auto-k, k_max=" << k_svd
             << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
-            << ", edge_margin=" << ctx.woodbury_edge_margin
-            << ", edge_confirm=" << ctx.woodbury_edge_confirm << ") ..." << std::endl;
-    } else if (EIG99_k) {
+            << ", edge_margin=" << ctx.woodbury_basis_edge_margin
+            << ", edge_confirm=" << ctx.woodbury_basis_edge_confirm << ") ..." << std::endl;
+    } else if (EIGMASS_k) {
         // Starting guess scales with n (5% of n) instead of a flat constant,
         // floored at auto-k's 1200 and capped at 25000. The escalation loop
         // below doubles this (warm-started) if the mass target isn't reached
@@ -899,27 +899,27 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         // vs. 20s and 2.76GB for an equivalent fixed-k=1302 call with no
         // search). At n=500k, 5% still lands at the original 25000.
         const int start_guess = std::clamp(n / 20, 1200, 25000);
-        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_k_max : std::min({n - 1, k_svd_budget_ceiling, start_guess});
-        LOGGER << "\nComputing Woodbury basis (EIG99-k, k_max=" << k_svd
+        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_basis_k_max : std::min({n - 1, k_svd_budget_ceiling, start_guess});
+        LOGGER << "\nComputing Woodbury basis (EIGMASS-k, k_max=" << k_svd
             << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
             << ") ..." << std::endl;
     } else {
         if (k <= 0)
-            LOGGER.e(0, "--reml-woodbury rank must be positive for fixed-k mode.");
+            LOGGER.e(0, "--reml-woodbury-basis rank must be positive for fixed-k mode.");
         if (k > k_svd_budget_ceiling)
-            LOGGER.e(0, "--reml-woodbury " + std::to_string(k) + " exceeds the k_svd ceiling ("
-                        + std::to_string(k_svd_budget_ceiling) + ") implied by --reml-woodbury-mem-budget="
+            LOGGER.e(0, "--reml-woodbury-basis " + std::to_string(k) + " exceeds the k_svd ceiling ("
+                        + std::to_string(k_svd_budget_ceiling) + ") implied by --reml-woodbury-basis-mem-budget="
                         + std::to_string(ctx.reml_svd_mem_budget_gb) + "GB; raise the budget or lower the rank.");
         k_svd = k;
         LOGGER << "\nComputing Woodbury low-rank basis (k=" << k << ") ..." << std::endl;
     }
     if (k_max_is_hard_ceiling && k_svd > k_svd_budget_ceiling) {
-        LOGGER.w(0, "--reml-woodbury-k-max=" + std::to_string(k_svd) +
-                    " exceeds the --reml-woodbury-mem-budget-implied ceiling ("
+        LOGGER.w(0, "--reml-woodbury-basis-k-max=" + std::to_string(k_svd) +
+                    " exceeds the --reml-woodbury-basis-mem-budget-implied ceiling ("
                     + std::to_string(k_svd_budget_ceiling) + "); clamping to the budget.");
         k_svd = k_svd_budget_ceiling;
     }
-    if (k_svd >= n) LOGGER.e(0, "--reml-woodbury rank must be < n.");
+    if (k_svd >= n) LOGGER.e(0, "--reml-woodbury-basis rank must be < n.");
 
     const Eigen::MatrixXd& K_dbl = ctx.A[ctx.r_indx[0]];  // empty when reml_svd_chunked
     const double trace_K_full = ctx.reml_svd_chunked
@@ -940,11 +940,11 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             M = ctx.grm_N(0, 0);
         }
         if (M <= 0.0)
-            LOGGER.e(0, "--reml-woodbury auto: cannot determine SNP count. Use --reml-woodbury <k>.");
+            LOGGER.e(0, "--reml-woodbury-basis auto: cannot determine SNP count. Use --reml-woodbury-basis <k>.");
         const double gamma = static_cast<double>(n) / M;
         lambda_plus = std::pow(1.0 + std::sqrt(gamma), 2.0);
     }
-    const double target_mass = EIG99_k ? (ctx.reml_eigen_mass / 100.0 * trace_K_full) : 0.0;
+    const double target_mass = EIGMASS_k ? (ctx.woodbury_basis_eigen_mass * trace_K_full) : 0.0;
 
     // K_dbl is fully populated (both triangles) by the GRM loader, which
     // scatter-fills the lower triangle then explicitly mirrors it via
@@ -965,7 +965,7 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     Eigen::MatrixXd evec_full;
     int k_signal = 0;  // auto-k: eigenvalues found strictly above lambda_plus
     int k_edge   = 0;  // auto-k: k after confirming the edge band is cleared
-    int k_EIG99  = 0;  // EIG99-k: eigenmodes needed to reach the buffered mass target
+    int k_EIGMASS  = 0;  // EIGMASS-k: eigenmodes needed to reach the buffered mass target
 
     for (;;) {
         const int oversample = gcta_eigh::recommended_oversample(k_svd);
@@ -979,8 +979,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         // instead — same GRM/sample set means the PCA .eigenvec top
         // eigenvectors are already a subspace of what this call is
         // trying to recover.
-        // EIG99-k does NOT warm-start, unlike auto-k. Unlike auto-k's target
-        // (a well-separated edge), EIG99-k needs to accurately sum well into
+        // EIGMASS-k does NOT warm-start, unlike auto-k. Unlike auto-k's target
+        // (a well-separated edge), EIGMASS-k needs to accurately sum well into
         // the bulk — and if a previous, smaller-k_ext round's eigenvector
         // estimates were imperfect there (bulk/closely-spaced eigenvalues are
         // inherently the hardest case for power iteration to resolve), warm
@@ -992,19 +992,19 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         // certainty — worth confirming against a direct exact/manual check
         // at a specific k_svd if it recurs.
         const int k_prev = static_cast<int>(ctx.Uk.cols());
-        const bool has_warm = (!ctx.woodbury_nystrom && !EIG99_k && k_prev > 0 && ctx.Uk.rows() == n);
+        const bool has_warm = (!ctx.woodbury_basis_nystrom && !EIGMASS_k && k_prev > 0 && ctx.Uk.rows() == n);
         auto [omega, Y_init] = gcta_eigh::build_randomized_sketch(
             apply, n, k_ext, has_warm ? &ctx.Uk : nullptr);
         Eigen::MatrixXd Y = std::move(Y_init);
 
-        if (ctx.woodbury_nystrom) {
+        if (ctx.woodbury_basis_nystrom) {
             Eigen::MatrixXd C = omega.transpose() * Y;
             omega.resize(0, 0);
             Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_C(C);
             if (es_C.info() != Eigen::Success)
                 LOGGER.e(0, "Woodbury Nystrom: eigendecomposition of sketch C failed.");
             const double lam_max = es_C.eigenvalues().maxCoeff();
-            const double eps_C   = ctx.woodbury_nystrom_reg * std::max(lam_max, 1.0);
+            const double eps_C   = ctx.woodbury_basis_nystrom_reg * std::max(lam_max, 1.0);
             // Truncated pseudo-inverse, not clamp-then-invert: C = Omega^T A
             // Omega need not be PSD when A itself isn't (a real, estimated
             // GRM commonly has a genuinely negative eigenvalue tail, not
@@ -1035,8 +1035,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
                 throw std::runtime_error(
                     "Woodbury Nystrom: sum of estimated eigenvalues (" + std::to_string(eval_sum) +
                     ") exceeds trace(K) (" + std::to_string(trace_K_full) + ") — impossible for real "
-                    "eigenvalues. Increase --reml-woodbury-nystrom-reg (currently " +
-                    std::to_string(ctx.woodbury_nystrom_reg) + ") or use the power-iteration path "
+                    "eigenvalues. Increase --reml-woodbury-basis-nystrom-reg (currently " +
+                    std::to_string(ctx.woodbury_basis_nystrom_reg) + ") or use the power-iteration path "
                     "instead of Nystrom for this GRM.");
         } else {
             omega.resize(0, 0);
@@ -1051,7 +1051,7 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             }
         }
 
-        if (!auto_k && !EIG99_k) break;  // fixed-k: no criterion to satisfy, never escalates
+        if (!auto_k && !EIGMASS_k) break;  // fixed-k: no criterion to satisfy, never escalates
 
         bool satisfied;
         if (auto_k) {
@@ -1059,47 +1059,47 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             while (k_signal < static_cast<int>(eval_full.size()) && eval_full[k_signal] > lambda_plus)
                 ++k_signal;
 
-            // Scan past k_signal for a run of woodbury_edge_confirm consecutive
-            // eigenvalues below (1 - woodbury_edge_margin) * lambda_plus. A brief
+            // Scan past k_signal for a run of woodbury_basis_edge_confirm consecutive
+            // eigenvalues below (1 - woodbury_basis_edge_margin) * lambda_plus. A brief
             // dip that bounces back above the margin doesn't count — that's
             // exactly the ambiguous-edge behavior this is meant to see past.
-            const double confirm_thresh = (1.0 - ctx.woodbury_edge_margin) * lambda_plus;
+            const double confirm_thresh = (1.0 - ctx.woodbury_basis_edge_margin) * lambda_plus;
             int run_len = 0, run_start = -1;
             for (int i = k_signal; i < static_cast<int>(eval_full.size()); ++i) {
                 if (eval_full[i] < confirm_thresh) {
                     if (run_len == 0) run_start = i;
-                    if (++run_len >= ctx.woodbury_edge_confirm) break;
+                    if (++run_len >= ctx.woodbury_basis_edge_confirm) break;
                 } else {
                     run_len = 0;
                     run_start = -1;
                 }
             }
-            satisfied = (run_len >= ctx.woodbury_edge_confirm);
+            satisfied = (run_len >= ctx.woodbury_basis_edge_confirm);
             k_edge    = satisfied ? run_start : k_svd;
         } else {
             double cumulative = 0.0;
-            k_EIG99 = k_svd;  // fallback: raw mass target not reached within this budget
+            k_EIGMASS = k_svd;  // fallback: raw mass target not reached within this budget
             for (int i = 0; i < static_cast<int>(eval_full.size()); ++i) {
                 cumulative += eval_full[i];
-                if (cumulative >= target_mass) { k_EIG99 = i + 1; break; }
+                if (cumulative >= target_mass) { k_EIGMASS = i + 1; break; }
             }
             // Satisfied only if the buffer eigenvalues past the raw crossing
             // are also within budget — cheap to check since they're usually
             // already sitting in eval_full/evec_full from the current k_svd.
-            satisfied = (k_EIG99 + ctx.woodbury_eig99_k_buffer <= k_svd);
+            satisfied = (k_EIGMASS + ctx.woodbury_basis_eigmass_k_buffer <= k_svd);
         }
 
         if (satisfied || k_max_is_hard_ceiling || k_svd >= n - 1 || k_svd >= k_svd_budget_ceiling) break;
 
         const int k_svd_next = std::min({k_svd * 2, n - 1, k_svd_budget_ceiling});
-        const char* warm_status = ctx.woodbury_nystrom ? " (Nystrom: no warm start, full recompute)"
-                                 : EIG99_k              ? " (EIG99-k: no warm start, fresh probe)"
+        const char* warm_status = ctx.woodbury_basis_nystrom ? " (Nystrom: no warm start, full recompute)"
+                                 : EIGMASS_k              ? " (EIGMASS-k: no warm start, fresh probe)"
                                                          : " (warm-started)";
-        LOGGER << "Woodbury " << (auto_k ? "auto-k" : "EIG99-k")
+        LOGGER << "Woodbury " << (auto_k ? "auto-k" : "EIGMASS-k")
                << ": signal not resolved within k=" << k_svd
                << "; expanding budget to k=" << k_svd_next
                << warm_status << " ..." << std::endl;
-        if (!ctx.woodbury_nystrom && !EIG99_k) ctx.Uk = evec_full;   // warm-start the next, larger sketch
+        if (!ctx.woodbury_basis_nystrom && !EIGMASS_k) ctx.Uk = evec_full;   // warm-start the next, larger sketch
         k_svd = k_svd_next;
     }
 
@@ -1110,8 +1110,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
                << " (n=" << n << ")"
                << ", eigenvalues above lambda+ = " << k_signal
                << ", edge band confirmed after " << band << " additional eigenvalue(s)"
-               << " (margin=" << (ctx.woodbury_edge_margin * 100.0) << "%, confirm="
-               << ctx.woodbury_edge_confirm << " consecutive)"
+               << " (margin=" << (ctx.woodbury_basis_edge_margin * 100.0) << "%, confirm="
+               << ctx.woodbury_basis_edge_confirm << " consecutive)"
                << ", using k = " << k << std::endl;
         if (k_edge >= k_svd && k_svd >= n - 1)
             LOGGER.w(0, "Woodbury auto-k: edge band not confirmed even at k=n-1=" + std::to_string(n - 1)
@@ -1119,35 +1119,35 @@ void compute_woodbury_basis(RemlCtx& ctx) {
                        "computational advantage here.");
         else if (k_edge >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
             LOGGER.w(0, "Woodbury auto-k: edge band not confirmed within the memory-budget-implied "
-                        "ceiling k=" + std::to_string(k_svd) + " (--reml-woodbury-mem-budget="
+                        "ceiling k=" + std::to_string(k_svd) + " (--reml-woodbury-basis-mem-budget="
                      + std::to_string(ctx.reml_svd_mem_budget_gb) + "GB); raise the budget if the "
                        "true signal rank is larger, or accept this truncation.");
         else if (k_edge >= k_svd)
             LOGGER.w(0, "Woodbury auto-k: edge band not confirmed within k_max=" + std::to_string(k_svd)
-                     + "; clamped to k_max. Consider a larger --reml-woodbury-k-max or a wider "
-                       "--reml-woodbury-edge-margin.");
+                     + "; clamped to k_max. Consider a larger --reml-woodbury-basis-k-max or a wider "
+                       "--reml-woodbury-basis-edge-margin.");
     }
-    else if (EIG99_k) {
-        k = std::max(20, std::min(k_svd, k_EIG99 + ctx.woodbury_eig99_k_buffer));
+    else if (EIGMASS_k) {
+        k = std::max(20, std::min(k_svd, k_EIGMASS + ctx.woodbury_basis_eigmass_k_buffer));
         double cumulative = 0.0;
         for (int i = 0; i < k; ++i) cumulative += eval_full[i];
         const double rho = cumulative / trace_K_full;
-        LOGGER << "EIG99: trace(K)=" << trace_K_full
-            << ", raw " << ctx.reml_eigen_mass << "% mass crossing at k=" << k_EIG99
-            << ", using k=" << k << " (+" << ctx.woodbury_eig99_k_buffer << " eigenvalue buffer)"
+        LOGGER << "EIGMASS: trace(K)=" << trace_K_full
+            << ", raw " << ctx.woodbury_basis_eigen_mass * 100 << "% mass crossing at k=" << k_EIGMASS
+            << ", using k=" << k << " (+" << ctx.woodbury_basis_eigmass_k_buffer << " eigenvalue buffer)"
             << ", captured mass rho=" << rho << std::endl;
-        if (k_EIG99 >= k_svd && k_svd >= n - 1)
-            LOGGER.w(0, "Woodbury EIG99: mass target not reached even at k=n-1="
+        if (k_EIGMASS >= k_svd && k_svd >= n - 1)
+            LOGGER.w(0, "Woodbury EIGMASS: mass target not reached even at k=n-1="
                     + std::to_string(n - 1) + "; this GRM has near-full effective rank and "
                       "Woodbury may not offer a computational advantage here.");
-        else if (k_EIG99 >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
-            LOGGER.w(0, "Woodbury EIG99: mass target not reached within the memory-budget-implied "
-                        "ceiling k=" + std::to_string(k_svd) + " (--reml-woodbury-mem-budget="
+        else if (k_EIGMASS >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
+            LOGGER.w(0, "Woodbury EIGMASS: mass target not reached within the memory-budget-implied "
+                        "ceiling k=" + std::to_string(k_svd) + " (--reml-woodbury-basis-mem-budget="
                      + std::to_string(ctx.reml_svd_mem_budget_gb) + "GB); raise the budget if the "
                        "true mass target needs a larger rank, or accept this truncation.");
-        else if (k_EIG99 >= k_svd)
-            LOGGER.w(0, "Woodbury EIG99: mass target not reached within k_max="
-                    + std::to_string(k_svd) + "; increase --reml-woodbury-k-max.");
+        else if (k_EIGMASS >= k_svd)
+            LOGGER.w(0, "Woodbury EIGMASS: mass target not reached within k_max="
+                    + std::to_string(k_svd) + "; increase --reml-woodbury-basis-k-max.");
     }
 
     Eigen::VectorXd eval = eval_full.head(k);
@@ -1162,14 +1162,14 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         ctx.lambda_tail = 0.0;
     }
 
-    // tail_d_var was previously skipped for EIG99 on the reasoning that tail
+    // tail_d_var was previously skipped for EIGMASS on the reasoning that tail
     // mass < 1% of trace makes the correction negligible — but mass and
     // variance aren't the same thing. A tail spanning small positive
     // eigenvalues through zero into a substantial negative region (as this
     // GRM's does, past index ~8941) can have real spread even while summing
     // to under 1% of trace and averaging to something as small as
     // lambda_tail itself. Computing it costs one extra O(n^2) pass
-    // (trace(K^2)), the same one the non-EIG99 path already pays for.
+    // (trace(K^2)), the same one the non-EIGMASS path already pays for.
     {
         double trace_K2;
         if (ctx.reml_svd_chunked) {
@@ -1194,10 +1194,10 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     eval = eval.cwiseMax(0.0);
     ctx.dk            = eval;
     ctx.Uk            = evec;
-    ctx.woodbury_rank_ = k;
+    ctx.woodbury_basis_rank_ = k;
 
     ctx.A[ctx.r_indx[0]].resize(0, 0);
-    ctx.Vi_use_woodbury = true;
+    ctx.Vi_use_woodbury_basis = true;
 
     LOGGER << "Woodbury basis: k=" << k
            << ", lambda_tail=" << ctx.lambda_tail
@@ -1231,7 +1231,7 @@ void compute(RemlCtx& ctx,
            << ctx.r_indx.size() << " variance component(s) (including residual)." << std::endl;
 
     // Woodbury basis (must be done before init_varcomp for HE warm-start)
-    if (ctx.woodbury_rank != 0)
+    if (ctx.woodbury_basis_rank != 0)
         compute_woodbury_basis(ctx);
 
     RemlMat Vi_X_out(ctx.n, ctx.X_c), Xt_Vi_X_i_out(ctx.X_c, ctx.X_c);
@@ -1282,7 +1282,7 @@ void compute(RemlCtx& ctx,
     // Ensure V^{-1} is available for downstream MLMA streaming.
     // If neither Woodbury nor Hutch++ path: calcu_Vi with factorize_only=true so
     // we get L in ctx.Vi_L (or Vi in ctx.Vi) without needing P.
-    if (!ctx.reml_trace_approx && !ctx.Vi_use_woodbury) {
+    if (!ctx.reml_trace_approx && !ctx.Vi_use_woodbury_basis) {
         double logdet_dummy = 0.0;
         int iter_dummy = 0;
         calcu_Vi(ctx, varcmp, logdet_dummy, iter_dummy, /*factorize_only=*/true);
@@ -1293,7 +1293,7 @@ RemlState build_reml_state(const RemlCtx& ctx) {
     RemlState rs;
     rs.n           = static_cast<int32_t>(ctx.n);
     rs.x_c         = static_cast<int32_t>(ctx.X_c);
-    rs.is_woodbury = ctx.Vi_use_woodbury;
+    rs.is_woodbury = ctx.Vi_use_woodbury_basis;
 
     // Fixed-effects vector (double → float)
     rs.b = ctx.b.cast<float>();
@@ -1301,7 +1301,7 @@ RemlState build_reml_state(const RemlCtx& ctx) {
                                                   static_cast<Eigen::Index>(ctx.varcmp.size()))
                     .cast<float>();
 
-    if (ctx.Vi_use_woodbury) {
+    if (ctx.Vi_use_woodbury_basis) {
         // WoodburyMLMACache stores Uk_f as k×n (transposed) for GEMM efficiency.
         // ctx.Uk is n×k — transpose before storing.
         rs.wb.Uk_f         = ctx.Uk.transpose().cast<float>();  // k×n
