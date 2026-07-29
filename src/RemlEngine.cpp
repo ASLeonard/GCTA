@@ -1162,8 +1162,7 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             try {
                 gcta_eigh::EighResult res = gcta_eigh::nystrom_symmetric_eigh(
                     apply, n, k_svd,
-                    gcta_eigh::recommended_oversample(k_svd),
-                    ctx.woodbury_basis_nystrom_reg);
+                    gcta_eigh::recommended_oversample(k_svd));
                 eval_full = std::move(res.eigenvalues);
                 evec_full = std::move(res.eigenvectors);
             } catch (const std::exception& e) {
@@ -1217,6 +1216,9 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     eval_full.resize(0);
     evec_full.resize(0, 0);
 
+    // Woodbury uses a PSD low-rank-plus-isotropic surrogate. Project the
+    // signed Ritz spectrum before deriving its residual tail moments.
+    eval = eval.cwiseMax(0.0);
     const double trace_K = trace_K_full;
     ctx.lambda_tail = (n - k > 0) ? ((trace_K - eval.sum()) / static_cast<double>(n - k)) : 0.0;
     if (ctx.lambda_tail < 0.0) {
@@ -1228,7 +1230,6 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     ctx.tail_d_var = (n - k > 0) ? std::max(0.0, tail_sum_sq / static_cast<double>(n - k)
                                     - ctx.lambda_tail * ctx.lambda_tail) : 0.0;
 
-    eval = eval.cwiseMax(0.0);
     ctx.dk            = eval;
     ctx.Uk            = evec;
     ctx.woodbury_basis_rank_ = k;

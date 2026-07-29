@@ -545,18 +545,6 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             options_d["woodbury_basis_EIGMASS_k_buffer"] = std::stod(vals[0]);
             options_in.erase("--reml-woodbury-basis-EIGMASS-k-buffer");
         }
-        // Reliability threshold for Nystrom's C-eigenvalue truncated
-        // pseudo-inverse (relative to C's largest eigenvalue); directions at
-        // or below it are masked to zero rather than clamped-and-divided.
-        // Default 1e-4 — see the field comment in RemlCtx.hpp. Increase if a
-        // "sum of eigenvalues exceeds trace(K)" error fires.
-        if (options_in.find("--reml-woodbury-basis-nystrom-reg") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury-basis-nystrom-reg"];
-            if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--reml-woodbury-basis-nystrom-reg requires a fractional argument (e.g. 1e-4).");
-            options_d["woodbury_basis_nystrom_reg"] = std::stod(vals[0]);
-            options_in.erase("--reml-woodbury-basis-nystrom-reg");
-        }
         // --reml-woodbury-basis-mem-budget <GB>: hard cap on k_svd derived from an
         // approximate rSVD sketch memory budget, independent of n-1. See the
         // reml_svd_mem_budget_gb comment in RemlCtx.hpp — chunking K does
@@ -883,8 +871,6 @@ void MLMA::processMain()
             ctx.woodbury_basis_eigmass_k_buffer  = woodbury_basis_EIGMASS_k_buffer;
             ctx.woodbury_basis_var_thresh         = options_d.count("woodbury_basis_var_thresh")
                 ? options_d.at("woodbury_basis_var_thresh") : 0.5;
-            ctx.woodbury_basis_nystrom_reg     = options_d.count("woodbury_basis_nystrom_reg")
-                ? options_d.at("woodbury_basis_nystrom_reg") : 1e-4;
             ctx.reml_svd_mem_budget_gb   = woodbury_basis_mem_budget_gb;
             ctx.woodbury_basis_nystrom         = woodbury_basis_nystrom;
             ctx.reml_svd_chunked         = svd_chunked;

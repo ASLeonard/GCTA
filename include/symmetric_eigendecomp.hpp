@@ -273,20 +273,16 @@ inline ThinSVDResult tall_skinny_thin_svd(const Eigen::MatrixXd& Z) {
 //
 // GRM eigenvalue tails are often negative (missing genotypes introduce
 // small negative eigenvalues). C = Omega^T K Omega inherits this: it is
-// only PSD when K itself is PSD. Directions corresponding to eigenvalues
-// of C at or below `reg * max(lam_C, 1.0)` are masked to zero rather
-// than clamped — masking stops them contributing entirely, whereas
-// clamping-then-dividing amplifies noise in those directions. Increase
-// `reg` (e.g. 1e-3) if a "sum of eigenvalues exceeds trace(K)" check
-// fires downstream; decrease it (e.g. 1e-6) if too many boundary
-// eigenvectors are being dropped.
+// only PSD when K itself is. Use a signed pseudoinverse so the one-pass
+// approximation represents those directions instead of treating every
+// nonpositive eigenvalue as numerical noise. Only values at the backward
+// error scale of forming C are treated as its numerical nullspace.
 template <typename MatVecApply>
 EighResult nystrom_symmetric_eigh(
     MatVecApply&& apply,
     int n,
     int k_target,
     int oversample = 20,
-    double reg = 1e-4,
     const Eigen::MatrixXd* warm_start = nullptr)
 {
     const int k_ext = std::min(k_target + oversample, n - 1);
@@ -298,6 +294,15 @@ EighResult nystrom_symmetric_eigh(
     // Symmetric in exact arithmetic for PSD K; indefinite when K has
     // negative eigenvalues (e.g. GRM with missing genotypes).
     Eigen::MatrixXd C = omega.transpose() * Y;
+    C = 0.5 * (C + C.transpose());
+
+    // Bound the accumulated dot-product error in C = Omega^T Y. This is a
+    // numerical-rank criterion, not a spectral regularizer: nonzero
+    // negative eigenvalues remain part of the signed Nyström approximation.
+    const double eps = std::numeric_limits<double>::epsilon();
+    const double n_eps = static_cast<double>(n) * eps;
+    const double gamma_n = n_eps / (1.0 - n_eps);
+    const double eps_C = gamma_n * omega.norm() * Y.norm();
     omega.resize(0, 0);
 
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_C(C);
@@ -305,27 +310,34 @@ EighResult nystrom_symmetric_eigh(
         throw std::runtime_error("nystrom_symmetric_eigh: eigendecomposition of sketch C failed.");
     C.resize(0, 0);
 
-    const double lam_max = es_C.eigenvalues().maxCoeff();
-    const double eps_C   = reg * std::max(lam_max, 1.0);
+    const Eigen::VectorXd& lam_C = es_C.eigenvalues();
+    const Eigen::VectorXd lam_sqrt_abs_inv = lam_C.unaryExpr(
+        [eps_C](double lam) { return (std::abs(lam) > eps_C) ? 1.0 / std::sqrt(std::abs(lam)) : 0.0; });
+    const Eigen::VectorXd signs = lam_C.unaryExpr(
+        [eps_C](double lam) { return (std::abs(lam) > eps_C) ? ((lam > 0.0) ? 1.0 : -1.0) : 0.0; });
 
-    // Truncated pseudo-inverse: mask directions at or below eps_C to zero.
-    const Eigen::VectorXd lam_sqrt_inv = es_C.eigenvalues().unaryExpr(
-        [eps_C](double lam) { return (lam > eps_C) ? 1.0 / std::sqrt(lam) : 0.0; });
-
-    // Z = Y * V * Lambda^{-1/2}   (n × k_ext; masked columns are all-zero)
-    Eigen::MatrixXd Z = Y * (es_C.eigenvectors() * lam_sqrt_inv.asDiagonal());
+    // K_nys = Z sign(Lambda) Z^T, where
+    // Z = Y V |Lambda|^{-1/2}. This retains the signed spectrum of an
+    // indefinite GRM without an additional K matvec.
+    Eigen::MatrixXd Z = Y * (es_C.eigenvectors() * lam_sqrt_abs_inv.asDiagonal());
     Y.resize(0, 0);
 
-    // Thin SVD of Z: singular values^2 approximate eigenvalues of K,
-    // left singular vectors approximate eigenvectors of K.
-    const ThinSVDResult svd = tall_skinny_thin_svd(Z);
+    Eigen::HouseholderQR<Eigen::MatrixXd> qr(Z);
+    const Eigen::MatrixXd R = qr.matrixQR().topRows(k_ext).triangularView<Eigen::Upper>();
+    const Eigen::MatrixXd Q = qr.householderQ() * Eigen::MatrixXd::Identity(n, k_ext);
     Z.resize(0, 0);
 
+    Eigen::MatrixXd T = R * signs.asDiagonal() * R.transpose();
+    T = 0.5 * (T + T.transpose());
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_T(T);
+    if (es_T.info() != Eigen::Success)
+        throw std::runtime_error("nystrom_symmetric_eigh: eigendecomposition of signed core failed.");
+
     EighResult result;
-    // Singular values are descending (BDCSVD convention); square to recover
-    // eigenvalue estimates. Take only the requested k_target.
-    result.eigenvalues  = svd.singular_values.head(k_target).array().square();
-    result.eigenvectors = svd.U.leftCols(k_target);
+    result.eigenvalues = es_T.eigenvalues().tail(k_target).reverse();
+    const Eigen::MatrixXd evecs_sorted =
+        es_T.eigenvectors().rightCols(k_target).rowwise().reverse().eval();
+    result.eigenvectors = Q * evecs_sorted;
     return result;
 }
 

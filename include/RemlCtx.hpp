@@ -111,23 +111,6 @@ struct RemlCtx {
     int    woodbury_basis_eigmass_k_buffer   = 0;    // extra eigenvalues past the raw reml_eigen_mass crossing
     int    woodbury_basis_k_max            = 0;     // rank cap for auto-k (0 → min(n−1,1200))
     bool   woodbury_basis_nystrom          = false; // true → single-pass Nystrom basis
-    // Reliability threshold for C's eigenvalues (relative to C's largest
-    // eigenvalue) before Y*V*Lambda^{-1/2}. C = Omega^T A Omega is PSD in
-    // exact arithmetic only if A itself is — a real, *estimated* GRM
-    // (unlike a clean synthetic PSD matrix) commonly has a genuinely
-    // negative eigenvalue tail, not just floating-point noise, and a random
-    // projection of an indefinite A generically produces an indefinite C.
-    // Directions at or below this threshold are masked to zero contribution
-    // (truncated pseudo-inverse, standard practice for inverting a
-    // near-singular operator) rather than clamped up and still divided —
-    // clamping still amplifies whatever noise sits in that direction by a
-    // bounded factor; masking means it simply stops contributing. This is
-    // why Nystrom (inversion-based) is structurally more fragile here than
-    // the power-iteration path (projection-based, B=Q^TAQ, no division at
-    // all). 1e-4 discards directions more than ~4 orders of magnitude
-    // smaller than the largest as unreliable given a k_ext-sized random
-    // projection.
-    double woodbury_basis_nystrom_reg      = 1e-4;
     bool   reml_trace_approx         = false; // Hutch++ trace (skips n x n P)
     int    reml_trace_approx_nprobes = 90;
     int    reml_trace_power_iter     = 0;     // power-iter for Hutch++ range sketch

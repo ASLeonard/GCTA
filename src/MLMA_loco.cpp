@@ -227,13 +227,6 @@ int MLMALoco::registerOption(map<string, vector<string>>& options_in)
         options["woodbury_basis_nystrom"] = "1";
         options_in.erase("--reml-woodbury-basis-nystrom");
     }
-    if (options_in.find("--reml-woodbury-basis-nystrom-reg") != options_in.end()) {
-        const auto& vals = options_in["--reml-woodbury-basis-nystrom-reg"];
-        if (vals.empty() || vals[0].empty())
-            LOGGER.e(0, "--reml-woodbury-basis-nystrom-reg requires a fractional argument (e.g. 1e-4).");
-        options_d["woodbury_basis_nystrom_reg"] = std::stod(vals[0]);
-        options_in.erase("--reml-woodbury-basis-nystrom-reg");
-    }
 
     // --reml-trace-approx [n]
     if (options_in.find("--reml-trace-approx") != options_in.end()) {
@@ -293,8 +286,6 @@ void MLMALoco::processMain()
             ? static_cast<int>(options_d.at("woodbury_basis_EIGMASS_k_buffer")) : 0;
         const double woodbury_basis_var_thresh = options_d.count("woodbury_basis_var_thresh")
             ? options_d.at("woodbury_basis_var_thresh") : 0.5;
-        const double woodbury_basis_nystrom_reg = options_d.count("woodbury_basis_nystrom_reg")
-            ? options_d.at("woodbury_basis_nystrom_reg") : 1e-4;
 
         if (reml_alg < 0 || reml_alg > 2)
             LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
@@ -564,7 +555,6 @@ void MLMALoco::processMain()
             ctx.woodbury_basis_eigmass_k_buffer = woodbury_basis_EIGMASS_k_buffer;
             ctx.woodbury_basis_var_thresh      = woodbury_basis_var_thresh;
             ctx.woodbury_basis_nystrom         = woodbury_basis_nystrom;
-            ctx.woodbury_basis_nystrom_reg     = woodbury_basis_nystrom_reg;
             ctx.reml_trace_approx = trace_approx;
             ctx.reml_trace_approx_nprobes = trace_nprobes;
 
