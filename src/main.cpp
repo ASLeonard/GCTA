@@ -76,7 +76,13 @@ void out_ver(bool flag_outFile){
         log(0, outstring.str(), "");
     }
 #ifdef GCTA_BLAS_BACKEND_STR
-    log(0, std::string("* BLAS/LAPACK: ") + GCTA_BLAS_BACKEND_STR, "");
+    {
+        std::string blas_line = std::string("* BLAS/LAPACK: ") + GCTA_BLAS_BACKEND_STR;
+#ifdef GCTA_BLAS_VERSION_STR
+        blas_line += std::string(" (") + GCTA_BLAS_VERSION_STR + ")";
+#endif
+        log(0, blas_line, "");
+    }
 #endif
     log(0, "* (C) 2010-present, Yang Lab, Westlake University", "");
     log(0, "* Please report bugs to Jian Yang <jian.yang@westlake.edu.cn>", "");
@@ -108,9 +114,9 @@ int main(int argc, char *argv[]){
         "--GRM-tile-budget",
         "--mlma-stream", "--save-reml", "--load-reml", "--mlma-no-preadj-covar", "--log-pval", "--model",
         "--reml-trace-approx", "--reml-maxit", "--reml-woodbury-basis", "--reml-woodbury-basis-nystrom", "--reml-woodbury-basis-eigen-mass", "--reml-svd-chunked", "--reml-svd-chunk-size", "--reml-alg",
-        "--reml-no-constrain", "--reml-priors", "--reml-priors-var", "--reml-diagV-adj",
+        "--reml-no-constrain", "--reml-no-HE-start", "--reml-priors", "--reml-priors-var", "--reml-diagV-adj",
         "--mlma-loco-stream", "--loco-manifest",
-        "--pca-stream", "--pca-approx", "--pca-out-num",
+        "--pca-stream", "--pca-approx",
     };
     map<string, vector<string>> options;
     vector<string> keys;

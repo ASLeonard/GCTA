@@ -170,12 +170,14 @@ int MLMALoco::registerOption(map<string, vector<string>>& options_in)
         options_in.erase("--log-pval");
     }
 
-    // --reml-woodbury-basis [k]  (k optional; -1 = auto-k, -2 = EIGMASS)
+    // --reml-woodbury-basis [k]  (k optional; -1 = auto-k, -2 = EIGMASS, -3 = variance)
     if (options_in.find("--reml-woodbury-basis") != options_in.end()) {
         const auto& vals = options_in["--reml-woodbury-basis"];
         if (!vals.empty() && !vals[0].empty()) {
             if (vals[0] == "EIGMASS")
                 options_d["woodbury_basis_rank"] = -2.0;  // Eigenvalue mass k
+            else if (vals[0] == "variance")
+                options_d["woodbury_basis_rank"] = -3.0;  // Variance-k
             else if (vals[0] == "auto")
                 options_d["woodbury_basis_rank"] = -1.0;  // auto-k
             else

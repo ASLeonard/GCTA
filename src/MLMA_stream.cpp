@@ -306,6 +306,9 @@ void write_hsq_from_ctx(const string& out_prefix, const RemlCtx& ctx)
     if (ctx.has_logL)
         o_hsq << "logL\t" << to_text(ctx.logL) << "\n";
 
+    if (ctx.reml_iterations > 0)
+        o_hsq << "reml_iterations\t" << ctx.reml_iterations << "\n";
+
     o_hsq << "n\t" << ctx.n << "\n";
     o_hsq.close();
     LOGGER.i(0, "Summary REML results saved to [" + hsq_file + "].");
@@ -429,6 +432,7 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options_in.erase("--reml-maxit");
         options_in.erase("--reml-priors");
         options_in.erase("--reml-priors-var");
+        options_in.erase("--reml-no-HE-start");
     } else {
         // Inline REML path: --grm is required.
         const bool has_grm = options_in.find("--grm") != options_in.end()
@@ -438,12 +442,14 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options["grm"] = options_in["--grm"][0];
         options_in.erase("--grm");
 
-        // --reml-woodbury [k]  (k optional; -1 = auto-k, -2 = EIGMASS)
+        // --reml-woodbury [k]  (k optional; -1 = auto-k, -2 = EIGMASS, -3 = variance)
         if (options_in.find("--reml-woodbury-basis") != options_in.end()) {
             const auto& vals = options_in["--reml-woodbury-basis"];
             if (!vals.empty() && !vals[0].empty()) {
                 if (vals[0] == "EIGMASS")
                     options_d["woodbury_basis_rank"] = -2.0;  // Eigenvalue mass k
+                else if (vals[0] == "variance")
+                    options_d["woodbury_basis_rank"] = -3.0;  // Variance-k
                 else if (vals[0] == "auto")
                     options_d["woodbury_basis_rank"] = -1.0;  // auto-k
                 else
@@ -458,6 +464,13 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
                 LOGGER.e(0, "--reml-woodbury-basis-eigen-mass requires a fractional argument (e.g. 0.15).");
             options_d["woodbury_basis_eigen_mass"] = std::stof(vals[0]);
             options_in.erase("--reml-woodbury-basis-eigen-mass");
+        }
+        if (options_in.find("--reml-woodbury-basis-var-thresh") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-var-thresh"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-basis-var-thresh requires a numeric argument (e.g. 0.5).");
+            options_d["woodbury_basis_var_thresh"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-basis-var-thresh");
         }
         // --reml-woodbury-basis-nystrom is a boolean flag (no argument): selects a
         // single-pass Nystrom basis instead of the default eigendecomposition
@@ -479,6 +492,12 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
                 LOGGER.e(0, "--reml-woodbury-basis-warm-start requires a file prefix argument.");
             options["woodbury_basis_warm_start"] = vals[0];
             options_in.erase("--reml-woodbury-basis-warm-start");
+        }
+        if (options_in.find("--reml-no-HE-start") != options_in.end()) {
+            if (!options_in["--reml-no-HE-start"].empty())
+                LOGGER.w(0, "--reml-no-HE-start takes no argument; ignoring the supplied value.");
+            options["no_HE_start"] = false;
+            options_in.erase("--reml-no-HE-start");
         }
         // --reml-svd-chunked: read K in lower-triangular tiles for the
         // Woodbury basis rSVD instead of holding a dense n x n K resident —
@@ -803,6 +822,7 @@ void MLMA::processMain()
                 ? static_cast<int>(options_d.at("woodbury_basis_EIGMASS_k_buffer")) : 20;
             const double woodbury_basis_mem_budget_gb = options_d.count("woodbury_basis_mem_budget_gb")
                 ? options_d.at("woodbury_basis_mem_budget_gb") : 0.0;
+            const bool no_HE_start = options.count("no_HE_start") > 0;
 
             if (reml_alg < 0 || reml_alg > 2)
                 LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
@@ -861,6 +881,8 @@ void MLMA::processMain()
             ctx.woodbury_basis_edge_margin        = woodbury_basis_edge_margin;
             ctx.woodbury_basis_edge_confirm       = woodbury_basis_edge_confirm;
             ctx.woodbury_basis_eigmass_k_buffer  = woodbury_basis_EIGMASS_k_buffer;
+            ctx.woodbury_basis_var_thresh         = options_d.count("woodbury_basis_var_thresh")
+                ? options_d.at("woodbury_basis_var_thresh") : 0.5;
             ctx.woodbury_basis_nystrom_reg     = options_d.count("woodbury_basis_nystrom_reg")
                 ? options_d.at("woodbury_basis_nystrom_reg") : 1e-4;
             ctx.reml_svd_mem_budget_gb   = woodbury_basis_mem_budget_gb;
@@ -871,6 +893,7 @@ void MLMA::processMain()
             ctx.reml_trace_approx        = trace_approx;
             ctx.reml_trace_approx_nprobes = trace_nprobes;
             ctx.woodbury_basis_eigen_mass             = woodbury_basis_eigen_mass;
+            ctx.reml_no_HE_start         = no_HE_start;
 
             if (options.count("woodbury_basis_warm_start")) {
                 if (woodbury_basis_rank == 0)

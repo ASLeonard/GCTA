@@ -72,7 +72,7 @@ struct RemlCtx {
     int    reml_inv_mtd              = 0;     // 0=LLT, 1=LU (for V inversion fallback)
     double reml_diag_mul             = 0.01;  // diagonal jitter when V is near-singular
     int    reml_diagV_adj            = 0;     // 0=none, 1=diag jitter, 2=bending
-    int    woodbury_basis_rank             = 0;     // >0 fixed k; -1 auto-k; 0 off
+    int    woodbury_basis_rank             = 0;     // >0 fixed k; -1 auto-k; -2 EIGMASS-k; -3 variance-k; 0 off
     // auto-k: eigenvalues fall off a cliff at the Marchenko-Pastur bulk edge,
     // but the exact crossing point is noisy over a band of eigenvalues near
     // the edge (rSVD tail estimation error + finite-M lambda_plus estimate +
@@ -83,6 +83,7 @@ struct RemlCtx {
     // rather than by multiplying k_signal by a fixed factor.
     double woodbury_basis_edge_margin      = 0.15;  // relative margin below lambda_plus to confirm past the edge
     int    woodbury_basis_edge_confirm     = 20;    // consecutive sub-margin eigenvalues required to confirm
+    double woodbury_basis_var_thresh       = 0.5;   // max relative tail stddev ratio (sqrt(tail_d_var)/lambda_tail) for variance-k
     // EIGMASS-k: trace(K) ~ n (GRM diagonals are ~1), and most of that mass
     // sits in the Marchenko-Pastur bulk — many eigenvalues of similar size,
     // not a few outliers — so capturing "the last 0.5%" of trace mass can
@@ -92,7 +93,7 @@ struct RemlCtx {
     // past the raw crossing instead: those extra eigenvalues are usually
     // already sitting in the existing k_svd budget's headroom (oversample /
     // starting-budget slack), so this is normally free — no extra rSVD pass.
-    int    woodbury_basis_eigmass_k_buffer   = 20;    // extra eigenvalues past the raw reml_eigen_mass crossing
+    int    woodbury_basis_eigmass_k_buffer   = 0;    // extra eigenvalues past the raw reml_eigen_mass crossing
     int    woodbury_basis_k_max            = 0;     // rank cap for auto-k (0 → min(n−1,1200))
     bool   woodbury_basis_nystrom          = false; // true → single-pass Nystrom basis
     // Reliability threshold for C's eigenvalues (relative to C's largest
@@ -120,6 +121,7 @@ struct RemlCtx {
     bool   reml_no_converge          = false;
     bool   reml_fixed_var            = false;
     bool   reml_allow_constrain_run  = false;
+    bool   reml_no_HE_start          = false; // Active by default
 
     // Output naming (for .hsq file and LOGGER lines)
     std::string out;                       // output file prefix
@@ -168,4 +170,5 @@ struct RemlCtx {
     std::vector<double> hsq_se;    // SE for hsq entries
     double logL = 0.0;             // converged REML log-likelihood
     bool has_logL = false;
+    int reml_iterations = 0;       // total REML loop rounds executed
 };
