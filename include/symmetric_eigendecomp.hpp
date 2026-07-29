@@ -33,6 +33,7 @@
 #include <Spectra/SymEigsSolver.h>
 #include <algorithm>
 #include <limits>
+#include <random>
 #include <stdexcept>
 #include <utility>
 
@@ -53,6 +54,15 @@ struct EighResult {
     Eigen::VectorXd eigenvalues;   // descending, size k_target
     Eigen::MatrixXd eigenvectors;  // n x k_target, columns match eigenvalues
 };
+
+inline void fill_standard_normal(Eigen::Ref<Eigen::MatrixXd> matrix) {
+    std::random_device entropy;
+    std::mt19937 rng(entropy());
+    std::normal_distribution<double> normal(0.0, 1.0);
+    for (Eigen::Index col = 0; col < matrix.cols(); ++col)
+        for (Eigen::Index row = 0; row < matrix.rows(); ++row)
+            matrix(row, col) = normal(rng);
+}
 
 // Oversampling doesn't need to grow with k_target for generic top-k subspace
 // accuracy (HMT's error bound doesn't require it). But callers that use
@@ -91,9 +101,10 @@ std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_randomized_sketch(
         const int k_copy = std::min(static_cast<int>(warm_start->cols()), k_ext);
         omega.leftCols(k_copy) = warm_start->leftCols(k_copy);
         if (k_copy < k_ext)
-            omega.rightCols(k_ext - k_copy) = Eigen::MatrixXd::Random(n, k_ext - k_copy); //TODO: use random
+            fill_standard_normal(omega.rightCols(k_ext - k_copy));
     } else {
-        omega = Eigen::MatrixXd::Random(n, k_ext);
+        omega.resize(n, k_ext);
+        fill_standard_normal(omega);
     }
     Eigen::MatrixXd Y = apply(omega);
     return {std::move(omega), std::move(Y)};
