@@ -37,6 +37,7 @@
 
 #include "grm_binary_io.hpp"
 #include "chunked_grm_matvec.hpp"
+#include "PCA_stream.h"
 #include "symmetric_eigendecomp.hpp"
 
 #include <Eigen/Dense>
@@ -51,25 +52,9 @@ using std::string;
 using std::to_string;
 using std::vector;
 
-// Shared with MLMA and the other plugin classes — declared wherever that
-// mechanism actually lives (MLMA_stream_common.hpp or similar); this extern
-// just needs to match that declaration's type to link correctly. Each
-// registerOption() that claims its trigger flag pushes its own class name
-// here; each processMain() is a no-op unless its name shows up in the list,
-// since main calls every registered processMain unconditionally.
-extern vector<string> processFunctions;
-
-class PCAStream {
-public:
-    static map<string, string> options;
-    static map<string, double> options_d;
-
-    static int  registerOption(map<string, vector<string>>& options_in);
-    static void processMain();
-};
-
 map<string, string> PCAStream::options;
 map<string, double> PCAStream::options_d;
+vector<string> PCAStream::processFunctions;
 
 int PCAStream::registerOption(map<string, vector<string>>& options_in)
 {

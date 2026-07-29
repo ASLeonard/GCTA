@@ -36,6 +36,7 @@
 #include <omp.h>
 #include "MLMA.h"
 #include "MLMA_loco.h"
+#include "PCA_stream.h"
 #include <cstdlib>
 #include "mem.hpp"
 #include "config.h"
@@ -109,6 +110,7 @@ int main(int argc, char *argv[]){
         "--reml-trace-approx", "--reml-maxit", "--reml-woodbury-basis", "--reml-woodbury-basis-nystrom", "--reml-woodbury-basis-eigen-mass", "--reml-svd-chunked", "--reml-svd-chunk-size", "--reml-alg",
         "--reml-no-constrain", "--reml-priors", "--reml-priors-var", "--reml-diagV-adj",
         "--mlma-loco-stream", "--loco-manifest",
+        "--pca-stream", "--pca-approx", "--pca-out-num",
     };
     map<string, vector<string>> options;
     vector<string> keys;
@@ -268,9 +270,9 @@ int main(int argc, char *argv[]){
 
     //start register the options
     // Please take care of the order, C++ has few reflation feature, I did in a ugly way.
-    // Note: "mlma" and "mlma_loco" must appear before "GRM" so that --grm is captured
-    // by the MLMA modules before GRM::registerOption unconditionally erases it.
-    vector<string> module_names = {"phenotype", "marker", "genotype", "covar", "mlma", "mlma_loco", "GRM", "fastFAM", "LD"};
+        // Note: "mlma", "mlma_loco", and "pca_stream" must appear before "GRM" so
+        // that --grm is captured by those modules before GRM::registerOption erases it.
+        vector<string> module_names = {"phenotype", "marker", "genotype", "covar", "mlma", "mlma_loco", "pca_stream", "GRM", "fastFAM", "LD"};
     vector<int (*)(map<string, vector<string>>&)> registers = {
             Pheno::registerOption,
             Marker::registerOption,
@@ -278,6 +280,7 @@ int main(int argc, char *argv[]){
             Covar::registerOption,
             MLMA::registerOption,
             MLMALoco::registerOption,
+            PCAStream::registerOption,
             GRM::registerOption,
             FastFAM::registerOption,
             LD::registerOption
@@ -289,6 +292,7 @@ int main(int argc, char *argv[]){
             Covar::processMain,
             MLMA::processMain,
             MLMALoco::processMain,
+            PCAStream::processMain,
             GRM::processMain,
             FastFAM::processMain,
             LD::processMain

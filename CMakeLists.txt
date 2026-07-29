@@ -669,6 +669,7 @@ target_sources(GCTAg PRIVATE
         src/FastFAM.cpp
         src/MLMA_stream.cpp
         src/MLMA_loco.cpp
+        src/pca_stream.cpp
         src/RemlEngine.cpp
         src/GRM.cpp
         src/Geno.cpp

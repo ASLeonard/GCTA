@@ -30,6 +30,9 @@
 #include <Eigen/Dense>
 #include <functional>
 #include <vector>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace gcta_chunked {
 
@@ -72,26 +75,67 @@ inline Eigen::MatrixXd chunked_symmetric_matvec(
 
     Eigen::MatrixXd Y = Eigen::MatrixXd::Zero(n, X.cols());
 
+    // Lanczos matvecs are single-vector (X.cols()==1), where BLAS GEMV often
+    // leaves many cores idle. Parallelise over source blocks in that case.
+    // For block multiplies (rSVD sketches/power iters), keep the original
+    // serial block traversal so each tile multiply remains a larger GEMM.
+#ifdef _OPENMP
+    const bool prefer_tile_parallel = (X.cols() == 1) && (omp_get_max_threads() > 1) && (m > 1);
+#else
+    const bool prefer_tile_parallel = false;
+#endif
+
     for (int i = 0; i < m; ++i) {
         const int rs = part.block_start(i), re = part.block_end(i);
-        for (int j = 0; j <= i; ++j) {
-            const int cs = part.block_start(j), ce = part.block_end(j);
-            Eigen::MatrixXd tile = read_tile(rs, re, cs, ce);  // (re-rs) x (ce-cs)
+        const int rows_i = re - rs;
 
-            if (i == j) {
-                // Diagonal block: only its own lower triangle is valid data
-                // (mirrors how it was written); mirror locally before use.
-                Eigen::MatrixXd tile_full = tile.selfadjointView<Eigen::Lower>();
-                tile.resize(0, 0);  // fully absorbed into tile_full; not needed for the GEMM below
-                Y.middleRows(rs, re - rs).noalias() += tile_full * X.middleRows(rs, re - rs);
-            } else {
-                // Off-diagonal: tile = K[B_i, B_j]; reflect its transpose
-                // into B_j's output row range to account for K[B_j, B_i]
-                // without ever reading it from disk.
-                Y.middleRows(rs, re - rs).noalias() += tile * X.middleRows(cs, ce - cs);
-                Y.middleRows(cs, ce - cs).noalias() += tile.transpose() * X.middleRows(rs, re - rs);
+        if (!prefer_tile_parallel) {
+            for (int j = 0; j <= i; ++j) {
+                const int cs = part.block_start(j), ce = part.block_end(j);
+                Eigen::MatrixXd tile = read_tile(rs, re, cs, ce);  // (re-rs) x (ce-cs)
+
+                if (i == j) {
+                    // Diagonal block: only its own lower triangle is valid data
+                    // (mirrors how it was written); mirror locally before use.
+                    Eigen::MatrixXd tile_full = tile.selfadjointView<Eigen::Lower>();
+                    tile.resize(0, 0);  // fully absorbed into tile_full; not needed for the GEMM below
+                    Y.middleRows(rs, rows_i).noalias() += tile_full * X.middleRows(rs, rows_i);
+                } else {
+                    // Off-diagonal: tile = K[B_i, B_j]; reflect its transpose
+                    // into B_j's output row range to account for K[B_j, B_i]
+                    // without ever reading it from disk.
+                    Y.middleRows(rs, rows_i).noalias() += tile * X.middleRows(cs, ce - cs);
+                    Y.middleRows(cs, ce - cs).noalias() += tile.transpose() * X.middleRows(rs, rows_i);
+                }
             }
+            continue;
         }
+
+        Eigen::MatrixXd y_rs = Eigen::MatrixXd::Zero(rows_i, X.cols());
+#ifdef _OPENMP
+        #pragma omp parallel
+        {
+            Eigen::MatrixXd y_rs_local = Eigen::MatrixXd::Zero(rows_i, X.cols());
+            #pragma omp for schedule(dynamic)
+            for (int j = 0; j <= i; ++j) {
+                const int cs = part.block_start(j), ce = part.block_end(j);
+                Eigen::MatrixXd tile = read_tile(rs, re, cs, ce);
+
+                if (i == j) {
+                    Eigen::MatrixXd tile_full = tile.selfadjointView<Eigen::Lower>();
+                    y_rs_local.noalias() += tile_full * X.middleRows(rs, rows_i);
+                } else {
+                    y_rs_local.noalias() += tile * X.middleRows(cs, ce - cs);
+                    // For fixed i, each j maps to a disjoint block [cs, ce), so
+                    // these writes have no overlap across threads.
+                    Y.middleRows(cs, ce - cs).noalias() += tile.transpose() * X.middleRows(rs, rows_i);
+                }
+            }
+            #pragma omp critical
+            y_rs.noalias() += y_rs_local;
+        }
+#endif
+        Y.middleRows(rs, rows_i).noalias() += y_rs;
     }
     return Y;
 }
