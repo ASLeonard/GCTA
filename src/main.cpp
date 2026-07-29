@@ -113,7 +113,7 @@ int main(int argc, char *argv[]){
         "--envir", "--optimal-rho", "--noSandwich", "--grid-size",
         "--GRM-tile-budget",
         "--mlma-stream", "--save-reml", "--load-reml", "--mlma-no-preadj-covar", "--log-pval", "--model",
-        "--reml-trace-approx", "--reml-maxit", "--reml-woodbury-basis", "--reml-woodbury-basis-nystrom", "--reml-woodbury-basis-eigen-mass", "--reml-svd-chunked", "--reml-svd-chunk-size", "--reml-alg",
+        "--reml-trace-approx", "--reml-maxit", "--reml-woodbury-basis", "--reml-woodbury-basis-nystrom", "--reml-woodbury-basis-eigen-mass", "--reml-woodbury-basis-var-thresh", "--reml-svd-chunked", "--reml-svd-chunk-size", "--reml-alg",
         "--reml-no-constrain", "--reml-no-HE-start", "--reml-priors", "--reml-priors-var", "--reml-diagV-adj",
         "--mlma-loco-stream", "--loco-manifest",
         "--pca-stream", "--pca-approx",

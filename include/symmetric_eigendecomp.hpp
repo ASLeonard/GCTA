@@ -91,7 +91,7 @@ std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_randomized_sketch(
         const int k_copy = std::min(static_cast<int>(warm_start->cols()), k_ext);
         omega.leftCols(k_copy) = warm_start->leftCols(k_copy);
         if (k_copy < k_ext)
-            omega.rightCols(k_ext - k_copy) = Eigen::MatrixXd::Random(n, k_ext - k_copy);
+            omega.rightCols(k_ext - k_copy) = Eigen::MatrixXd::Random(n, k_ext - k_copy); //TODO: use random
     } else {
         omega = Eigen::MatrixXd::Random(n, k_ext);
     }
@@ -182,6 +182,36 @@ EighResult randomized_symmetric_eigh(
     auto [omega, Y] = build_randomized_sketch(apply, n, k_ext, warm_start);
     (void)omega;
     return power_iterate_and_project(std::forward<MatVecApply>(apply), std::move(Y), k_target, power_iter);
+}
+
+// Refine an orthonormal trial basis against the original operator. This costs
+// one additional block matvec and returns Rayleigh-Ritz eigenpairs, so callers
+// can use the resulting eigenvalues for spectral-mass decisions.
+template <typename MatVecApply>
+EighResult rayleigh_ritz_refine(
+    MatVecApply&& apply,
+    Eigen::MatrixXd basis,
+    int k_target)
+{
+    const int k_ext = static_cast<int>(basis.cols());
+    if (k_target > k_ext)
+        throw std::invalid_argument("rayleigh_ritz_refine: k_target exceeds basis width.");
+
+    Eigen::MatrixXd A_basis = apply(basis);
+    Eigen::MatrixXd B = basis.transpose() * A_basis;
+    A_basis.resize(0, 0);
+    B = 0.5 * (B + B.transpose());
+
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(B);
+    if (es.info() != Eigen::Success)
+        throw std::runtime_error("rayleigh_ritz_refine: eigendecomposition of projected matrix failed.");
+
+    EighResult result;
+    result.eigenvalues = es.eigenvalues().tail(k_target).reverse();
+    const Eigen::MatrixXd evecs_sorted =
+        es.eigenvectors().rightCols(k_target).rowwise().reverse().eval();
+    result.eigenvectors = basis * evecs_sorted;
+    return result;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

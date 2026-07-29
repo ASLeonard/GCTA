@@ -98,7 +98,12 @@ struct RemlCtx {
     // rather than by multiplying k_signal by a fixed factor.
     double woodbury_basis_edge_margin      = 0.15;  // relative margin below lambda_plus to confirm past the edge
     int    woodbury_basis_edge_confirm     = 20;    // consecutive sub-margin eigenvalues required to confirm
-    double woodbury_basis_var_thresh       = 0.5;   // max relative tail stddev ratio (sqrt(tail_d_var)/lambda_tail) for variance-k
+    // Maximum relative Frobenius error of replacing the residual spectrum by
+    // its mean: sqrt((n-k) * tail_d_var / tr(K^2)). Unlike a coefficient of
+    // variation, this remains meaningful when an indefinite tail has mean
+    // eigenvalue near zero. 0.001 limits its non-isotropic energy to 0.001% of
+    // the GRM's total spectral energy.
+    double woodbury_basis_var_thresh       = 0.001;
     // EIGMASS-k: trace(K) ~ n (GRM diagonals are ~1), and most of that mass
     // sits in the Marchenko-Pastur bulk — many eigenvalues of similar size,
     // not a few outliers — so capturing "the last 0.5%" of trace mass can

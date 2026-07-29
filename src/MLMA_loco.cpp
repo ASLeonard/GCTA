@@ -196,7 +196,7 @@ int MLMALoco::registerOption(map<string, vector<string>>& options_in)
     if (options_in.find("--reml-woodbury-basis-var-thresh") != options_in.end()) {
         const auto& vals = options_in["--reml-woodbury-basis-var-thresh"];
         if (vals.empty() || vals[0].empty())
-            LOGGER.e(0, "--reml-woodbury-basis-var-thresh requires a numeric argument (e.g. 0.5).");
+            LOGGER.e(0, "--reml-woodbury-basis-var-thresh requires a relative Frobenius error argument (e.g. 0.01).");
         options_d["woodbury_basis_var_thresh"] = std::stod(vals[0]);
         options_in.erase("--reml-woodbury-basis-var-thresh");
     }
@@ -285,7 +285,7 @@ void MLMALoco::processMain()
         const int    woodbury_basis_EIGMASS_k_buffer = options_d.count("woodbury_basis_EIGMASS_k_buffer")
             ? static_cast<int>(options_d.at("woodbury_basis_EIGMASS_k_buffer")) : 0;
         const double woodbury_basis_var_thresh = options_d.count("woodbury_basis_var_thresh")
-            ? options_d.at("woodbury_basis_var_thresh") : 0.5;
+            ? options_d.at("woodbury_basis_var_thresh") : 0.01;
 
         if (reml_alg < 0 || reml_alg > 2)
             LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");

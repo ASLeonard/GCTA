@@ -930,15 +930,22 @@ static RankEvalResult evaluate_rank_criterion(
         }
         case WoodburyMode::EigMass: {
             double cumulative = 0.0;
+            bool crossed_target = false;
             res.k_target = k_svd;
             for (int i = 0; i < static_cast<int>(eval_full.size()); ++i) {
                 cumulative += eval_full[i];
-                if (cumulative >= target_mass) { res.k_target = i + 1; break; }
+                if (cumulative >= target_mass) {
+                    res.k_target = i + 1;
+                    crossed_target = true;
+                    break;
+                }
             }
-            res.satisfied = (res.k_target + ctx.woodbury_basis_eigmass_k_buffer <= k_svd);
+            res.satisfied = crossed_target
+                         && (res.k_target + ctx.woodbury_basis_eigmass_k_buffer <= k_svd);
             break;
         }
         case WoodburyMode::Variance: {
+            bool crossed_target = false;
             res.k_target = k_svd;
             double cum_sum = 0.0;
             double cum_sq  = 0.0;
@@ -950,14 +957,16 @@ static RankEvalResult evaluate_rank_criterion(
                 const double tail_sum_sq = std::max(0.0, trace_K2 - cum_sq);
                 const double lam_tail    = (trace_K_full - cum_sum) / static_cast<double>(rem_n);
                 const double tail_var    = std::max(0.0, tail_sum_sq / static_cast<double>(rem_n) - lam_tail * lam_tail);
-                const double stddev      = std::sqrt(tail_var);
-                const double ratio       = stddev / std::max(std::abs(lam_tail), 1e-4);
-                if (ratio < ctx.woodbury_basis_var_thresh) {
+                const double tail_nonisotropic_energy = static_cast<double>(rem_n) * tail_var;
+                const double relative_frobenius_error = (trace_K2 > 0.0)
+                    ? std::sqrt(tail_nonisotropic_energy / trace_K2) : 0.0;
+                if (relative_frobenius_error < ctx.woodbury_basis_var_thresh) {
                     res.k_target = i + 1;
+                    crossed_target = true;
                     break;
                 }
             }
-            res.satisfied = (res.k_target <= k_svd);
+            res.satisfied = crossed_target;
             break;
         }
         case WoodburyMode::Fixed:
@@ -1038,16 +1047,21 @@ static int finalize_and_log_woodbury_rank(
             const double tail_sum_sq = std::max(0.0, trace_K2 - cum_sq);
             const double lam_tail    = (rem_n > 0) ? ((trace_K_full - cum_sum) / static_cast<double>(rem_n)) : 0.0;
             const double tail_var    = (rem_n > 0) ? std::max(0.0, tail_sum_sq / static_cast<double>(rem_n) - lam_tail * lam_tail) : 0.0;
-            const double ratio       = std::sqrt(tail_var) / std::max(std::abs(lam_tail), 1e-4);
+            const double tail_nonisotropic_energy = static_cast<double>(rem_n) * tail_var;
+            const double relative_frobenius_error = (trace_K2 > 0.0)
+                ? std::sqrt(tail_nonisotropic_energy / trace_K2) : 0.0;
             LOGGER << "VARIANCE: trace(K)=" << trace_K_full
-                   << ", target var ratio < " << ctx.woodbury_basis_var_thresh << " crossed at k=" << k_VAR
-                   << ", using k=" << k << " (tail_d_var=" << tail_var << ", ratio stddev/lambda_tail=" << ratio << ")" << std::endl;
+                   << ", target relative Frobenius tail error < " << ctx.woodbury_basis_var_thresh
+                   << " crossed at k=" << k_VAR << ", using k=" << k
+                   << " (tail_d_var=" << tail_var
+                   << ", tail non-isotropic energy=" << tail_nonisotropic_energy
+                   << ", relative Frobenius error=" << relative_frobenius_error << ")" << std::endl;
             if (k_VAR >= k_svd && k_svd >= n - 1)
-                LOGGER.w(0, "Woodbury VARIANCE: target variance ratio not reached even at k=n-1=" + std::to_string(n - 1) + ".");
+                LOGGER.w(0, "Woodbury VARIANCE: target relative Frobenius tail error not reached even at k=n-1=" + std::to_string(n - 1) + ".");
             else if (k_VAR >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
-                LOGGER.w(0, "Woodbury VARIANCE: target variance ratio not reached within memory budget ceiling k=" + std::to_string(k_svd) + ".");
+                LOGGER.w(0, "Woodbury VARIANCE: target relative Frobenius tail error not reached within memory budget ceiling k=" + std::to_string(k_svd) + ".");
             else if (k_VAR >= k_svd)
-                LOGGER.w(0, "Woodbury VARIANCE: target variance ratio not reached within k_max=" + std::to_string(k_svd) + ".");
+                LOGGER.w(0, "Woodbury VARIANCE: target relative Frobenius tail error not reached within k_max=" + std::to_string(k_svd) + ".");
             break;
         }
         case WoodburyMode::Fixed:
@@ -1163,6 +1177,11 @@ void compute_woodbury_basis(RemlCtx& ctx) {
                 gcta_eigh::EighResult res = gcta_eigh::nystrom_symmetric_eigh(
                     apply, n, k_svd,
                     gcta_eigh::recommended_oversample(k_svd));
+                if (mode == WoodburyMode::EigMass) {
+                    LOGGER << "Woodbury EIGMASS: refining Nystrom basis with one Rayleigh-Ritz projection ..."
+                           << std::endl;
+                    res = gcta_eigh::rayleigh_ritz_refine(apply, std::move(res.eigenvectors), k_svd);
+                }
                 eval_full = std::move(res.eigenvalues);
                 evec_full = std::move(res.eigenvectors);
             } catch (const std::exception& e) {

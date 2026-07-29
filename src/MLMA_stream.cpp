@@ -468,7 +468,7 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         if (options_in.find("--reml-woodbury-basis-var-thresh") != options_in.end()) {
             const auto& vals = options_in["--reml-woodbury-basis-var-thresh"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--reml-woodbury-basis-var-thresh requires a numeric argument (e.g. 0.5).");
+                LOGGER.e(0, "--reml-woodbury-basis-var-thresh requires a relative Frobenius error argument (e.g. 0.001).");
             options_d["woodbury_basis_var_thresh"] = std::stod(vals[0]);
             options_in.erase("--reml-woodbury-basis-var-thresh");
         }
@@ -870,7 +870,7 @@ void MLMA::processMain()
             ctx.woodbury_basis_edge_confirm       = woodbury_basis_edge_confirm;
             ctx.woodbury_basis_eigmass_k_buffer  = woodbury_basis_EIGMASS_k_buffer;
             ctx.woodbury_basis_var_thresh         = options_d.count("woodbury_basis_var_thresh")
-                ? options_d.at("woodbury_basis_var_thresh") : 0.5;
+                ? options_d.at("woodbury_basis_var_thresh") : 0.001;
             ctx.reml_svd_mem_budget_gb   = woodbury_basis_mem_budget_gb;
             ctx.woodbury_basis_nystrom         = woodbury_basis_nystrom;
             ctx.reml_svd_chunked         = svd_chunked;
