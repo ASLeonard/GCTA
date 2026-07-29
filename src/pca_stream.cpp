@@ -41,6 +41,7 @@
 #include "symmetric_eigendecomp.hpp"
 
 #include <Eigen/Dense>
+#include <chrono>
 #include <fstream>
 #include <unordered_set>
 #include <map>
@@ -67,6 +68,19 @@ int PCAStream::registerOption(map<string, vector<string>>& options_in)
     if (!has_pca_stream)
         return 0;
 
+    // PCAStream argument: --pca-stream [N]
+    // Omitted N means 0 (V1-style "all" sentinel), later mapped to n.
+    {
+        const auto& vals = options_in["--pca-stream"];
+        if (vals.empty()) {
+            options_d["pca_out_num"] = 0.0;
+        } else {
+            options_d["pca_out_num"] = std::stod(vals[0]);
+            if (vals.size() > 1)
+                LOGGER.w(0, "--pca-stream accepts at most one value; using the first one.");
+        }
+    }
+
     // Only reliable if PCAStream::registerOption runs before whatever else
     // might consume --grm-cutoff for an unrelated purpose (e.g. --make-grm
     // --grm-cutoff in the same invocation) — options_in is shared across all
@@ -88,13 +102,6 @@ int PCAStream::registerOption(map<string, vector<string>>& options_in)
                     "(V2 has no dense/exact mode — use --pca for that).");
     options["pca_approx"] = options_in["--pca-approx"][0];
     options_in.erase("--pca-approx");
-
-    // TODO: confirm this flag name against whatever V1's --pca uses for its
-    // PC-count argument, and reuse that name here instead if it differs.
-    if (options_in.find("--pca-out-num") != options_in.end() && !options_in["--pca-out-num"].empty()) {
-        options_d["pca_out_num"] = std::stod(options_in["--pca-out-num"][0]);
-        options_in.erase("--pca-out-num");
-    }
 
     if (options_in.find("--keep") != options_in.end() && !options_in["--keep"].empty()) {
         options["keep"] = options_in["--keep"][0];
@@ -163,11 +170,14 @@ void PCAStream::processMain()
             LOGGER.e(0, "--pca-stream: no individuals remain after --keep/--remove filtering.");
 
         int out_pc_num = options_d.count("pca_out_num")
-            ? static_cast<int>(options_d.at("pca_out_num")) : 20;  // TODO: confirm against V1's actual default
-        if (out_pc_num <= 0 || out_pc_num > n) out_pc_num = n;
+            ? static_cast<int>(options_d.at("pca_out_num")) : 0;
+        if (out_pc_num < 0)
+            LOGGER.e(0, "--pca-stream requires N >= 0 (0 means all, matching V1 semantics).");
+        if (out_pc_num == 0 || out_pc_num > n) out_pc_num = n;
         if (out_pc_num == n)
-            LOGGER.e(0, "--pca-stream: requested PC count equals sample size — "
-                        "rSVD/Lanczos need out_pc_num < n; use --pca (V1) for a full decomposition.");
+            LOGGER.e(0, "--pca-stream: N=0 (or N>=n) maps to full-spectrum in V1, "
+                        "but this V2 path only supports approximate rSVD/Lanczos with N < n. "
+                        "Use --pca-stream <N<n>, or use --pca (V1) for full decomposition.");
 
         const bool svd_chunked = options.count("svd_chunked") > 0;
         const int  chunk_size  = options_d.count("svd_chunk_size")
@@ -175,11 +185,13 @@ void PCAStream::processMain()
 
         // ---- GRM access: chunked tile reader, or dense (fallback / comparison) ----
         gcta_chunked::TileReader chunked_reader;
+        std::shared_ptr<const gcta_grm_io::ChunkedGrmMmap> chunked_file;
         Eigen::MatrixXd G_dense;  // left empty when svd_chunked
 
         if (svd_chunked) {
             gcta_grm_io::ChunkedGrmHandle handle = gcta_grm_io::make_chunked_grm_reader(grm_pfx, analysis_ids);
             chunked_reader = std::move(handle.reader);
+            chunked_file = std::move(handle.file);
             LOGGER.i(0, "--pca-stream: GRM will be read in " + to_string(chunk_size) +
                         "-row tiles from [" + grm_pfx + "] as needed, not loaded densely.");
         } else {
@@ -224,13 +236,26 @@ void PCAStream::processMain()
         }
 
         auto apply = [&](const auto& X) -> Eigen::MatrixXd {
+            const int cols = static_cast<int>(X.cols());
             if (svd_chunked)
-                return gcta_chunked::chunked_symmetric_matvec(chunked_reader, n, chunk_size, X);
-            return G_dense * X;
+            {
+                Eigen::MatrixXd Y;
+                if (cols == 1 && chunked_file) {
+                    Y.resize(n, 1);
+                    Y.col(0) = chunked_file->matvec_blocked(X.col(0), chunk_size);
+                } else {
+                    Y = gcta_chunked::chunked_symmetric_matvec(chunked_reader, n, chunk_size, X);
+                }
+                return Y;
+            }
+
+            Eigen::MatrixXd Y = G_dense * X;
+            return Y;
         };
 
         gcta_eigh::EighResult res;
         try {
+            const auto solver_t0 = std::chrono::steady_clock::now();
             if (pca_approx == "rSVD") {
                 const int oversample = gcta_eigh::recommended_oversample(out_pc_num);
                 res = gcta_eigh::randomized_symmetric_eigh(apply, n, out_pc_num, oversample, 3);

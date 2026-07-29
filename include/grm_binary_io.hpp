@@ -11,6 +11,9 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #include "chunked_grm_matvec.hpp"
 
@@ -196,6 +199,14 @@ public:
         }
         ::madvise(raw, byte_len_, MADV_RANDOM);
         fbuf_ = static_cast<const float*>(raw);
+
+        kp_is_identity_ = true;
+        for (int i = 0; i < static_cast<int>(kp_.size()); ++i) {
+            if (kp_[i] != i) {
+                kp_is_identity_ = false;
+                break;
+            }
+        }
     }
 
     ~ChunkedGrmMmap() {
@@ -236,6 +247,85 @@ public:
         return read_raw(kp_[analysis_row], kp_[analysis_col]);
     }
 
+    // Fused y = Kx for the packed lower-triangular mmap, specialized for the
+    // single-vector case that dominates chunked Lanczos. This bypasses the
+    // tile -> MatrixXd materialization path entirely.
+    Eigen::VectorXd matvec_blocked(const Eigen::Ref<const Eigen::VectorXd>& x,
+                                   int block_size) const {
+        const int n = static_cast<int>(kp_.size());
+        if (x.size() != n)
+            throw std::invalid_argument("ChunkedGrmMmap::matvec_blocked: x has wrong length.");
+
+#ifdef _OPENMP
+        const int num_threads = omp_get_max_threads();
+        if (num_threads > 1) {
+            Eigen::MatrixXd partials = Eigen::MatrixXd::Zero(n, num_threads);
+            #pragma omp parallel
+            {
+                const int tid = omp_get_thread_num();
+                Eigen::VectorXd y_local = Eigen::VectorXd::Zero(n);
+                #pragma omp for schedule(static, block_size > 0 ? block_size : 1)
+                for (int r = 0; r < n; ++r) {
+                    const double xr = x[r];
+                    const int gi = kp_[r];
+                    double acc = 0.0;
+
+                    if (kp_is_identity_) {
+                        const size_t row_base = static_cast<size_t>(gi) * (gi + 1) / 2;
+                        const float* row = fbuf_ + row_base;
+                        for (int c = 0; c < r; ++c) {
+                            const double a = static_cast<double>(row[c]);
+                            acc += a * x[c];
+                            y_local[c] += a * xr;
+                        }
+                        acc += static_cast<double>(row[r]) * xr;
+                    } else {
+                        for (int c = 0; c < r; ++c) {
+                            const double a = read_raw(gi, kp_[c]);
+                            acc += a * x[c];
+                            y_local[c] += a * xr;
+                        }
+                        acc += read_raw(gi, gi) * xr;
+                    }
+
+                    y_local[r] += acc;
+                }
+                partials.col(tid) = std::move(y_local);
+            }
+            return partials.rowwise().sum();
+        }
+#endif
+
+        Eigen::VectorXd y = Eigen::VectorXd::Zero(n);
+        for (int r = 0; r < n; ++r) {
+            const double xr = x[r];
+            const int gi = kp_[r];
+            double acc = 0.0;
+
+            if (kp_is_identity_) {
+                const size_t row_base = static_cast<size_t>(gi) * (gi + 1) / 2;
+                const float* row = fbuf_ + row_base;
+                for (int c = 0; c < r; ++c) {
+                    const double a = static_cast<double>(row[c]);
+                    acc += a * x[c];
+                    y[c] += a * xr;
+                }
+                acc += static_cast<double>(row[r]) * xr;
+            } else {
+                for (int c = 0; c < r; ++c) {
+                    const double a = read_raw(gi, kp_[c]);
+                    acc += a * x[c];
+                    y[c] += a * xr;
+                }
+                acc += read_raw(gi, gi) * xr;
+            }
+
+            y[r] += acc;
+        }
+
+        return y;
+    }
+
 private:
     double read_raw(int gi, int gj) const {
         const int file_row = std::max(gi, gj);
@@ -249,6 +339,7 @@ private:
     int fd_ = -1;
     size_t byte_len_ = 0;
     const float* fbuf_ = nullptr;
+    bool kp_is_identity_ = false;
 };
 
 // .grm.N.bin diagonal only (mean SNP count) — same file, same packed layout,
@@ -294,6 +385,7 @@ inline double read_grm_N_mean(const std::string& prefix, int n_grm) {
 
 struct ChunkedGrmHandle {
     gcta_chunked::TileReader reader;
+    std::shared_ptr<const ChunkedGrmMmap> file;
     double m_snps = 0.0;
 };
 
@@ -320,6 +412,7 @@ inline ChunkedGrmHandle make_chunked_grm_reader(
     ChunkedGrmHandle handle;
     handle.m_snps = read_grm_N_mean(prefix, n_grm);
     auto file = std::make_shared<ChunkedGrmMmap>(prefix + ".grm.bin", std::move(kp), n_grm);
+    handle.file = file;
     handle.reader = [file](int rs, int re, int cs, int ce) -> Eigen::MatrixXd {
         return file->read_tile(rs, re, cs, ce);
     };

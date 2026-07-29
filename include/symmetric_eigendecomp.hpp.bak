@@ -32,9 +32,9 @@
 #include <Eigen/Dense>
 #include <Spectra/SymEigsSolver.h>
 #include <algorithm>
-#include <limits>
 #include <stdexcept>
 #include <utility>
+#include <omp.h>
 
 namespace gcta_eigh {
 
@@ -46,7 +46,26 @@ inline Eigen::VectorXd threaded_dense_matvec(
     const int n = static_cast<int>(A.rows());
     if (A.cols() != n || x.size() != n)
         throw std::invalid_argument("threaded_dense_matvec: dimension mismatch.");
-    return A * x;
+
+    const int num_threads = omp_get_max_threads();
+    // Reuse the per-call partial accumulation buffer to avoid repeated
+    // n x num_threads allocations on Lanczos' many single-vector applies.
+    // This path intentionally handles num_threads==1 too, for consistent
+    // behavior independent of backend GEMV threading policy.
+    static thread_local Eigen::MatrixXd partials;
+    if (partials.rows() != n || partials.cols() != num_threads)
+        partials.resize(n, num_threads);
+    partials.setZero();
+
+    #pragma omp parallel
+    {
+        const int tid = omp_get_thread_num();
+        auto y_local = partials.col(tid);
+        #pragma omp for schedule(static, col_block)
+        for (int j = 0; j < n; ++j)
+            y_local.noalias() += A.col(j) * x[j];
+    }
+    return partials.rowwise().sum();
 }
 
 struct EighResult {

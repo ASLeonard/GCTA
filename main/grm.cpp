@@ -1016,7 +1016,14 @@ void gcta::pca(std::string grm_file, std::string keep_indi_file, std::string rem
         // routines in practice despite the 2x flop count. Generic on X so it
         // serves both the block sketches (rSVD) and single vectors (Lanczos).
         auto apply = [&](const auto& X) -> Eigen::MatrixXd {
-            return grm_dbl.selfadjointView<Eigen::Upper>() * X;
+            const int cols = static_cast<int>(X.cols());
+            if (X.cols() == 1) {
+                Eigen::MatrixXd Y(n, 1);
+                Y.col(0) = gcta_eigh::threaded_dense_matvec(grm_dbl, X.col(0));
+                return Y;
+            }
+            Eigen::MatrixXd Y = grm_dbl * X;
+            return Y;
         };
 
         try {

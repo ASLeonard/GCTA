@@ -24,6 +24,14 @@
 using RemlMat = Eigen::MatrixXd;
 using RemlVec = Eigen::VectorXd;
 
+enum class WoodburyMode {
+    Off      = 0,
+    Fixed    = 1,
+    AutoMP   = -1, // Marchenko-Pastur bulk edge
+    EigMass  = -2, // Eigenvalue spectral mass fraction
+    Variance = -3  // Relative tail variance dispersion ratio
+};
+
 // ──────────────────────────────────────────────────────────────────────────────
 // RemlCtx: input + config + workspace + output
 // Caller fills the "Input" and "Config" sections, then calls reml::compute().
@@ -31,6 +39,13 @@ using RemlVec = Eigen::VectorXd;
 // "Workspace" holds the V^{-1} state needed for the subsequent association test.
 // ──────────────────────────────────────────────────────────────────────────────
 struct RemlCtx {
+    WoodburyMode woodbury_mode() const {
+        if (woodbury_basis_rank == -1) return WoodburyMode::AutoMP;
+        if (woodbury_basis_rank == -2) return WoodburyMode::EigMass;
+        if (woodbury_basis_rank == -3) return WoodburyMode::Variance;
+        if (woodbury_basis_rank > 0)   return WoodburyMode::Fixed;
+        return WoodburyMode::Off;
+    }
     // ── Input (set by caller before reml::compute()) ──────────────────────────
     int  n     = 0;   // sample size
     int  X_c   = 0;   // columns in design matrix (1 + n_covariates)
