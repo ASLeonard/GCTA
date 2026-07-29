@@ -129,6 +129,22 @@ int PCAStream::registerOption(map<string, vector<string>>& options_in)
         options_in.erase("--reml-svd-chunk-size");
     }
 
+    // Nystrom single-pass variant: reuses the Woodbury flag so callers can
+    // share tuning between --pca-stream and --mlma-stream in the same pipeline.
+    if (options_in.find("--reml-woodbury-basis-nystrom") != options_in.end()) {
+        if (!options_in["--reml-woodbury-basis-nystrom"].empty())
+            LOGGER.w(0, "--reml-woodbury-basis-nystrom takes no argument; ignoring the supplied value.");
+        options["pca_nystrom"] = "1";
+        options_in.erase("--reml-woodbury-basis-nystrom");
+    }
+    if (options_in.find("--reml-woodbury-basis-nystrom-reg") != options_in.end()) {
+        const auto& vals = options_in["--reml-woodbury-basis-nystrom-reg"];
+        if (vals.empty() || vals[0].empty())
+            LOGGER.e(0, "--reml-woodbury-basis-nystrom-reg requires a fractional argument (e.g. 1e-4).");
+        options_d["nystrom_reg"] = std::stod(vals[0]);
+        options_in.erase("--reml-woodbury-basis-nystrom-reg");
+    }
+
     processFunctions.push_back("PCAStream");
     options_in.erase("--pca-stream");
     return 1;
@@ -256,9 +272,19 @@ void PCAStream::processMain()
         gcta_eigh::EighResult res;
         try {
             const auto solver_t0 = std::chrono::steady_clock::now();
+            const bool pca_nystrom = options.count("pca_nystrom") > 0;
+            const double nystrom_reg = options_d.count("nystrom_reg")
+                ? options_d.at("nystrom_reg") : 1e-4;
             if (pca_approx == "rSVD") {
                 const int oversample = gcta_eigh::recommended_oversample(out_pc_num);
-                res = gcta_eigh::randomized_symmetric_eigh(apply, n, out_pc_num, oversample, 3);
+                if (pca_nystrom) {
+                    LOGGER.i(0, "--pca-stream rSVD+Nystrom: single-pass sketch (1 GRM matvec, reg=" +
+                                std::to_string(nystrom_reg) + "). Accuracy near PC " +
+                                std::to_string(out_pc_num) + " may be lower than power-iteration rSVD.");
+                    res = gcta_eigh::nystrom_symmetric_eigh(apply, n, out_pc_num, oversample, nystrom_reg);
+                } else {
+                    res = gcta_eigh::randomized_symmetric_eigh(apply, n, out_pc_num, oversample, 3);
+                }
             } else if (pca_approx == "Lanczos") {
                 const int ncv = std::min(n, std::max(3 * out_pc_num + 1, 30));
                 res = gcta_eigh::lanczos_symmetric_eigh(apply, n, out_pc_num, ncv);

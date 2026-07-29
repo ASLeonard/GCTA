@@ -261,4 +261,72 @@ inline ThinSVDResult tall_skinny_thin_svd(const Eigen::MatrixXd& Z) {
     return result;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Nystrom single-pass approximation
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Uses 1 matvec pass (vs power_iter+1 for rSVD), so it is 4x cheaper at
+// the default power_iter=3. The trade-off: no power-iteration sharpening
+// of the subspace estimate near the k-th eigenvalue. Accuracy degrades
+// faster as k/n grows and eigenvalues become densely packed near the
+// spectral boundary.
+//
+// GRM eigenvalue tails are often negative (missing genotypes introduce
+// small negative eigenvalues). C = Omega^T K Omega inherits this: it is
+// only PSD when K itself is PSD. Directions corresponding to eigenvalues
+// of C at or below `reg * max(lam_C, 1.0)` are masked to zero rather
+// than clamped — masking stops them contributing entirely, whereas
+// clamping-then-dividing amplifies noise in those directions. Increase
+// `reg` (e.g. 1e-3) if a "sum of eigenvalues exceeds trace(K)" check
+// fires downstream; decrease it (e.g. 1e-6) if too many boundary
+// eigenvectors are being dropped.
+template <typename MatVecApply>
+EighResult nystrom_symmetric_eigh(
+    MatVecApply&& apply,
+    int n,
+    int k_target,
+    int oversample = 20,
+    double reg = 1e-4,
+    const Eigen::MatrixXd* warm_start = nullptr)
+{
+    const int k_ext = std::min(k_target + oversample, n - 1);
+
+    // One-pass sketch: omega ~ Gaussian (or warm-started), Y = K * omega
+    auto [omega, Y] = build_randomized_sketch(apply, n, k_ext, warm_start);
+
+    // C = omega^T * Y  (k_ext × k_ext)
+    // Symmetric in exact arithmetic for PSD K; indefinite when K has
+    // negative eigenvalues (e.g. GRM with missing genotypes).
+    Eigen::MatrixXd C = omega.transpose() * Y;
+    omega.resize(0, 0);
+
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_C(C);
+    if (es_C.info() != Eigen::Success)
+        throw std::runtime_error("nystrom_symmetric_eigh: eigendecomposition of sketch C failed.");
+    C.resize(0, 0);
+
+    const double lam_max = es_C.eigenvalues().maxCoeff();
+    const double eps_C   = reg * std::max(lam_max, 1.0);
+
+    // Truncated pseudo-inverse: mask directions at or below eps_C to zero.
+    const Eigen::VectorXd lam_sqrt_inv = es_C.eigenvalues().unaryExpr(
+        [eps_C](double lam) { return (lam > eps_C) ? 1.0 / std::sqrt(lam) : 0.0; });
+
+    // Z = Y * V * Lambda^{-1/2}   (n × k_ext; masked columns are all-zero)
+    Eigen::MatrixXd Z = Y * (es_C.eigenvectors() * lam_sqrt_inv.asDiagonal());
+    Y.resize(0, 0);
+
+    // Thin SVD of Z: singular values^2 approximate eigenvalues of K,
+    // left singular vectors approximate eigenvectors of K.
+    const ThinSVDResult svd = tall_skinny_thin_svd(Z);
+    Z.resize(0, 0);
+
+    EighResult result;
+    // Singular values are descending (BDCSVD convention); square to recover
+    // eigenvalue estimates. Take only the requested k_target.
+    result.eigenvalues  = svd.singular_values.head(k_target).array().square();
+    result.eigenvectors = svd.U.leftCols(k_target);
+    return result;
+}
+
 } // namespace gcta_eigh

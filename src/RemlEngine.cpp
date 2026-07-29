@@ -1158,28 +1158,17 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         const int oversample = gcta_eigh::recommended_oversample(k_svd);
         const int k_ext = std::min(k_svd + oversample, n - 1);
 
-        const int k_prev = static_cast<int>(ctx.Uk.cols());
-        const bool has_warm = (!ctx.woodbury_basis_nystrom && allows_warm && k_prev > 0 && ctx.Uk.rows() == n);
-        auto [omega, Y_init] = gcta_eigh::build_randomized_sketch(
-            apply, n, k_ext, has_warm ? &ctx.Uk : nullptr);
-        Eigen::MatrixXd Y = std::move(Y_init);
-
         if (ctx.woodbury_basis_nystrom) {
-            Eigen::MatrixXd C = omega.transpose() * Y;
-            omega.resize(0, 0);
-            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_C(C);
-            if (es_C.info() != Eigen::Success)
-                LOGGER.e(0, "Woodbury Nystrom: eigendecomposition of sketch C failed.");
-            const double lam_max = es_C.eigenvalues().maxCoeff();
-            const double eps_C   = ctx.woodbury_basis_nystrom_reg * std::max(lam_max, 1.0);
-            Eigen::VectorXd lam_sqrt_inv = es_C.eigenvalues().unaryExpr([eps_C](double lam) {
-                return (lam > eps_C) ? 1.0 / std::sqrt(lam) : 0.0;
-            });
-            Y = Y * (es_C.eigenvectors() * lam_sqrt_inv.asDiagonal());
-            const gcta_eigh::ThinSVDResult svd = gcta_eigh::tall_skinny_thin_svd(Y);
-            Y.resize(0, 0);
-            eval_full = svd.singular_values.head(k_svd).array().square();
-            evec_full = svd.U.leftCols(k_svd);
+            try {
+                gcta_eigh::EighResult res = gcta_eigh::nystrom_symmetric_eigh(
+                    apply, n, k_svd,
+                    gcta_eigh::recommended_oversample(k_svd),
+                    ctx.woodbury_basis_nystrom_reg);
+                eval_full = std::move(res.eigenvalues);
+                evec_full = std::move(res.eigenvectors);
+            } catch (const std::exception& e) {
+                LOGGER.e(0, std::string("Woodbury Nystrom: ") + e.what());
+            }
 
             const double eval_sum = eval_full.sum();
             if (eval_sum > trace_K_full * 1.01)
@@ -1187,6 +1176,10 @@ void compute_woodbury_basis(RemlCtx& ctx) {
                     "Woodbury Nystrom: sum of estimated eigenvalues (" + std::to_string(eval_sum) +
                     ") exceeds trace(K) (" + std::to_string(trace_K_full) + ") — impossible for real eigenvalues.");
         } else {
+            const int k_prev = static_cast<int>(ctx.Uk.cols());
+            const bool has_warm = (allows_warm && k_prev > 0 && ctx.Uk.rows() == n);
+            auto [omega, Y] = gcta_eigh::build_randomized_sketch(
+                apply, n, k_ext, has_warm ? &ctx.Uk : nullptr);
             omega.resize(0, 0);
             constexpr int power_iter = 3;
             try {
