@@ -852,6 +852,214 @@ double reml_iteration(RemlCtx& ctx,
 
 namespace reml {
 
+namespace {
+
+static const char* woodbury_mode_name(WoodburyMode mode) {
+    switch (mode) {
+        case WoodburyMode::AutoMP:   return "auto-k";
+        case WoodburyMode::EigMass:  return "EIGMASS-k";
+        case WoodburyMode::Variance: return "variance-k";
+        case WoodburyMode::Fixed:    return "fixed-k";
+        default:                     return "off";
+    }
+}
+
+static bool woodbury_mode_allows_warm_start(WoodburyMode mode) {
+    // AutoMP benefits from warm-starting across rSVD budget expansions.
+    // EigMass and Variance require accurate tail/bulk summation each round,
+    // so fresh probes avoid carrying over warm-start bias.
+    return (mode == WoodburyMode::AutoMP);
+}
+
+static int woodbury_initial_k_svd(const RemlCtx& ctx, WoodburyMode mode, int k_budget_ceiling) {
+    const bool hard_cap = (ctx.woodbury_basis_k_max > 0);
+    const int n = ctx.n;
+    switch (mode) {
+        case WoodburyMode::AutoMP:
+            return hard_cap ? ctx.woodbury_basis_k_max : std::min({n - 1, k_budget_ceiling, 1200});
+        case WoodburyMode::EigMass:
+        case WoodburyMode::Variance: {
+            const int start_guess = std::clamp(n / 20, 1200, 25000);
+            return hard_cap ? ctx.woodbury_basis_k_max : std::min({n - 1, k_budget_ceiling, start_guess});
+        }
+        case WoodburyMode::Fixed:
+        default:
+            return ctx.woodbury_basis_rank;
+    }
+}
+
+struct RankEvalResult {
+    bool satisfied = false;
+    int k_target   = 0;
+    int k_extra    = 0;
+};
+
+static RankEvalResult evaluate_rank_criterion(
+    WoodburyMode mode,
+    const Eigen::VectorXd& eval_full,
+    int k_svd,
+    double lambda_plus,
+    double target_mass,
+    double trace_K_full,
+    double trace_K2,
+    const RemlCtx& ctx)
+{
+    RankEvalResult res;
+    const int n = ctx.n;
+
+    switch (mode) {
+        case WoodburyMode::AutoMP: {
+            int k_signal = 0;
+            while (k_signal < static_cast<int>(eval_full.size()) && eval_full[k_signal] > lambda_plus)
+                ++k_signal;
+            const double confirm_thresh = (1.0 - ctx.woodbury_basis_edge_margin) * lambda_plus;
+            int run_len = 0, run_start = -1;
+            for (int i = k_signal; i < static_cast<int>(eval_full.size()); ++i) {
+                if (eval_full[i] < confirm_thresh) {
+                    if (run_len == 0) run_start = i;
+                    if (++run_len >= ctx.woodbury_basis_edge_confirm) break;
+                } else {
+                    run_len = 0;
+                    run_start = -1;
+                }
+            }
+            res.satisfied = (run_len >= ctx.woodbury_basis_edge_confirm);
+            res.k_target  = res.satisfied ? run_start : k_svd;
+            res.k_extra   = k_signal;
+            break;
+        }
+        case WoodburyMode::EigMass: {
+            double cumulative = 0.0;
+            res.k_target = k_svd;
+            for (int i = 0; i < static_cast<int>(eval_full.size()); ++i) {
+                cumulative += eval_full[i];
+                if (cumulative >= target_mass) { res.k_target = i + 1; break; }
+            }
+            res.satisfied = (res.k_target + ctx.woodbury_basis_eigmass_k_buffer <= k_svd);
+            break;
+        }
+        case WoodburyMode::Variance: {
+            res.k_target = k_svd;
+            double cum_sum = 0.0;
+            double cum_sq  = 0.0;
+            for (int i = 0; i < static_cast<int>(eval_full.size()); ++i) {
+                cum_sum += eval_full[i];
+                cum_sq  += eval_full[i] * eval_full[i];
+                const int rem_n = n - (i + 1);
+                if (rem_n <= 0) break;
+                const double tail_sum_sq = std::max(0.0, trace_K2 - cum_sq);
+                const double lam_tail    = (trace_K_full - cum_sum) / static_cast<double>(rem_n);
+                const double tail_var    = std::max(0.0, tail_sum_sq / static_cast<double>(rem_n) - lam_tail * lam_tail);
+                const double stddev      = std::sqrt(tail_var);
+                const double ratio       = stddev / std::max(std::abs(lam_tail), 1e-4);
+                if (ratio < ctx.woodbury_basis_var_thresh) {
+                    res.k_target = i + 1;
+                    break;
+                }
+            }
+            res.satisfied = (res.k_target <= k_svd);
+            break;
+        }
+        case WoodburyMode::Fixed:
+        default:
+            res.satisfied = true;
+            res.k_target  = ctx.woodbury_basis_rank;
+            break;
+    }
+    return res;
+}
+
+static int finalize_and_log_woodbury_rank(
+    WoodburyMode mode,
+    const RemlCtx& ctx,
+    const Eigen::VectorXd& eval_full,
+    int k_svd,
+    int k_svd_budget_ceiling,
+    double lambda_plus,
+    double trace_K_full,
+    double trace_K2,
+    const RankEvalResult& eval_res)
+{
+    const int n = ctx.n;
+    const bool k_max_is_hard_ceiling = (ctx.woodbury_basis_k_max > 0);
+    int k = 0;
+
+    switch (mode) {
+        case WoodburyMode::AutoMP: {
+            const int k_edge = eval_res.k_target;
+            const int k_signal = eval_res.k_extra;
+            k = std::max(20, std::min(k_svd, k_edge));
+            const int band = std::max(0, k_edge - k_signal);
+            LOGGER << "MP bulk edge lambda+ = " << lambda_plus
+                   << " (n=" << n << ")"
+                   << ", eigenvalues above lambda+ = " << k_signal
+                   << ", edge band confirmed after " << band << " additional eigenvalue(s)"
+                   << " (margin=" << (ctx.woodbury_basis_edge_margin * 100.0) << "%, confirm="
+                   << ctx.woodbury_basis_edge_confirm << " consecutive)"
+                   << ", using k = " << k << std::endl;
+            if (k_edge >= k_svd && k_svd >= n - 1)
+                LOGGER.w(0, "Woodbury auto-k: edge band not confirmed even at k=n-1=" + std::to_string(n - 1)
+                         + "; this GRM has near-full effective rank and Woodbury may not offer a computational advantage here.");
+            else if (k_edge >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
+                LOGGER.w(0, "Woodbury auto-k: edge band not confirmed within the memory-budget-implied ceiling k="
+                         + std::to_string(k_svd) + " (--reml-woodbury-basis-mem-budget=" + std::to_string(ctx.reml_svd_mem_budget_gb) + "GB).");
+            else if (k_edge >= k_svd)
+                LOGGER.w(0, "Woodbury auto-k: edge band not confirmed within k_max=" + std::to_string(k_svd) + "; clamped to k_max.");
+            break;
+        }
+        case WoodburyMode::EigMass: {
+            const int k_EIGMASS = eval_res.k_target;
+            k = std::max(20, std::min(k_svd, k_EIGMASS + ctx.woodbury_basis_eigmass_k_buffer));
+            double cumulative = 0.0;
+            for (int i = 0; i < k; ++i) cumulative += eval_full[i];
+            const double rho = cumulative / trace_K_full;
+            LOGGER << "EIGMASS: trace(K)=" << trace_K_full
+                   << ", raw " << ctx.woodbury_basis_eigen_mass * 100 << "% mass crossing at k=" << k_EIGMASS
+                   << ", using k=" << k << " (+" << ctx.woodbury_basis_eigmass_k_buffer << " eigenvalue buffer)"
+                   << ", captured mass rho=" << rho << std::endl;
+            if (k_EIGMASS >= k_svd && k_svd >= n - 1)
+                LOGGER.w(0, "Woodbury EIGMASS: mass target not reached even at k=n-1=" + std::to_string(n - 1) + ".");
+            else if (k_EIGMASS >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
+                LOGGER.w(0, "Woodbury EIGMASS: mass target not reached within memory budget ceiling k=" + std::to_string(k_svd) + ".");
+            else if (k_EIGMASS >= k_svd)
+                LOGGER.w(0, "Woodbury EIGMASS: mass target not reached within k_max=" + std::to_string(k_svd) + ".");
+            break;
+        }
+        case WoodburyMode::Variance: {
+            const int k_VAR = eval_res.k_target;
+            k = std::max(20, std::min(k_svd, k_VAR));
+            double cum_sum = 0.0;
+            double cum_sq  = 0.0;
+            for (int i = 0; i < k; ++i) {
+                cum_sum += eval_full[i];
+                cum_sq  += eval_full[i] * eval_full[i];
+            }
+            const int rem_n = n - k;
+            const double tail_sum_sq = std::max(0.0, trace_K2 - cum_sq);
+            const double lam_tail    = (rem_n > 0) ? ((trace_K_full - cum_sum) / static_cast<double>(rem_n)) : 0.0;
+            const double tail_var    = (rem_n > 0) ? std::max(0.0, tail_sum_sq / static_cast<double>(rem_n) - lam_tail * lam_tail) : 0.0;
+            const double ratio       = std::sqrt(tail_var) / std::max(std::abs(lam_tail), 1e-4);
+            LOGGER << "VARIANCE: trace(K)=" << trace_K_full
+                   << ", target var ratio < " << ctx.woodbury_basis_var_thresh << " crossed at k=" << k_VAR
+                   << ", using k=" << k << " (tail_d_var=" << tail_var << ", ratio stddev/lambda_tail=" << ratio << ")" << std::endl;
+            if (k_VAR >= k_svd && k_svd >= n - 1)
+                LOGGER.w(0, "Woodbury VARIANCE: target variance ratio not reached even at k=n-1=" + std::to_string(n - 1) + ".");
+            else if (k_VAR >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
+                LOGGER.w(0, "Woodbury VARIANCE: target variance ratio not reached within memory budget ceiling k=" + std::to_string(k_svd) + ".");
+            else if (k_VAR >= k_svd)
+                LOGGER.w(0, "Woodbury VARIANCE: target variance ratio not reached within k_max=" + std::to_string(k_svd) + ".");
+            break;
+        }
+        case WoodburyMode::Fixed:
+        default:
+            k = ctx.woodbury_basis_rank;
+            break;
+    }
+    return k;
+}
+
+} // anonymous namespace
+
 void compute_woodbury_basis(RemlCtx& ctx) {
     if (ctx.reml_mtd == 1)
         LOGGER.e(0, "--reml-woodbury-basis is incompatible with Fisher-scoring REML.");
@@ -863,66 +1071,34 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         LOGGER.e(0, "--reml-woodbury: --reml-svd-chunked is set but ctx.grm_tile_reader is empty "
                     "— the GRM component wasn't actually loaded either way.");
 
-    const bool auto_k    = (ctx.woodbury_basis_rank == -1.0);
-    const bool EIGMASS_k = (ctx.woodbury_basis_rank == -2.0);
-    const bool VAR_k     = (ctx.woodbury_basis_rank == -3.0);
-    const int  n         = ctx.n;
-    int k = ctx.woodbury_basis_rank;
+    const WoodburyMode mode = ctx.woodbury_mode();
+    const int  n = ctx.n;
 
-    // For auto-k / EIGMASS-k / variance-k, an explicit --reml-woodbury-basis-k-max is a hard
-    // ceiling — the user asked for a specific bound and we respect it,
-    // including the "not reached within k_max" warning below. Without one,
-    // the value below is only a *starting* budget: if the signal/mass/variance
-    // criterion isn't actually satisfied within it, we double the budget
-    // (warm-started from what's already been found) and recompute, rather
-    // than silently truncating the estimated rank. Total cost of this
-    // doubling search is bounded by ~2x the cost of a single direct
-    // computation at the k that was actually needed.
-    // Memory-budget-derived ceiling on k_svd, independent of n-1. Chunking K
-    // (reml_svd_chunked) does nothing to bound this — Omega/Y/qr_scratch/Q
-    // scale as n*k_ext regardless of whether K itself is chunked or dense.
     int k_svd_budget_ceiling = n - 1;
     if (ctx.reml_svd_mem_budget_gb > 0.0) {
         const double budget_bytes = ctx.reml_svd_mem_budget_gb * 1e9;
         const int max_k_ext = static_cast<int>(budget_bytes / (5.0 * n * 8.0));
-        // k_ext = k_svd + oversample, oversample capped at 200 (see
-        // recommended_oversample) — subtract a fixed margin to get a k_svd
-        // ceiling without a circular dependency on that function.
         k_svd_budget_ceiling = std::min(k_svd_budget_ceiling, std::max(20, max_k_ext - 200));
         LOGGER << "--reml-woodbury-basis-mem-budget=" << ctx.reml_svd_mem_budget_gb
                << "GB -> k_svd capped at " << k_svd_budget_ceiling << std::endl;
     }
 
     const bool k_max_is_hard_ceiling = (ctx.woodbury_basis_k_max > 0);
-    int k_svd;
-    if (auto_k) {
-        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_basis_k_max : std::min({n - 1, k_svd_budget_ceiling, 1200});
-        LOGGER << "\nComputing Woodbury basis (auto-k, k_max=" << k_svd
-            << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
-            << ", edge_margin=" << ctx.woodbury_basis_edge_margin
-            << ", edge_confirm=" << ctx.woodbury_basis_edge_confirm << ") ..." << std::endl;
-    } else if (EIGMASS_k) {
-        const int start_guess = std::clamp(n / 20, 1200, 25000);
-        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_basis_k_max : std::min({n - 1, k_svd_budget_ceiling, start_guess});
-        LOGGER << "\nComputing Woodbury basis (EIGMASS-k, k_max=" << k_svd
-            << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
-            << ") ..." << std::endl;
-    } else if (VAR_k) {
-        const int start_guess = std::clamp(n / 20, 1200, 25000);
-        k_svd = k_max_is_hard_ceiling ? ctx.woodbury_basis_k_max : std::min({n - 1, k_svd_budget_ceiling, start_guess});
-        LOGGER << "\nComputing Woodbury basis (variance-k, k_max=" << k_svd
-            << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]")
-            << ", var_thresh=" << ctx.woodbury_basis_var_thresh << ") ..." << std::endl;
-    } else {
-        if (k <= 0)
+    int k_svd = woodbury_initial_k_svd(ctx, mode, k_svd_budget_ceiling);
+
+    if (mode == WoodburyMode::Fixed) {
+        if (k_svd <= 0)
             LOGGER.e(0, "--reml-woodbury-basis rank must be positive for fixed-k mode.");
-        if (k > k_svd_budget_ceiling)
-            LOGGER.e(0, "--reml-woodbury-basis " + std::to_string(k) + " exceeds the k_svd ceiling ("
+        if (k_svd > k_svd_budget_ceiling)
+            LOGGER.e(0, "--reml-woodbury-basis " + std::to_string(k_svd) + " exceeds the k_svd ceiling ("
                         + std::to_string(k_svd_budget_ceiling) + ") implied by --reml-woodbury-basis-mem-budget="
                         + std::to_string(ctx.reml_svd_mem_budget_gb) + "GB; raise the budget or lower the rank.");
-        k_svd = k;
-        LOGGER << "\nComputing Woodbury low-rank basis (k=" << k << ") ..." << std::endl;
+        LOGGER << "\nComputing Woodbury low-rank basis (k=" << k_svd << ") ..." << std::endl;
+    } else {
+        LOGGER << "\nComputing Woodbury basis (" << woodbury_mode_name(mode) << ", k_max=" << k_svd
+               << (k_max_is_hard_ceiling ? "" : " [starting budget, expands if needed]") << ") ..." << std::endl;
     }
+
     if (k_max_is_hard_ceiling && k_svd > k_svd_budget_ceiling) {
         LOGGER.w(0, "--reml-woodbury-basis-k-max=" + std::to_string(k_svd) +
                     " exceeds the --reml-woodbury-basis-mem-budget-implied ceiling ("
@@ -931,12 +1107,11 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     }
     if (k_svd >= n) LOGGER.e(0, "--reml-woodbury-basis rank must be < n.");
 
-    const Eigen::MatrixXd& K_dbl = ctx.A[ctx.r_indx[0]];  // empty when reml_svd_chunked
+    const Eigen::MatrixXd& K_dbl = ctx.A[ctx.r_indx[0]];
     const double trace_K_full = ctx.reml_svd_chunked
         ? gcta_chunked::chunked_diagonal(ctx.grm_tile_reader, n, ctx.reml_svd_chunk_size).sum()
         : K_dbl.diagonal().sum();
 
-    // Precompute trace(K^2) for tail_d_var calculation
     double trace_K2 = 0.0;
     if (ctx.reml_svd_chunked) {
         trace_K2 = gcta_chunked::chunked_trace_K_squared(ctx.grm_tile_reader, n, ctx.reml_svd_chunk_size);
@@ -949,9 +1124,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         trace_K2 = diag_sq + 2.0 * off_sq;
     }
 
-    // Precompute the criteria that don't depend on k_svd.
     double lambda_plus = 0.0;
-    if (auto_k) {
+    if (mode == WoodburyMode::AutoMP) {
         double M = 0.0;
         if (ctx.grm_N.rows() == n && ctx.grm_N.cols() == n) {
             if (ctx.reml_svd_chunked)
@@ -967,7 +1141,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         const double gamma = static_cast<double>(n) / M;
         lambda_plus = std::pow(1.0 + std::sqrt(gamma), 2.0);
     }
-    const double target_mass = EIGMASS_k ? (ctx.woodbury_basis_eigen_mass * trace_K_full) : 0.0;
+    const double target_mass = (mode == WoodburyMode::EigMass) ? (ctx.woodbury_basis_eigen_mass * trace_K_full) : 0.0;
+    const bool allows_warm = woodbury_mode_allows_warm_start(mode);
 
     auto apply = [&](const auto& X) -> Eigen::MatrixXd {
         if (ctx.reml_svd_chunked)
@@ -977,17 +1152,14 @@ void compute_woodbury_basis(RemlCtx& ctx) {
 
     Eigen::VectorXd eval_full;
     Eigen::MatrixXd evec_full;
-    int k_signal = 0;   // auto-k: eigenvalues found strictly above lambda_plus
-    int k_edge   = 0;   // auto-k: k after confirming the edge band is cleared
-    int k_EIGMASS  = 0; // EIGMASS-k: eigenmodes needed to reach the buffered mass target
-    int k_VAR      = 0; // variance-k: eigenmodes needed to satisfy tail variance ratio
+    RankEvalResult eval_res;
 
     for (;;) {
         const int oversample = gcta_eigh::recommended_oversample(k_svd);
         const int k_ext = std::min(k_svd + oversample, n - 1);
 
         const int k_prev = static_cast<int>(ctx.Uk.cols());
-        const bool has_warm = (!ctx.woodbury_basis_nystrom && !EIGMASS_k && !VAR_k && k_prev > 0 && ctx.Uk.rows() == n);
+        const bool has_warm = (!ctx.woodbury_basis_nystrom && allows_warm && k_prev > 0 && ctx.Uk.rows() == n);
         auto [omega, Y_init] = gcta_eigh::build_randomized_sketch(
             apply, n, k_ext, has_warm ? &ctx.Uk : nullptr);
         Eigen::MatrixXd Y = std::move(Y_init);
@@ -1013,10 +1185,7 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             if (eval_sum > trace_K_full * 1.01)
                 throw std::runtime_error(
                     "Woodbury Nystrom: sum of estimated eigenvalues (" + std::to_string(eval_sum) +
-                    ") exceeds trace(K) (" + std::to_string(trace_K_full) + ") — impossible for real "
-                    "eigenvalues. Increase --reml-woodbury-basis-nystrom-reg (currently " +
-                    std::to_string(ctx.woodbury_basis_nystrom_reg) + ") or use the power-iteration path "
-                    "instead of Nystrom for this GRM.");
+                    ") exceeds trace(K) (" + std::to_string(trace_K_full) + ") — impossible for real eigenvalues.");
         } else {
             omega.resize(0, 0);
             constexpr int power_iter = 3;
@@ -1030,147 +1199,25 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             }
         }
 
-        if (!auto_k && !EIGMASS_k && !VAR_k) break;  // fixed-k: no criterion to satisfy, never escalates
+        if (mode == WoodburyMode::Fixed) break;
 
-        bool satisfied;
-        if (auto_k) {
-            k_signal = 0;
-            while (k_signal < static_cast<int>(eval_full.size()) && eval_full[k_signal] > lambda_plus)
-                ++k_signal;
+        eval_res = evaluate_rank_criterion(mode, eval_full, k_svd, lambda_plus, target_mass, trace_K_full, trace_K2, ctx);
 
-            const double confirm_thresh = (1.0 - ctx.woodbury_basis_edge_margin) * lambda_plus;
-            int run_len = 0, run_start = -1;
-            for (int i = k_signal; i < static_cast<int>(eval_full.size()); ++i) {
-                if (eval_full[i] < confirm_thresh) {
-                    if (run_len == 0) run_start = i;
-                    if (++run_len >= ctx.woodbury_basis_edge_confirm) break;
-                } else {
-                    run_len = 0;
-                    run_start = -1;
-                }
-            }
-            satisfied = (run_len >= ctx.woodbury_basis_edge_confirm);
-            k_edge    = satisfied ? run_start : k_svd;
-        } else if (EIGMASS_k) {
-            double cumulative = 0.0;
-            k_EIGMASS = k_svd;  // fallback: raw mass target not reached within this budget
-            for (int i = 0; i < static_cast<int>(eval_full.size()); ++i) {
-                cumulative += eval_full[i];
-                if (cumulative >= target_mass) { k_EIGMASS = i + 1; break; }
-            }
-            satisfied = (k_EIGMASS + ctx.woodbury_basis_eigmass_k_buffer <= k_svd);
-        } else {
-            k_VAR = k_svd; // fallback
-            double cum_sum = 0.0;
-            double cum_sq  = 0.0;
-            for (int i = 0; i < static_cast<int>(eval_full.size()); ++i) {
-                cum_sum += eval_full[i];
-                cum_sq  += eval_full[i] * eval_full[i];
-                const int rem_n = n - (i + 1);
-                if (rem_n <= 0) break;
-                const double tail_sum_sq = std::max(0.0, trace_K2 - cum_sq);
-                const double lam_tail    = (trace_K_full - cum_sum) / static_cast<double>(rem_n);
-                const double tail_var    = std::max(0.0, tail_sum_sq / static_cast<double>(rem_n) - lam_tail * lam_tail);
-                const double stddev      = std::sqrt(tail_var);
-                const double ratio       = stddev / std::max(std::abs(lam_tail), 1e-4);
-                if (ratio < ctx.woodbury_basis_var_thresh) {
-                    k_VAR = i + 1;
-                    break;
-                }
-            }
-            satisfied = (k_VAR <= k_svd);
-        }
-
-        if (satisfied || k_max_is_hard_ceiling || k_svd >= n - 1 || k_svd >= k_svd_budget_ceiling) break;
+        if (eval_res.satisfied || k_max_is_hard_ceiling || k_svd >= n - 1 || k_svd >= k_svd_budget_ceiling) break;
 
         const int k_svd_next = std::min({k_svd * 2, n - 1, k_svd_budget_ceiling});
         const char* warm_status = ctx.woodbury_basis_nystrom ? " (Nystrom: no warm start, full recompute)"
-                                 : EIGMASS_k              ? " (EIGMASS-k: no warm start, fresh probe)"
-                                 : VAR_k                  ? " (variance-k: no warm start, fresh probe)"
-                                                         : " (warm-started)";
-        LOGGER << "Woodbury " << (auto_k ? "auto-k" : EIGMASS_k ? "EIGMASS-k" : "variance-k")
+                                 : !allows_warm              ? " (no warm start, fresh probe)"
+                                                             : " (warm-started)";
+        LOGGER << "Woodbury " << woodbury_mode_name(mode)
                << ": signal not resolved within k=" << k_svd
                << "; expanding budget to k=" << k_svd_next
                << warm_status << " ..." << std::endl;
-        if (!ctx.woodbury_basis_nystrom && !EIGMASS_k && !VAR_k) ctx.Uk = evec_full;
+        if (!ctx.woodbury_basis_nystrom && allows_warm) ctx.Uk = evec_full;
         k_svd = k_svd_next;
     }
 
-    if (auto_k) {
-        k = std::max(20, std::min(k_svd, k_edge));
-        const int band = std::max(0, k_edge - k_signal);
-        LOGGER << "MP bulk edge lambda+ = " << lambda_plus
-               << " (n=" << n << ")"
-               << ", eigenvalues above lambda+ = " << k_signal
-               << ", edge band confirmed after " << band << " additional eigenvalue(s)"
-               << " (margin=" << (ctx.woodbury_basis_edge_margin * 100.0) << "%, confirm="
-               << ctx.woodbury_basis_edge_confirm << " consecutive)"
-               << ", using k = " << k << std::endl;
-        if (k_edge >= k_svd && k_svd >= n - 1)
-            LOGGER.w(0, "Woodbury auto-k: edge band not confirmed even at k=n-1=" + std::to_string(n - 1)
-                     + "; this GRM has near-full effective rank and Woodbury may not offer a "
-                       "computational advantage here.");
-        else if (k_edge >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
-            LOGGER.w(0, "Woodbury auto-k: edge band not confirmed within the memory-budget-implied "
-                        "ceiling k=" + std::to_string(k_svd) + " (--reml-woodbury-basis-mem-budget="
-                     + std::to_string(ctx.reml_svd_mem_budget_gb) + "GB); raise the budget if the "
-                       "true signal rank is larger, or accept this truncation.");
-        else if (k_edge >= k_svd)
-            LOGGER.w(0, "Woodbury auto-k: edge band not confirmed within k_max=" + std::to_string(k_svd)
-                     + "; clamped to k_max. Consider a larger --reml-woodbury-basis-k-max or a wider "
-                       "--reml-woodbury-basis-edge-margin.");
-    }
-    else if (EIGMASS_k) {
-        k = std::max(20, std::min(k_svd, k_EIGMASS + ctx.woodbury_basis_eigmass_k_buffer));
-        double cumulative = 0.0;
-        for (int i = 0; i < k; ++i) cumulative += eval_full[i];
-        const double rho = cumulative / trace_K_full;
-        LOGGER << "EIGMASS: trace(K)=" << trace_K_full
-            << ", raw " << ctx.woodbury_basis_eigen_mass * 100 << "% mass crossing at k=" << k_EIGMASS
-            << ", using k=" << k << " (+" << ctx.woodbury_basis_eigmass_k_buffer << " eigenvalue buffer)"
-            << ", captured mass rho=" << rho << std::endl;
-        if (k_EIGMASS >= k_svd && k_svd >= n - 1)
-            LOGGER.w(0, "Woodbury EIGMASS: mass target not reached even at k=n-1="
-                    + std::to_string(n - 1) + "; this GRM has near-full effective rank and "
-                      "Woodbury may not offer a computational advantage here.");
-        else if (k_EIGMASS >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
-            LOGGER.w(0, "Woodbury EIGMASS: mass target not reached within the memory-budget-implied "
-                        "ceiling k=" + std::to_string(k_svd) + " (--reml-woodbury-basis-mem-budget="
-                     + std::to_string(ctx.reml_svd_mem_budget_gb) + "GB); raise the budget if the "
-                       "true mass target needs a larger rank, or accept this truncation.");
-        else if (k_EIGMASS >= k_svd)
-            LOGGER.w(0, "Woodbury EIGMASS: mass target not reached within k_max="
-                    + std::to_string(k_svd) + "; increase --reml-woodbury-basis-k-max.");
-    }
-    else if (VAR_k) {
-        k = std::max(20, std::min(k_svd, k_VAR));
-        double cum_sum = 0.0;
-        double cum_sq  = 0.0;
-        for (int i = 0; i < k; ++i) {
-            cum_sum += eval_full[i];
-            cum_sq  += eval_full[i] * eval_full[i];
-        }
-        const int rem_n = n - k;
-        const double tail_sum_sq = std::max(0.0, trace_K2 - cum_sq);
-        const double lam_tail    = (rem_n > 0) ? ((trace_K_full - cum_sum) / static_cast<double>(rem_n)) : 0.0;
-        const double tail_var    = (rem_n > 0) ? std::max(0.0, tail_sum_sq / static_cast<double>(rem_n) - lam_tail * lam_tail) : 0.0;
-        const double ratio       = std::sqrt(tail_var) / std::max(std::abs(lam_tail), 1e-4);
-        LOGGER << "VARIANCE: trace(K)=" << trace_K_full
-            << ", target var ratio < " << ctx.woodbury_basis_var_thresh << " crossed at k=" << k_VAR
-            << ", using k=" << k << " (tail_d_var=" << tail_var << ", ratio stddev/lambda_tail=" << ratio << ")" << std::endl;
-        if (k_VAR >= k_svd && k_svd >= n - 1)
-            LOGGER.w(0, "Woodbury VARIANCE: target variance ratio not reached even at k=n-1="
-                    + std::to_string(n - 1) + "; this GRM has near-full effective rank and "
-                      "Woodbury may not offer a computational advantage here.");
-        else if (k_VAR >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
-            LOGGER.w(0, "Woodbury VARIANCE: target variance ratio not reached within the memory-budget-implied "
-                        "ceiling k=" + std::to_string(k_svd) + " (--reml-woodbury-basis-mem-budget="
-                     + std::to_string(ctx.reml_svd_mem_budget_gb) + "GB); raise the budget if the "
-                       "true target needs a larger rank, or accept this truncation.");
-        else if (k_VAR >= k_svd)
-            LOGGER.w(0, "Woodbury VARIANCE: target variance ratio not reached within k_max="
-                    + std::to_string(k_svd) + "; increase --reml-woodbury-basis-k-max or --reml-woodbury-basis-var-thresh.");
-    }
+    int k = finalize_and_log_woodbury_rank(mode, ctx, eval_full, k_svd, k_svd_budget_ceiling, lambda_plus, trace_K_full, trace_K2, eval_res);
 
     Eigen::VectorXd eval = eval_full.head(k);
     Eigen::MatrixXd evec = evec_full.leftCols(k);

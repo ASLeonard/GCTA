@@ -186,6 +186,54 @@ int MLMALoco::registerOption(map<string, vector<string>>& options_in)
             options_d["woodbury_basis_rank"] = -1.0;   // auto-k
         options_in.erase("--reml-woodbury-basis");
     }
+    if (options_in.find("--reml-woodbury-basis-eigen-mass") != options_in.end()) {
+        const auto& vals = options_in["--reml-woodbury-basis-eigen-mass"];
+        if (vals.empty() || vals[0].empty())
+            LOGGER.e(0, "--reml-woodbury-basis-eigen-mass requires a fractional argument (e.g. 0.99).");
+        options_d["woodbury_basis_eigen_mass"] = std::stod(vals[0]);
+        options_in.erase("--reml-woodbury-basis-eigen-mass");
+    }
+    if (options_in.find("--reml-woodbury-basis-var-thresh") != options_in.end()) {
+        const auto& vals = options_in["--reml-woodbury-basis-var-thresh"];
+        if (vals.empty() || vals[0].empty())
+            LOGGER.e(0, "--reml-woodbury-basis-var-thresh requires a numeric argument (e.g. 0.5).");
+        options_d["woodbury_basis_var_thresh"] = std::stod(vals[0]);
+        options_in.erase("--reml-woodbury-basis-var-thresh");
+    }
+    if (options_in.find("--reml-woodbury-basis-edge-margin") != options_in.end()) {
+        const auto& vals = options_in["--reml-woodbury-basis-edge-margin"];
+        if (vals.empty() || vals[0].empty())
+            LOGGER.e(0, "--reml-woodbury-basis-edge-margin requires a fractional argument (e.g. 0.15).");
+        options_d["woodbury_basis_edge_margin"] = std::stod(vals[0]);
+        options_in.erase("--reml-woodbury-basis-edge-margin");
+    }
+    if (options_in.find("--reml-woodbury-basis-edge-confirm") != options_in.end()) {
+        const auto& vals = options_in["--reml-woodbury-basis-edge-confirm"];
+        if (vals.empty() || vals[0].empty())
+            LOGGER.e(0, "--reml-woodbury-basis-edge-confirm requires an integer argument.");
+        options_d["woodbury_basis_edge_confirm"] = std::stod(vals[0]);
+        options_in.erase("--reml-woodbury-basis-edge-confirm");
+    }
+    if (options_in.find("--reml-woodbury-basis-EIGMASS-k-buffer") != options_in.end()) {
+        const auto& vals = options_in["--reml-woodbury-basis-EIGMASS-k-buffer"];
+        if (vals.empty() || vals[0].empty())
+            LOGGER.e(0, "--reml-woodbury-basis-EIGMASS-k-buffer requires an integer argument.");
+        options_d["woodbury_basis_EIGMASS_k_buffer"] = std::stod(vals[0]);
+        options_in.erase("--reml-woodbury-basis-EIGMASS-k-buffer");
+    }
+    if (options_in.find("--reml-woodbury-basis-nystrom") != options_in.end()) {
+        if (!options_in["--reml-woodbury-basis-nystrom"].empty())
+            LOGGER.w(0, "--reml-woodbury-basis-nystrom takes no argument; ignoring the supplied value.");
+        options["woodbury_basis_nystrom"] = "1";
+        options_in.erase("--reml-woodbury-basis-nystrom");
+    }
+    if (options_in.find("--reml-woodbury-basis-nystrom-reg") != options_in.end()) {
+        const auto& vals = options_in["--reml-woodbury-basis-nystrom-reg"];
+        if (vals.empty() || vals[0].empty())
+            LOGGER.e(0, "--reml-woodbury-basis-nystrom-reg requires a fractional argument (e.g. 1e-4).");
+        options_d["woodbury_basis_nystrom_reg"] = std::stod(vals[0]);
+        options_in.erase("--reml-woodbury-basis-nystrom-reg");
+    }
 
     // --reml-trace-approx [n]
     if (options_in.find("--reml-trace-approx") != options_in.end()) {
@@ -234,6 +282,19 @@ void MLMALoco::processMain()
         const int    reml_diagV_adj = (options_d.count("reml_diagV_adj") > 0)
             ? static_cast<int>(options_d.at("reml_diagV_adj")) : 0;
         const bool   no_constrain = options.count("no_constrain") > 0;
+        const bool   woodbury_basis_nystrom = options.count("woodbury_basis_nystrom") > 0;
+        const float  woodbury_basis_eigen_mass = options_d.count("woodbury_basis_eigen_mass")
+            ? static_cast<float>(options_d.at("woodbury_basis_eigen_mass")) : 0.99f;
+        const double woodbury_basis_edge_margin = options_d.count("woodbury_basis_edge_margin")
+            ? options_d.at("woodbury_basis_edge_margin") : 0.15;
+        const int    woodbury_basis_edge_confirm = options_d.count("woodbury_basis_edge_confirm")
+            ? static_cast<int>(options_d.at("woodbury_basis_edge_confirm")) : 20;
+        const int    woodbury_basis_EIGMASS_k_buffer = options_d.count("woodbury_basis_EIGMASS_k_buffer")
+            ? static_cast<int>(options_d.at("woodbury_basis_EIGMASS_k_buffer")) : 0;
+        const double woodbury_basis_var_thresh = options_d.count("woodbury_basis_var_thresh")
+            ? options_d.at("woodbury_basis_var_thresh") : 0.5;
+        const double woodbury_basis_nystrom_reg = options_d.count("woodbury_basis_nystrom_reg")
+            ? options_d.at("woodbury_basis_nystrom_reg") : 1e-4;
 
         if (reml_alg < 0 || reml_alg > 2)
             LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
@@ -496,7 +557,14 @@ void MLMALoco::processMain()
             ctx.reml_max_iter  = reml_maxit;
             ctx.reml_inv_mtd   = 0;  // LLT
             ctx.reml_diagV_adj = reml_diagV_adj;
-            ctx.woodbury_basis_rank  = woodbury_basis_rank;
+            ctx.woodbury_basis_rank            = woodbury_basis_rank;
+            ctx.woodbury_basis_eigen_mass      = woodbury_basis_eigen_mass;
+            ctx.woodbury_basis_edge_margin     = woodbury_basis_edge_margin;
+            ctx.woodbury_basis_edge_confirm    = woodbury_basis_edge_confirm;
+            ctx.woodbury_basis_eigmass_k_buffer = woodbury_basis_EIGMASS_k_buffer;
+            ctx.woodbury_basis_var_thresh      = woodbury_basis_var_thresh;
+            ctx.woodbury_basis_nystrom         = woodbury_basis_nystrom;
+            ctx.woodbury_basis_nystrom_reg     = woodbury_basis_nystrom_reg;
             ctx.reml_trace_approx = trace_approx;
             ctx.reml_trace_approx_nprobes = trace_nprobes;
 

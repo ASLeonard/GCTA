@@ -813,13 +813,13 @@ void MLMA::processMain()
             const bool no_constrain   = options.count("no_constrain") > 0;
             const bool woodbury_basis_nystrom = options.count("woodbury_basis_nystrom") > 0;
             const float  woodbury_basis_eigen_mass  = options_d.count("woodbury_basis_eigen_mass")
-                ? static_cast<float>(options_d.at("woodbury_basis_eigen_mass")) : 99.0f;
+                ? static_cast<float>(options_d.at("woodbury_basis_eigen_mass")) : 0.99f;
             const double woodbury_basis_edge_margin = options_d.count("woodbury_basis_edge_margin")
                 ? options_d.at("woodbury_basis_edge_margin") : 0.15;
             const int    woodbury_basis_edge_confirm = options_d.count("woodbury_basis_edge_confirm")
                 ? static_cast<int>(options_d.at("woodbury_basis_edge_confirm")) : 20;
             const int woodbury_basis_EIGMASS_k_buffer = options_d.count("woodbury_basis_EIGMASS_k_buffer")
-                ? static_cast<int>(options_d.at("woodbury_basis_EIGMASS_k_buffer")) : 20;
+                ? static_cast<int>(options_d.at("woodbury_basis_EIGMASS_k_buffer")) : 0;
             const double woodbury_basis_mem_budget_gb = options_d.count("woodbury_basis_mem_budget_gb")
                 ? options_d.at("woodbury_basis_mem_budget_gb") : 0.0;
             const bool no_HE_start = options.count("no_HE_start") > 0;
