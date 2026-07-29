@@ -69,6 +69,77 @@ function(gcta_configure_binutils_from_dir _bin_dir _tool_kind _label _warn_if_mi
     endif()
 endfunction()
 
+function(gcta_detect_blas_version _backend _blas_lib _blas_include_dir _out_var)
+    # Best-effort backend-specific version probe for configure-time diagnostics.
+    set(_ver "unknown")
+
+    if(_backend STREQUAL "OpenBLAS")
+        set(_openblas_cfg "${_blas_include_dir}/openblas_config.h")
+        if(EXISTS "${_openblas_cfg}")
+            file(STRINGS "${_openblas_cfg}" _openblas_ver_line REGEX "^#define[ \t]+OPENBLAS_VERSION[ \t]+\".*\"")
+            if(_openblas_ver_line MATCHES "\"([^\"]+)\"")
+                set(_ver "${CMAKE_MATCH_1}")
+            endif()
+        endif()
+        if(_ver STREQUAL "unknown")
+            get_filename_component(_blas_name "${_blas_lib}" NAME)
+            if(_blas_name MATCHES "\\.so\\.([0-9][0-9.]*)$")
+                set(_ver "soname ${CMAKE_MATCH_1}")
+            elseif(_blas_name MATCHES "\\.dylib\\.([0-9][0-9.]*)$")
+                set(_ver "dylib ${CMAKE_MATCH_1}")
+            endif()
+        endif()
+
+    elseif(_backend STREQUAL "MKL")
+        set(_mkl_ver_h "${_blas_include_dir}/mkl_version.h")
+        if(EXISTS "${_mkl_ver_h}")
+            file(STRINGS "${_mkl_ver_h}" _mkl_major_line REGEX "^#define[ \t]+__INTEL_MKL__[ \t]+[0-9]+")
+            file(STRINGS "${_mkl_ver_h}" _mkl_minor_line REGEX "^#define[ \t]+__INTEL_MKL_MINOR__[ \t]+[0-9]+")
+            file(STRINGS "${_mkl_ver_h}" _mkl_update_line REGEX "^#define[ \t]+__INTEL_MKL_UPDATE__[ \t]+[0-9]+")
+            if(_mkl_major_line MATCHES "([0-9]+)$")
+                set(_mkl_major "${CMAKE_MATCH_1}")
+            endif()
+            if(_mkl_minor_line MATCHES "([0-9]+)$")
+                set(_mkl_minor "${CMAKE_MATCH_1}")
+            endif()
+            if(_mkl_update_line MATCHES "([0-9]+)$")
+                set(_mkl_update "${CMAKE_MATCH_1}")
+            endif()
+            if(DEFINED _mkl_major AND DEFINED _mkl_minor AND DEFINED _mkl_update)
+                set(_ver "${_mkl_major}.${_mkl_minor}.${_mkl_update}")
+            endif()
+        endif()
+
+    elseif(_backend STREQUAL "AOCL")
+        # AOCL typically exposes a BLIS version macro via blis.h.
+        set(_blis_h "${_blas_include_dir}/blis.h")
+        if(EXISTS "${_blis_h}")
+            file(STRINGS "${_blis_h}" _blis_ver_line REGEX "^#define[ \t]+BLIS_VERSION_STRING[ \t]+\".*\"")
+            if(_blis_ver_line MATCHES "\"([^\"]+)\"")
+                set(_ver "${CMAKE_MATCH_1}")
+            endif()
+        endif()
+        if(_ver STREQUAL "unknown")
+            get_filename_component(_blas_name "${_blas_lib}" NAME)
+            if(_blas_name MATCHES "\\.so\\.([0-9][0-9.]*)$")
+                set(_ver "soname ${CMAKE_MATCH_1}")
+            endif()
+        endif()
+
+    elseif(_backend STREQUAL "Accelerate")
+        execute_process(
+            COMMAND xcrun --sdk macosx --show-sdk-version
+            OUTPUT_VARIABLE _macos_sdk_ver
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        if(_macos_sdk_ver)
+            set(_ver "SDK ${_macos_sdk_ver}")
+        endif()
+    endif()
+
+    set(${_out_var} "${_ver}" PARENT_SCOPE)
+endfunction()
+
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     message(STATUS "Compiling with GCC ${CMAKE_CXX_COMPILER_VERSION}")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13.0)
@@ -642,6 +713,8 @@ else()
 endif()
 
 message(STATUS "BLAS/LAPACK provider: ${GCTA_BLAS_PROVIDER}")
+gcta_detect_blas_version("${GCTA_BLAS_PROVIDER}" "${GCTA_BLAS_LIBRARY}" "${GCTA_BLAS_INCLUDE_DIR}" GCTA_BLAS_VERSION)
+message(STATUS "BLAS/LAPACK version: ${GCTA_BLAS_VERSION}")
 
 # Verbose BLAS logging: print detection details when requested
 if(CMAKE_VERBOSE_MAKEFILE OR GCTA_VERBOSE_BLAS)
@@ -761,7 +834,8 @@ target_include_directories(GCTAg PRIVATE
 
 target_compile_definitions(GCTAg PRIVATE
     ${GCTA_BLAS_DEFINES}
-    GCTA_BLAS_BACKEND_STR="${GCTA_BLAS_PROVIDER}")
+    GCTA_BLAS_BACKEND_STR="${GCTA_BLAS_PROVIDER}"
+    GCTA_BLAS_VERSION_STR="${GCTA_BLAS_VERSION}")
 
 # LTO flavour: AOCC requires full LTO; upstream Clang prefers ThinLTO; GCC uses auto.
 # Folded into the same target_compile/link_options calls so all flags are co-located.
@@ -912,7 +986,7 @@ message(STATUS "==========================================")
 message(STATUS "GCTAg Build Configuration Summary")
 message(STATUS "==========================================")
 message(STATUS "  Build type:        ${CMAKE_BUILD_TYPE}")
-message(STATUS "  BLAS/LAPACK:       ${GCTA_BLAS_PROVIDER}")
+message(STATUS "  BLAS/LAPACK:       ${GCTA_BLAS_PROVIDER} (${GCTA_BLAS_VERSION})")
 message(STATUS "  Compiler:          ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}${GCTA_COMPILER_IS_AOCC_STR} (${CMAKE_CXX_COMPILER})")
 message(STATUS "  Archiver (AR):     ${CMAKE_AR}")
 message(STATUS "  Ranlib:            ${CMAKE_RANLIB}")
