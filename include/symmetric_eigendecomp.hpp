@@ -55,13 +55,19 @@ struct EighResult {
     Eigen::MatrixXd eigenvectors;  // n x k_target, columns match eigenvalues
 };
 
+inline std::mt19937& shared_rng() {
+    static std::mt19937 rng([] {
+        std::random_device entropy;
+        return entropy();
+    }());
+    return rng;
+}
+
 inline void fill_standard_normal(Eigen::Ref<Eigen::MatrixXd> matrix) {
-    std::random_device entropy;
-    std::mt19937 rng(entropy());
     std::normal_distribution<double> normal(0.0, 1.0);
     for (Eigen::Index col = 0; col < matrix.cols(); ++col)
         for (Eigen::Index row = 0; row < matrix.rows(); ++row)
-            matrix(row, col) = normal(rng);
+            matrix(row, col) = normal(shared_rng());
 }
 
 // Oversampling doesn't need to grow with k_target for generic top-k subspace
@@ -281,8 +287,6 @@ struct ThinSVDResult {
 // Nystrom sketch. Eigen's BDCSVD has no LAPACKE binding (unlike
 // HouseholderQR and SelfAdjointEigenSolver, which do when EIGEN_USE_LAPACKE
 // is set), so calling it directly on an n x k matrix leaves it doing
-// bidiagonalization/divide-and-conquer work at n scale without BLAS3
-// dispatch. Reducing via a blocked QR first confines that non-BLAS3-backed
 // step to the k x k factor R, where its cost is negligible regardless of
 // how it's implemented, while the n-scale work (QR, and the final Q * U_R)
 // goes through LAPACKE_dgeqrf/dorgqr and GEMM respectively.

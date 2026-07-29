@@ -441,15 +441,13 @@ void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, int m_probes) {
     const int k = std::max(m_probes / 3, 3);
 
     if (ctx.hutchpp_S.rows() != ctx.n || ctx.hutchpp_S.cols() != k) {
-        std::random_device entropy;
-        std::mt19937 probe_rng(entropy());
         std::uniform_int_distribution<int> coin(0, 1);
         ctx.hutchpp_S.resize(ctx.n, k);
         ctx.hutchpp_G.resize(ctx.n, k);
         for (int j = 0; j < k; j++)
             for (int r = 0; r < ctx.n; r++) {
-                ctx.hutchpp_S(r, j) = coin(probe_rng) ? 1.0 : -1.0;
-                ctx.hutchpp_G(r, j) = coin(probe_rng) ? 1.0 : -1.0;
+                ctx.hutchpp_S(r, j) = coin(gcta_eigh::shared_rng()) ? 1.0 : -1.0;
+                ctx.hutchpp_G(r, j) = coin(gcta_eigh::shared_rng()) ? 1.0 : -1.0;
             }
     }
 
