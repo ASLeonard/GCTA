@@ -32,6 +32,7 @@
 #include <unordered_set>
 #include "utils.hpp"
 #include "utils.hpp"
+#include "grm_binary_io.hpp"
 #include <omp.h>
 #include "OptionIO.h"
 #include "third_party/plink-ng/2.0/include/plink2_bits.h"
@@ -231,6 +232,41 @@ void GRM::subtract_grm(string mgrm_file, string out_file){
         }
     }
     LOGGER.i(0, "The subtracted GRM has been written to [" + out_file + ".grm.bin, .grm.N.bin].");
+}
+
+void GRM::merge_grm_streaming(string mgrm_file, string out_file, int row_block_rows){
+    std::ifstream mgrm(mgrm_file.c_str());
+    if(!mgrm){
+        LOGGER.e(0, "can't open " + mgrm_file + " to read.");
+    }
+
+    string line;
+    vector<string> files;
+    vector<string> err_files;
+    while(getline(mgrm, line)){
+        boost::trim(line);
+        if(!line.empty()){
+            if(checkFileReadable(line + ".grm.id") &&
+               checkFileReadable(line + ".grm.bin") &&
+               checkFileReadable(line + ".grm.N.bin")){
+                files.push_back(line);
+            }else{
+                err_files.push_back(line);
+            }
+        }
+    }
+
+    if(err_files.size() != 0){
+        string out_err = "can't read GRM (*.grm.id, *.grm.bin, *.grm.N.bin) in ";
+        out_err += boost::algorithm::join(err_files, ", ");
+        out_err += ".";
+        LOGGER.e(0, out_err);
+    }
+    if(files.size() < 2){
+        LOGGER.e(0, "streaming merge needs at least two GRMs in --mgrm.");
+    }
+
+    gcta_grm_io::merge_grms_streaming(files, out_file, row_block_rows);
 }
 
 
@@ -2061,6 +2097,32 @@ int GRM::registerOption(map<string, vector<string>>& options_in) {
         return_value++;
     }
 
+    string op_merge_grm_streaming = "--merge-grm-streaming";
+    if(options_in.find(op_merge_grm_streaming) != options_in.end()){
+        if(options.find("mgrm") == options.end() || options["mgrm"].empty())
+            LOGGER.e(0, "--merge-grm-streaming requires --mgrm <file>.");
+        processFunctions.push_back("merge_grm_streaming");
+        options_in.erase(op_merge_grm_streaming);
+        return_value++;
+    }
+
+    const string op_merge_block_rows = "--merge-grm-row-block";
+    options_d["merge_grm_row_block"] = 4000.0;
+    if(options_in.find(op_merge_block_rows) != options_in.end()){
+        if(options_in[op_merge_block_rows].size() != 1)
+            LOGGER.e(0, op_merge_block_rows + " requires exactly one integer value.");
+        int block_rows = 0;
+        try{
+            block_rows = std::stoi(options_in[op_merge_block_rows][0]);
+        }catch(std::invalid_argument&){
+            LOGGER.e(0, op_merge_block_rows + " must be an integer.");
+        }
+        if(block_rows <= 0)
+            LOGGER.e(0, op_merge_block_rows + " must be > 0.");
+        options_d["merge_grm_row_block"] = static_cast<double>(block_rows);
+        options_in.erase(op_merge_block_rows);
+    }
+
     if(options_in.find("--make-grm") != options_in.end()){
         isDominance = false;
         if(options.find("grm_file") == options.end()){
@@ -2484,6 +2546,12 @@ void GRM::processMain() {
         if(process_function == "subtract_grm"){
             GRM grm;
             grm.subtract_grm(options["mgrm"], options["out"]);
+        }
+
+        if(process_function == "merge_grm_streaming"){
+            GRM grm;
+            const int row_block_rows = static_cast<int>(options_d["merge_grm_row_block"]);
+            grm.merge_grm_streaming(options["mgrm"], options["out"], row_block_rows);
         }
     }
 

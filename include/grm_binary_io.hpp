@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -417,6 +418,152 @@ inline ChunkedGrmHandle make_chunked_grm_reader(
         return file->read_tile(rs, re, cs, ce);
     };
     return handle;
+}
+
+// Merge K GRMs that share the exact same sample order (no subsetting, no
+// reindexing) into one N-weighted-average GRM, entirely streamed: never
+// holds a dense n x n matrix for any input file, nor for the output.
+//
+// Unlike ChunkedGrmMmap (built for arbitrary per-file reindexing via a kp
+// map), every file here is walked in the identical, predictable row-major
+// order — so MADV_SEQUENTIAL is the right hint (lets the kernel prefetch
+// well ahead of us) and there's no per-entry index math needed at all, just
+// direct pointer arithmetic into each mapped file. This is also what
+// sidesteps the "many small read() syscalls" cost a naive row-by-row
+// fread() loop would pay: there are no read() calls here at all, mmap +
+// readahead does that work in the background.
+//
+// row_block_rows bounds the only thing that isn't O(1): the output buffer,
+// which holds one row-block's worth of merged values before each write —
+// same role as --reml-svd-chunk-size elsewhere, smaller for tighter RSS.
+//
+// If your GRMs might have different sample orderings, this isn't the right
+// tool — use ChunkedGrmMmap-based per-entry lookups instead (each source
+// file gets its own kp).
+inline void merge_grms_streaming(
+    const std::vector<std::string>& prefixes,
+    const std::string& out_prefix,
+    int row_block_rows = 4000)
+{
+    if (prefixes.empty())
+        LOGGER.e(0, "merge_grms_streaming: no input GRM prefixes given.");
+    if (row_block_rows <= 0)
+        LOGGER.e(0, "merge_grms_streaming: row_block_rows must be positive.");
+
+    const std::vector<std::string> ids = Pheno::read_sublist(prefixes[0] + ".grm.id");
+    const int n = static_cast<int>(ids.size());
+    if (n == 0) LOGGER.e(0, "GRM id file [" + prefixes[0] + ".grm.id] is empty.");
+
+    // Validate every input shares the exact same sample order — cheap (a
+    // handful of small text-file reads), and the alternative (silently
+    // merging misaligned GRMs) produces a confidently wrong result with no
+    // symptom, which is a far worse failure mode than refusing to start.
+    for (size_t f = 1; f < prefixes.size(); ++f) {
+        const std::vector<std::string> other_ids = Pheno::read_sublist(prefixes[f] + ".grm.id");
+        if (other_ids != ids)
+            LOGGER.e(0, "merge_grms_streaming: [" + prefixes[f] + ".grm.id] does not match "
+                        "[" + prefixes[0] + ".grm.id] exactly (same sample order required). "
+                        "Use a kp-based merge (ChunkedGrmMmap) for mismatched orderings.");
+    }
+
+    const size_t tri      = static_cast<size_t>(n) * (n + 1) / 2;
+    const size_t byte_len = tri * sizeof(float);
+    const int    K        = static_cast<int>(prefixes.size());
+
+    struct MappedFile {
+        int fd = -1;
+        const float* buf = nullptr;
+    };
+    auto open_mapped = [&](const std::string& path) -> MappedFile {
+        MappedFile mf;
+        mf.fd = ::open(path.c_str(), O_RDONLY);
+        if (mf.fd == -1) LOGGER.e(0, "cannot open [" + path + "].");
+        struct stat st{};
+        if (::fstat(mf.fd, &st) != 0 || static_cast<size_t>(st.st_size) < byte_len) {
+            ::close(mf.fd);
+            LOGGER.e(0, "unexpected size in [" + path + "].");
+        }
+        void* raw = ::mmap(nullptr, byte_len, PROT_READ, MAP_PRIVATE, mf.fd, 0);
+        if (raw == MAP_FAILED) { ::close(mf.fd); LOGGER.e(0, "mmap failed for [" + path + "]."); }
+        ::madvise(raw, byte_len, MADV_SEQUENTIAL | MADV_WILLNEED);
+        mf.buf = static_cast<const float*>(raw);
+        return mf;
+    };
+
+    std::vector<MappedFile> val_files(K), n_files(K);
+    for (int f = 0; f < K; ++f) {
+        val_files[f] = open_mapped(prefixes[f] + ".grm.bin");
+        n_files[f]   = open_mapped(prefixes[f] + ".grm.N.bin");
+    }
+
+    const std::string out_bin_path = out_prefix + ".grm.bin";
+    const std::string out_n_path   = out_prefix + ".grm.N.bin";
+    std::ofstream out_bin(out_bin_path, std::ios::binary);
+    std::ofstream out_n(out_n_path, std::ios::binary);
+    if (!out_bin) LOGGER.e(0, "cannot open [" + out_bin_path + "] for writing.");
+    if (!out_n)   LOGGER.e(0, "cannot open [" + out_n_path + "] for writing.");
+
+    std::vector<float> out_val_buf, out_n_buf;
+
+    for (int rs = 0; rs < n; rs += row_block_rows) {
+        const int re = std::min(rs + row_block_rows, n);
+        const size_t block_base = static_cast<size_t>(rs) * (rs + 1) / 2;
+        size_t block_elems = 0;
+        for (int i = rs; i < re; ++i) block_elems += static_cast<size_t>(i + 1);
+        out_val_buf.resize(block_elems);
+        out_n_buf.resize(block_elems);
+
+        // Rows are independent (each writes its own non-overlapping range
+        // of the block buffer, computed from the packed-triangular offset
+        // formula), so this parallelizes cleanly — each thread keeps its
+        // own reusable n-length scratch rather than reallocating per row.
+        #pragma omp parallel
+        {
+            std::vector<double> wsum(n), wtN(n);
+            #pragma omp for schedule(dynamic, 64)
+            for (int i = rs; i < re; ++i) {
+                const int row_len = i + 1;
+                const size_t row_start = static_cast<size_t>(i) * (i + 1) / 2;
+                std::fill_n(wsum.data(), row_len, 0.0);
+                std::fill_n(wtN.data(), row_len, 0.0);
+                for (int f = 0; f < K; ++f) {
+                    const float* v  = val_files[f].buf + row_start;
+                    const float* nn = n_files[f].buf + row_start;
+                    for (int j = 0; j < row_len; ++j) {
+                        wsum[j] += static_cast<double>(v[j]) * static_cast<double>(nn[j]);
+                        wtN[j]  += static_cast<double>(nn[j]);
+                    }
+                }
+                const size_t out_offset = row_start - block_base;
+                for (int j = 0; j < row_len; ++j) {
+                    out_val_buf[out_offset + j] = static_cast<float>(wtN[j] > 0.0 ? wsum[j] / wtN[j] : 0.0);
+                    out_n_buf[out_offset + j]   = static_cast<float>(wtN[j]);
+                }
+            }
+        }
+
+        out_bin.write(reinterpret_cast<const char*>(out_val_buf.data()), block_elems * sizeof(float));
+        out_n.write(reinterpret_cast<const char*>(out_n_buf.data()), block_elems * sizeof(float));
+        if (!out_bin || !out_n)
+            LOGGER.e(0, "write failed while writing merged GRM to [" + out_prefix + "].");
+    }
+
+    out_bin.close();
+    out_n.close();
+
+    for (auto& mf : val_files) { ::munmap(const_cast<float*>(mf.buf), byte_len); ::close(mf.fd); }
+    for (auto& mf : n_files)   { ::munmap(const_cast<float*>(mf.buf), byte_len); ::close(mf.fd); }
+
+    // .grm.id is identical across inputs (already validated) — copy it once.
+    {
+        std::ifstream src(prefixes[0] + ".grm.id", std::ios::binary);
+        std::ofstream dst(out_prefix + ".grm.id", std::ios::binary);
+        dst << src.rdbuf();
+    }
+
+    LOGGER.i(0, "Merged " + std::to_string(K) + " GRMs (" + std::to_string(n) +
+                " individuals) into [" + out_prefix + ".grm.bin/.grm.N.bin/.grm.id], "
+                "N-weighted average, fully streamed — no dense matrix held for any input or the output.");
 }
 
 } // namespace gcta_grm_io
