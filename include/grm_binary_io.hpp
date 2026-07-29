@@ -163,32 +163,36 @@ inline std::vector<int> match_ids_to_grm(const std::vector<std::string>& ref_ids
 // by construction, not a single top-to-bottom pass.
 class ChunkedGrmMmap {
 public:
-    // kp[i] = GRM-file row index for analysis individual i (see
-    // match_ids_to_grm). Every entry must be >= 0 — validate before
-    // constructing, since a -1 here means "individual not in this GRM" and
-    // silently reading garbage at that index is far worse than refusing to
-    // start.
-    ChunkedGrmMmap(const std::string& prefix, std::vector<int> kp, int n_grm)
+    // kp[i] = row index (in whatever file this wraps) for analysis
+    // individual i (see match_ids_to_grm). Every entry must be >= 0 —
+    // validate before constructing, since a -1 here means "individual not
+    // in this file" and silently reading garbage at that index is far worse
+    // than refusing to start.
+    //
+    // `path` is the full file path, not a prefix — .grm.bin and .grm.N.bin
+    // share an identical packed-lower-triangular float32 layout, so this
+    // class serves either; callers needing both (e.g. a weighted merge)
+    // construct two instances against the same kp.
+    ChunkedGrmMmap(const std::string& path, std::vector<int> kp, int n_grm)
         : kp_(std::move(kp))
     {
         const size_t tri = static_cast<size_t>(n_grm) * (n_grm + 1) / 2;
         byte_len_ = tri * sizeof(float);
 
-        const std::string bin_path = prefix + ".grm.bin";
-        fd_ = ::open(bin_path.c_str(), O_RDONLY);
+        fd_ = ::open(path.c_str(), O_RDONLY);
         if (fd_ == -1)
-            LOGGER.e(0, "--reml-svd-chunked: cannot open [" + bin_path + "].");
+            LOGGER.e(0, "cannot open [" + path + "].");
 
         struct stat st{};
         if (::fstat(fd_, &st) != 0 || static_cast<size_t>(st.st_size) < byte_len_) {
             ::close(fd_);
-            LOGGER.e(0, "--reml-svd-chunked: unexpected size in [" + bin_path + "].");
+            LOGGER.e(0, "unexpected size in [" + path + "].");
         }
 
         void* raw = ::mmap(nullptr, byte_len_, PROT_READ, MAP_PRIVATE, fd_, 0);
         if (raw == MAP_FAILED) {
             ::close(fd_);
-            LOGGER.e(0, "--reml-svd-chunked: mmap failed for [" + bin_path + "].");
+            LOGGER.e(0, "mmap failed for [" + path + "].");
         }
         ::madvise(raw, byte_len_, MADV_RANDOM);
         fbuf_ = static_cast<const float*>(raw);
@@ -217,17 +221,30 @@ public:
             const int gi = kp_[rs + lp];
             for (int lq = 0; lq < tile_cols; ++lq) {
                 const int gj = kp_[cs + lq];
-                const int file_row = std::max(gi, gj);
-                const int file_col = std::min(gi, gj);
-                const size_t idx = static_cast<size_t>(file_row) * (file_row + 1) / 2
-                                  + static_cast<size_t>(file_col);
-                tile(lp, lq) = static_cast<double>(fbuf_[idx]);
+                tile(lp, lq) = read_raw(gi, gj);
             }
         }
         return tile;
     }
 
+    // Single-entry accessor for scattered (not tile-shaped) access patterns
+    // — e.g. GRM merging, which looks up one (analysis_row, analysis_col)
+    // pair at a time rather than processing contiguous blocks. Same index
+    // math as read_tile, just without constructing an Eigen::MatrixXd for
+    // one value.
+    double read_entry(int analysis_row, int analysis_col) const {
+        return read_raw(kp_[analysis_row], kp_[analysis_col]);
+    }
+
 private:
+    double read_raw(int gi, int gj) const {
+        const int file_row = std::max(gi, gj);
+        const int file_col = std::min(gi, gj);
+        const size_t idx = static_cast<size_t>(file_row) * (file_row + 1) / 2
+                          + static_cast<size_t>(file_col);
+        return static_cast<double>(fbuf_[idx]);
+    }
+
     std::vector<int> kp_;
     int fd_ = -1;
     size_t byte_len_ = 0;
@@ -302,7 +319,7 @@ inline ChunkedGrmHandle make_chunked_grm_reader(
 
     ChunkedGrmHandle handle;
     handle.m_snps = read_grm_N_mean(prefix, n_grm);
-    auto file = std::make_shared<ChunkedGrmMmap>(prefix, std::move(kp), n_grm);
+    auto file = std::make_shared<ChunkedGrmMmap>(prefix + ".grm.bin", std::move(kp), n_grm);
     handle.reader = [file](int rs, int re, int cs, int ce) -> Eigen::MatrixXd {
         return file->read_tile(rs, re, cs, ce);
     };
