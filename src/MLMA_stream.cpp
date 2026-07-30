@@ -791,7 +791,7 @@ void MLMA::processMain()
                 ? static_cast<int>(options_d.at("woodbury_basis_rank")) : 0;
             const bool trace_approx   = options.count("trace_approx") > 0;
             const int  trace_nprobes  = options_d.count("trace_approx_nprobes")
-                ? static_cast<int>(options_d.at("trace_approx_nprobes")) : 100;
+                ? static_cast<int>(options_d.at("trace_approx_nprobes")) : 90;
             const int  reml_maxit     = options_d.count("reml_maxit")
                 ? static_cast<int>(options_d.at("reml_maxit")) : 100;
             const int  reml_alg       = options_d.count("reml_alg")
