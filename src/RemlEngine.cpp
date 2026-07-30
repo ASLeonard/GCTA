@@ -440,10 +440,18 @@ void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, int m_probes) {
     tr_PA.resize(ncomp);
     const int k = std::max(m_probes / 3, 3);
 
+    // Always draw a fresh probe set on every call (i.e. every outer AI-REML
+    // iteration), rather than only when dimensions change. Reusing a single
+    // draw across the whole optimization makes AI-REML converge to the root
+    // of one fixed noisy surrogate instead of tracking the expected score
+    // equations, which can bias the converged V(G)/V(e) away from exact and
+    // hide the probe-count -> variance relationship across separate runs.
     if (ctx.hutchpp_S.rows() != ctx.n || ctx.hutchpp_S.cols() != k) {
-        std::uniform_int_distribution<int> coin(0, 1);
         ctx.hutchpp_S.resize(ctx.n, k);
         ctx.hutchpp_G.resize(ctx.n, k);
+    }
+    {
+        std::uniform_int_distribution<int> coin(0, 1);
         for (int j = 0; j < k; j++)
             for (int r = 0; r < ctx.n; r++) {
                 ctx.hutchpp_S(r, j) = coin(gcta_eigh::shared_rng()) ? 1.0 : -1.0;
@@ -765,7 +773,7 @@ double reml_iteration(RemlCtx& ctx,
         if (!no_constrain) constrain_num = constrain_varcmp(ctx, varcmp);
 
         if (iter > 0) {
-            LOGGER << iter << "\t" << std::fixed << LOGGER.setprecision(2) << lgL << "\t";
+            LOGGER << iter << "\t" << std::fixed << LOGGER.setprecision(4) << lgL << "\t";
             for (int i = 0; i < m; i++) LOGGER << LOGGER.setprecision(5) << varcmp[i] << "\t";
             if (constrain_num > 0) LOGGER << "(" << constrain_num << " component(s) constrained)" << std::endl;
             else LOGGER << std::endl;
@@ -796,10 +804,15 @@ double reml_iteration(RemlCtx& ctx,
         dlogL = lgL - prev_lgL;
         const double lgL_scale = std::max(1.0, std::fabs(lgL));
         const double dlogL_rel = std::fabs(dlogL) / lgL_scale;
-        const double vc_rel = (varcmp - prev_varcmp).squaredNorm() / std::max(1.0, varcmp.squaredNorm());
-        const bool like_small = (std::fabs(dlogL) < 1e-4)
-            || (dlogL_rel < 1e-6);
-        if (vc_rel < 1e-8 && like_small) {
+        const bool like_small = (std::fabs(dlogL) < 1e-4) || (dlogL_rel < 1e-6);
+
+        // vc_rel removed: it is a meaningful signal only under deterministic Newton
+        // updates, where the step itself -> 0 near the optimum. Under stochastic
+        // trace estimation (Hutch++), varcmp keeps moving by sampling noise alone
+        // and vc_rel never satisfies a tight threshold regardless of iteration count
+        // or probe count -- it was gating on noise, not proximity to the optimum.
+        // logL is well-conditioned under both exact and stochastic paths.
+        if (like_small) {
             converged_flag = true;
             if (ctx.reml_mtd == 2) {
                 RemlMat P_tmp;
