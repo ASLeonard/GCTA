@@ -713,6 +713,10 @@ double reml_iteration(RemlCtx& ctx,
     }
 
     bool converged_flag = false;
+    int small_delta_streak = 0;
+    const int M = 2;   // consecutive small deltas required; small, fixed, not data-dependent
+    double best_lgL = 0;
+    RemlVec best_varcmp;
     for (iter = 0; iter < ctx.reml_max_iter; iter++) {
         if (iter == 0) {
             prev_varcmp = varcomp_init;
@@ -779,7 +783,7 @@ double reml_iteration(RemlCtx& ctx,
             else LOGGER << std::endl;
         } else {
             if (!prior_var_flag) LOGGER << "Updated prior values: " << varcmp.transpose() << std::endl;
-            LOGGER << "logL: " << lgL << std::endl;
+            LOGGER << "logL: " << std::fixed << LOGGER.setprecision(4) << lgL << std::endl;
         }
 
         if (ctx.reml_fixed_var) { varcmp = prev_varcmp; break; }
@@ -806,14 +810,28 @@ double reml_iteration(RemlCtx& ctx,
         const double dlogL_rel = std::fabs(dlogL) / lgL_scale;
         const bool like_small = (std::fabs(dlogL) < 1e-4) || (dlogL_rel < 1e-6);
 
-        // vc_rel removed: it is a meaningful signal only under deterministic Newton
-        // updates, where the step itself -> 0 near the optimum. Under stochastic
-        // trace estimation (Hutch++), varcmp keeps moving by sampling noise alone
-        // and vc_rel never satisfies a tight threshold regardless of iteration count
-        // or probe count -- it was gating on noise, not proximity to the optimum.
-        // logL is well-conditioned under both exact and stochastic paths.
+        // Require M consecutive small-delta iterations, not just one. A single small
+        // delta can occur by chance -- e.g. iteration 1 landing close to the prior
+        // logL purely because the starting variance-component guess was already
+        // near-optimal, with no evidence the Newton/AI-REML step itself has
+        // converged. Sustained small deltas are the real signal; this costs at most
+        // M-1 extra iterations in the rare false-start case and nothing extra once
+        // genuinely near the optimum (consecutive small deltas already occur there
+        // naturally, per observed exact/Woodbury/Hutch++ traces).
+
+        if (lgL > best_lgL) {
+            best_lgL = lgL;
+            best_varcmp = varcmp;
+        }
         if (like_small) {
+            small_delta_streak++;
+        } else {
+            small_delta_streak = 0;
+        }
+
+        if (small_delta_streak >= M) {
             converged_flag = true;
+            //varcmp = best_varcmp;   // report best-seen, not last-iterate //Deactivated on purpose without testing, as this would no longer be a "convergence" method.
             if (ctx.reml_mtd == 2) {
                 RemlMat P_tmp;
                 calcu_P_impl(ctx, &P_tmp);
