@@ -22,6 +22,7 @@
 #include "symmetric_eigendecomp.hpp"
 
 #include <Eigen/Dense>
+#include <boost/math/distributions/chi_squared.hpp>
 #include <random>
 #include <algorithm>
 #include <cmath>
@@ -435,9 +436,15 @@ void calcu_tr_PA_woodbury(const RemlCtx& ctx, RemlVec& tr_PA) {
     tr_PA(0) = tr_Vinv_K - tr_corr_K;
 }
 
-void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, int m_probes) {
+// tr_PA_var receives, per component, the sampling variance of the Hutch++
+// residual-term mean estimator (i.e. Var(tr_PA(ci))). It is a free byproduct
+// of the existing colwise reduction below — used by ai_reml to build the
+// Newton-decrement noise floor. Callers that don't need it (em_reml) can
+// pass a throwaway vector.
+void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, RemlVec& tr_PA_var, int m_probes) {
     const int ncomp = static_cast<int>(ctx.r_indx.size());
     tr_PA.resize(ncomp);
+    tr_PA_var.resize(ncomp);
     const int k = std::max(m_probes / 3, 3);
 
     // Always draw a fresh probe set on every call (i.e. every outer AI-REML
@@ -494,7 +501,14 @@ void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, int m_probes) {
         const RemlMat R_  = ctx.hutchpp_G - Q * QtG;
         const RemlMat MR  = MG - MQ * QtG;
 
-        tr_PA(ci) = t_lr + R_.cwiseProduct(MR).sum() / k;
+        // per_col(j) is the j-th probe column's contribution to the residual
+        // trace estimate; their mean is the estimate itself (unchanged from
+        // before), their sample variance-of-the-mean is the noise-floor input.
+        const RemlVec per_col = R_.cwiseProduct(MR).colwise().sum();  // k values
+        const double mean_r = per_col.mean();
+        tr_PA(ci) = t_lr + mean_r;
+        tr_PA_var(ci) = (per_col.array() - mean_r).square().sum()
+                         / (static_cast<double>(k) * (k - 1));
     }
 }
 
@@ -593,8 +607,49 @@ void reml_equation(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py, RemlVec& 
     Hi = 2 * Hi;  // keep same SE convention as legacy path
 }
 
+// (1-alpha) quantile of the null (true-score == 0) distribution of
+// lambda_sq = U'*AI^{-1}*U, given U ~ N(0, diag(var_U)) — the diagonal
+// Hutch++ probe-noise covariance approximation. Under H0, lambda_sq is a
+// weighted sum of independent chi-square(1) variables (a quadratic form in
+// Gaussian noise), with weights = eigenvalues of
+//     B = diag(sqrt(var_U)) * AI^{-1} * diag(sqrt(var_U))
+// an m x m matrix (m = #variance components, so this eigendecomposition is
+// negligible cost regardless of n). Approximated via Satterthwaite/Welch
+// moment matching to a scaled chi-square g*Chi2_h, which matches the true
+// first two moments of the weighted sum exactly:
+//     mean = trace(B),  var = 2*trace(B^2)
+//     g = trace(B^2)/trace(B),  h = trace(B)^2/trace(B^2)
+// Returns 0 when var_U is (numerically) all-zero -- the deterministic
+// exact/Woodbury case, where there is no noise term and the caller's
+// logL-unit floor alone governs convergence.
+//
+// This replaces the old "require M consecutive small deltas" heuristic:
+// instead of hoping repetition makes a false stop unlikely, alpha *is* the
+// chosen per-iteration false-stop probability under H0, directly. It is an
+// approximation (moment-matching + diagonal noise covariance), so alpha is
+// nominal, not exact -- validate empirically per stopping.md's checklist
+// (e.g. does the empirical early-stop rate under a fixed non-optimal theta
+// roughly track alpha across the probe sweep) before trusting it in production.
+double newton_decrement_null_quantile(const RemlMat& Hi, const RemlVec& var_U, double alpha) {
+    const RemlVec sqrt_var = var_U.cwiseMax(0.0).cwiseSqrt();
+    if (sqrt_var.squaredNorm() < 1e-300) return 0.0;   // fully deterministic; no noise term
+    RemlMat B = sqrt_var.asDiagonal() * Hi * sqrt_var.asDiagonal();
+    B = 0.5 * (B + B.transpose());   // guard tiny asymmetry from floating-point roundoff
+    const double trB  = B.trace();
+    const double trB2 = B.squaredNorm();   // == trace(B*B) for symmetric B
+    if (trB2 < 1e-300) return 0.0;
+    const double g = trB2 / trB;
+    const double h = trB * trB / trB2;
+    boost::math::chi_squared_distribution<double> chi2(h);
+    return g * boost::math::quantile(chi2, 1.0 - alpha);
+}
+
+// lambda_sq / var_U are only meaningful on return when this call succeeds
+// (i.e. reml_iteration hasn't already broken out via reml_AI_not_invertible)
+// — see call site.
 void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
-             RemlVec& prev_varcmp, RemlVec& varcmp, double dlogL) {
+             RemlVec& prev_varcmp, RemlVec& varcmp, double dlogL,
+             double& lambda_sq, RemlVec& var_U) {
     const bool use_approx     = ctx.reml_trace_approx;
     const bool woodbury_basis_active = ctx.Vi_use_woodbury_basis;
 
@@ -631,17 +686,18 @@ void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
     Hi = 0.5 * Hi;
 
     RemlVec tr_PA;
+    RemlVec tr_PA_var = RemlVec::Zero(m);   // deterministic (exact/Woodbury) => 0
     if (woodbury_basis_active) {
         calcu_tr_PA_woodbury(ctx, tr_PA);
     } else if (use_approx) {
         const int eff_nprobes = (std::fabs(dlogL) < 1.0)
             ? ctx.reml_trace_approx_nprobes
             : std::max(ctx.reml_trace_approx_nprobes / 3, 9);
-        calcu_tr_PA_hutchpp(ctx, tr_PA, eff_nprobes);
+        calcu_tr_PA_hutchpp(ctx, tr_PA, tr_PA_var, eff_nprobes);
     } else {
         calcu_tr_PA(ctx, P, tr_PA);
     }
-    R = -0.5 * (tr_PA - R);
+    R = -0.5 * (tr_PA - R);   // R is now the score vector U
 
     if (!inverse_H(ctx, Hi)) {
         if (ctx.reml_force_converge) {
@@ -652,7 +708,15 @@ void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
             LOGGER.e(0, "the information matrix is not invertible.");
         }
     }
+    // Hi is now AI^{-1}. delta = AI^{-1}*U is both the Newton step and,
+    // via lambda_sq = U'*delta, the Newton decrement -- no extra solve.
     RemlVec delta = Hi * R;
+    lambda_sq = R.dot(delta);
+    // Var(U_i) = 0.25 * Var(tr_PA_i) since only tr_PA is stochastic (Hutch++).
+    // 0 for exact/Woodbury since tr_PA_var == 0. Left as a vector (not reduced
+    // to trace(AI^{-1}*Var(U)) here) so the caller can build the full
+    // null-distribution weight matrix, not just its trace.
+    var_U = 0.25 * tr_PA_var;
     if (dlogL > 1.0) varcmp = prev_varcmp + 0.316 * delta;
     else             varcmp = prev_varcmp + delta;
 }
@@ -670,7 +734,8 @@ void em_reml(RemlCtx& ctx, RemlMat& P, RemlVec& Py,
         const int eff_nprobes = (std::fabs(dlogL) < 1.0)
             ? ctx.reml_trace_approx_nprobes
             : std::max(ctx.reml_trace_approx_nprobes / 3, 9);
-        calcu_tr_PA_hutchpp(ctx, tr_PA, eff_nprobes);
+        RemlVec tr_PA_var_unused;   // EM-REML has no Newton-decrement consumer
+        calcu_tr_PA_hutchpp(ctx, tr_PA, tr_PA_var_unused, eff_nprobes);
         Py = applyP_vec(ctx, ctx.y);
     } else {
         calcu_tr_PA(ctx, P, tr_PA);
@@ -705,14 +770,45 @@ double reml_iteration(RemlCtx& ctx,
     int reml_mtd_tmp = ctx.reml_mtd;
     double logdet = 0.0, logdet_Xt_Vi_X = 0.0;
     double prev_lgL = -1e20, lgL = -1e20, dlogL = 1000.0;
+    double lambda_sq = 1e300;   // only meaningful when reml_mtd == 0
+    RemlVec var_U;              // ditto -- Var(U) per component, from Hutch++ probe noise (0 for exact/Woodbury)
     RemlVec prev_prev_varcmp(varcmp), prev_varcmp(varcmp), varcomp_init(varcmp);
+
+    // ctx.reml_ai_robust_stop_risk is the one number you set: the (Bonferroni,
+    // approximate) probability that ANY iteration across this whole run
+    // falsely declares convergence under H0, treating each iteration's fresh
+    // Hutch++ probe draw as an independent test of "is the true score zero".
+    // Dividing by reml_max_iter turns that into the per-iteration alpha the
+    // test actually consumes -- this is the same alpha as before, just
+    // reparameterised so it doesn't need re-justifying every time
+    // reml_max_iter changes, and so the number you're setting is the
+    // run-level quantity you actually care about rather than an intermediate
+    // one. (Independence across iterations is reasonable here specifically
+    // because fresh probes are redrawn every call -- see calcu_tr_PA_hutchpp
+    // -- but this is still an approximation, not a rigorous sequential test.)
+    const double ai_robust_alpha_per_iter =
+        ctx.reml_ai_robust_stop_risk / std::max(1, ctx.reml_max_iter);
 
     if (ctx.reml_trace_approx && !ctx.Vi_use_woodbury_basis) {
         LOGGER << "Using Hutch++ stochastic trace estimator with "
                << ctx.reml_trace_approx_nprobes << " probes." << std::endl;
     }
+    if (ctx.reml_mtd == 0 && ctx.reml_ai_robust_stop) {
+        LOGGER << "Using Newton-decrement convergence criterion (--reml-ai-robust-stop, "
+               << "logL tol=" << ctx.reml_ai_robust_stop_tol
+               << ", run-level false-stop risk=" << ctx.reml_ai_robust_stop_risk
+               << " => alpha/iter=" << ai_robust_alpha_per_iter << ")." << std::endl;
+    }
 
     bool converged_flag = false;
+    // small_delta_streak/M are only used by the legacy dlogL gate (mtd==1,
+    // mtd==2, and mtd==0 when --reml-ai-robust-stop is off): a single small
+    // dlogL is a weak, uncalibrated signal there (no known false-stop rate),
+    // so repetition is the only cheap way to build confidence. The AI-robust
+    // path below doesn't need this -- the calibrated null-quantile test
+    // already bounds the false-stop probability directly via alpha, so a
+    // single iteration is sufficient by construction (see
+    // newton_decrement_null_quantile for the caveats on that calibration).
     int small_delta_streak = 0;
     const int M = 2;   // consecutive small deltas required; small, fixed, not data-dependent
     double best_lgL = 0;
@@ -762,7 +858,7 @@ double reml_iteration(RemlCtx& ctx,
         logdet_Xt_Vi_X = logdet_Xt_Vi_X2;
 
         if (ctx.reml_mtd == 0)
-            ai_reml(ctx, ctx.P, Hi, Py, prev_varcmp, varcmp, dlogL);
+            ai_reml(ctx, ctx.P, Hi, Py, prev_varcmp, varcmp, dlogL, lambda_sq, var_U);
         else if (ctx.reml_mtd == 1)
             reml_equation(ctx, ctx.P, Hi, Py, varcmp);
         else if (ctx.reml_mtd == 2)
@@ -806,31 +902,69 @@ double reml_iteration(RemlCtx& ctx,
         }
 
         dlogL = lgL - prev_lgL;
-        const double lgL_scale = std::max(1.0, std::fabs(lgL));
-        const double dlogL_rel = std::fabs(dlogL) / lgL_scale;
-        const bool like_small = (std::fabs(dlogL) < 1e-4) || (dlogL_rel < 1e-6);
 
-        // Require M consecutive small-delta iterations, not just one. A single small
-        // delta can occur by chance -- e.g. iteration 1 landing close to the prior
-        // logL purely because the starting variance-component guess was already
-        // near-optimal, with no evidence the Newton/AI-REML step itself has
-        // converged. Sustained small deltas are the real signal; this costs at most
-        // M-1 extra iterations in the rare false-start case and nothing extra once
-        // genuinely near the optimum (consecutive small deltas already occur there
-        // naturally, per observed exact/Woodbury/Hutch++ traces).
+        // Convergence test. AI-REML (mtd==0) already computes AI^{-1} (Hi) and
+        // the score U every iteration to take its Newton step, so the Newton
+        // decrement lambda_sq = U'*AI^{-1}*U is a free byproduct with a known
+        // closed-form meaning: for a Newton step delta = AI^{-1}*U under
+        // curvature AI, the standard quadratic-approximation identity gives
+        //     logL(theta*) - logL(theta) ~= 0.5 * U'*delta = 0.5 * lambda_sq
+        // i.e. lambda_sq is (twice) the estimated log-likelihood gap remaining
+        // to the optimum -- not an abstract unitless number. That lets the
+        // floor be derived from an interpretable logL-unit tolerance
+        // (ctx.reml_ai_robust_stop_tol, same unit/default as the old absolute
+        // dlogL<1e-4 gate) instead of being picked directly:
+        //     lambda_sq_floor = 2 * reml_ai_robust_stop_tol
+        //
+        // Under Hutch++, newton_decrement_null_quantile(Hi, var_U, alpha)
+        // gives the (1-alpha) quantile of lambda_sq's own null distribution
+        // (Satterthwaite-calibrated, see its docstring) -- so this is a
+        // proper single-iteration hypothesis test with a chosen false-stop
+        // probability, not a mean-comparison needing repetition to trust.
+        // For exact/Woodbury, var_U == 0 so the quantile is 0 and this
+        // reduces to lambda_sq <= lambda_sq_floor.
+        //
+        // Fisher-scoring (mtd==1) and EM-REML (mtd==2) don't materialise AI^{-1}
+        // as part of their update (that's the point of EM), so no equally cheap
+        // curvature estimate is available there; they keep the legacy logL-delta
+        // gate, as does mtd==0 when --reml-ai-robust-stop isn't set (this also
+        // covers the iter==0 EM burn-in step used to pick priors).
+        bool like_small;
+        const bool ai_robust_active = (ctx.reml_mtd == 0 && ctx.reml_ai_robust_stop);
+        if (ai_robust_active) {
+            const double lambda_sq_floor = 2.0 * ctx.reml_ai_robust_stop_tol;
+            const double null_q = newton_decrement_null_quantile(Hi, var_U, ai_robust_alpha_per_iter);
+            const double thresh = std::max(lambda_sq_floor, null_q);
+            like_small = (lambda_sq <= thresh);
+        } else {
+            const double lgL_scale = std::max(1.0, std::fabs(lgL));
+            const double dlogL_rel = std::fabs(dlogL) / lgL_scale;
+            like_small = (std::fabs(dlogL) < 1e-4) || (dlogL_rel < 1e-6);
+        }
 
         if (lgL > best_lgL) {
             best_lgL = lgL;
             best_varcmp = varcmp;
         }
-        if (like_small) {
-            small_delta_streak++;
+
+        if (ai_robust_active) {
+            // Single-shot calibrated test -- no repetition needed (see above).
+            converged_flag = like_small;
         } else {
-            small_delta_streak = 0;
+            // Legacy path: require M consecutive small-delta iterations, not
+            // just one. A single small delta can occur by chance -- e.g.
+            // iteration 1 landing close to the prior logL purely because the
+            // starting variance-component guess was already near-optimal,
+            // with no evidence the underlying step itself has converged, and
+            // dlogL carries no calibrated false-stop-rate guarantee the way
+            // lambda_sq's null quantile does. Sustained small deltas are the
+            // fallback signal; costs at most M-1 extra iterations in the rare
+            // false-start case.
+            small_delta_streak = like_small ? small_delta_streak + 1 : 0;
+            converged_flag = (small_delta_streak >= M);
         }
 
-        if (small_delta_streak >= M) {
-            converged_flag = true;
+        if (converged_flag) {
             //varcmp = best_varcmp;   // report best-seen, not last-iterate //Deactivated on purpose without testing, as this would no longer be a "convergence" method.
             if (ctx.reml_mtd == 2) {
                 RemlMat P_tmp;

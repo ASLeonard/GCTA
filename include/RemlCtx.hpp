@@ -155,6 +155,9 @@ struct RemlCtx {
     RemlMat hutchpp_S;          // Hutch++ Rademacher probes  (n x k)
     RemlMat hutchpp_G;          // Hutch++ Rademacher probes  (n x k)
     RemlMat P;                  // projection matrix (freed after convergence)
+    bool   reml_ai_robust_stop      = false;   // opt-in: legacy dlogL gate is default until validated
+    double reml_ai_robust_stop_tol  = 1e-4;    // logL-unit tolerance; lambda_sq_floor = 2*this
+    double reml_ai_robust_stop_risk = 0.01;  // per-iteration false-stop probability under H0
 
     // ── Status flags ─────────────────────────────────────────────────────────
     bool reml_AI_not_invertible = false;

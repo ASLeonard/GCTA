@@ -433,6 +433,13 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options_in.erase("--reml-priors");
         options_in.erase("--reml-priors-var");
         options_in.erase("--reml-no-HE-start");
+        options_in.erase("--reml-woodbury-basis-eigen-mass");
+        options_in.erase("--reml-woodbury-basis-var-thresh");
+        options_in.erase("--reml-svd-chunked");
+        options_in.erase("--reml-svd-chunk-size");
+        options_in.erase("--reml-ai-robust-stop");
+        options_in.erase("--reml-ai-robust-stop-tol");
+        options_in.erase("--reml-ai-robust-stop-risk");
     } else {
         // Inline REML path: --grm is required.
         const bool has_grm = options_in.find("--grm") != options_in.end()
@@ -586,6 +593,17 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             }
             options_in.erase("--reml-priors");
         }
+        if (options_in.find("--reml-ai-robust-stop") != options_in.end()) {
+            options["reml_ai_robust_stop"] = "1";
+        }
+        if (options_in.find("--reml-ai-robust-stop-tol") != options_in.end()
+                && !options_in["--reml-ai-robust-stop-tol"].empty()) {
+            options_d["reml_ai_robust_stop_tol"] = std::stod(options_in["--reml-ai-robust-stop-tol"][0]);
+        }
+        if (options_in.find("--reml-ai-robust-stop-risk") != options_in.end()
+                && !options_in["--reml-ai-robust-stop-risk"].empty()) {
+            options_d["reml_ai_robust_stop_risk"] = std::stod(options_in["--reml-ai-robust-stop-risk"][0]);
+        }   
     }
 
     if (options_in.find("--mlma-no-preadj-covar") != options_in.end()) {
@@ -811,6 +829,11 @@ void MLMA::processMain()
             const double woodbury_basis_mem_budget_gb = options_d.count("woodbury_basis_mem_budget_gb")
                 ? options_d.at("woodbury_basis_mem_budget_gb") : 0.0;
             const bool no_HE_start = options.count("no_HE_start") > 0;
+            const bool reml_ai_robust_stop = options.count("reml_ai_robust_stop") > 0;
+            const double reml_ai_robust_stop_tol = options_d.count("reml_ai_robust_stop_tol")
+                ? options_d.at("reml_ai_robust_stop_tol") : 1e-4;
+            const double reml_ai_robust_stop_risk = options_d.count("reml_ai_robust_stop_risk")
+                ? options_d.at("reml_ai_robust_stop_risk") : 0.01;
 
             if (reml_alg < 0 || reml_alg > 2)
                 LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
@@ -880,6 +903,9 @@ void MLMA::processMain()
             ctx.reml_trace_approx_nprobes = trace_nprobes;
             ctx.woodbury_basis_eigen_mass             = woodbury_basis_eigen_mass;
             ctx.reml_no_HE_start         = no_HE_start;
+            ctx.reml_ai_robust_stop      = reml_ai_robust_stop;
+            ctx.reml_ai_robust_stop_tol  = reml_ai_robust_stop_tol;
+            ctx.reml_ai_robust_stop_risk = reml_ai_robust_stop_risk;
 
             if (options.count("woodbury_basis_warm_start")) {
                 if (woodbury_basis_rank == 0)
