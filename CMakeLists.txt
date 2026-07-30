@@ -69,6 +69,77 @@ function(gcta_configure_binutils_from_dir _bin_dir _tool_kind _label _warn_if_mi
     endif()
 endfunction()
 
+function(gcta_detect_blas_version _backend _blas_lib _blas_include_dir _out_var)
+    # Best-effort backend-specific version probe for configure-time diagnostics.
+    set(_ver "unknown")
+
+    if(_backend STREQUAL "OpenBLAS")
+        set(_openblas_cfg "${_blas_include_dir}/openblas_config.h")
+        if(EXISTS "${_openblas_cfg}")
+            file(STRINGS "${_openblas_cfg}" _openblas_ver_line REGEX "^#define[ \t]+OPENBLAS_VERSION[ \t]+\".*\"")
+            if(_openblas_ver_line MATCHES "\"([^\"]+)\"")
+                set(_ver "${CMAKE_MATCH_1}")
+            endif()
+        endif()
+        if(_ver STREQUAL "unknown")
+            get_filename_component(_blas_name "${_blas_lib}" NAME)
+            if(_blas_name MATCHES "\\.so\\.([0-9][0-9.]*)$")
+                set(_ver "soname ${CMAKE_MATCH_1}")
+            elseif(_blas_name MATCHES "\\.dylib\\.([0-9][0-9.]*)$")
+                set(_ver "dylib ${CMAKE_MATCH_1}")
+            endif()
+        endif()
+
+    elseif(_backend STREQUAL "MKL")
+        set(_mkl_ver_h "${_blas_include_dir}/mkl_version.h")
+        if(EXISTS "${_mkl_ver_h}")
+            file(STRINGS "${_mkl_ver_h}" _mkl_major_line REGEX "^#define[ \t]+__INTEL_MKL__[ \t]+[0-9]+")
+            file(STRINGS "${_mkl_ver_h}" _mkl_minor_line REGEX "^#define[ \t]+__INTEL_MKL_MINOR__[ \t]+[0-9]+")
+            file(STRINGS "${_mkl_ver_h}" _mkl_update_line REGEX "^#define[ \t]+__INTEL_MKL_UPDATE__[ \t]+[0-9]+")
+            if(_mkl_major_line MATCHES "([0-9]+)$")
+                set(_mkl_major "${CMAKE_MATCH_1}")
+            endif()
+            if(_mkl_minor_line MATCHES "([0-9]+)$")
+                set(_mkl_minor "${CMAKE_MATCH_1}")
+            endif()
+            if(_mkl_update_line MATCHES "([0-9]+)$")
+                set(_mkl_update "${CMAKE_MATCH_1}")
+            endif()
+            if(DEFINED _mkl_major AND DEFINED _mkl_minor AND DEFINED _mkl_update)
+                set(_ver "${_mkl_major}.${_mkl_minor}.${_mkl_update}")
+            endif()
+        endif()
+
+    elseif(_backend STREQUAL "AOCL")
+        # AOCL typically exposes a BLIS version macro via blis.h.
+        set(_blis_h "${_blas_include_dir}/blis.h")
+        if(EXISTS "${_blis_h}")
+            file(STRINGS "${_blis_h}" _blis_ver_line REGEX "^#define[ \t]+BLIS_VERSION_STRING[ \t]+\".*\"")
+            if(_blis_ver_line MATCHES "\"([^\"]+)\"")
+                set(_ver "${CMAKE_MATCH_1}")
+            endif()
+        endif()
+        if(_ver STREQUAL "unknown")
+            get_filename_component(_blas_name "${_blas_lib}" NAME)
+            if(_blas_name MATCHES "\\.so\\.([0-9][0-9.]*)$")
+                set(_ver "soname ${CMAKE_MATCH_1}")
+            endif()
+        endif()
+
+    elseif(_backend STREQUAL "Accelerate")
+        execute_process(
+            COMMAND xcrun --sdk macosx --show-sdk-version
+            OUTPUT_VARIABLE _macos_sdk_ver
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        if(_macos_sdk_ver)
+            set(_ver "SDK ${_macos_sdk_ver}")
+        endif()
+    endif()
+
+    set(${_out_var} "${_ver}" PARENT_SCOPE)
+endfunction()
+
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     message(STATUS "Compiling with GCC ${CMAKE_CXX_COMPILER_VERSION}")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13.0)
@@ -272,7 +343,7 @@ if(NOT CMAKE_BUILD_TYPE)
     message(STATUS "Defaulting to Release build")
 endif()
 
-# Release-build arch flags are applied per-target on gcta64 below,
+# Release-build arch flags are applied per-target on GCTAg below,
 # after add_executable, so they don't bleed into FetchContent dependencies.
 
 set(GCTA_BLAS_BACKEND "" CACHE STRING "BLAS/LAPACK backend (required): OpenBLAS, MKL, Accelerate, or AOCL")
@@ -642,6 +713,8 @@ else()
 endif()
 
 message(STATUS "BLAS/LAPACK provider: ${GCTA_BLAS_PROVIDER}")
+gcta_detect_blas_version("${GCTA_BLAS_PROVIDER}" "${GCTA_BLAS_LIBRARY}" "${GCTA_BLAS_INCLUDE_DIR}" GCTA_BLAS_VERSION)
+message(STATUS "BLAS/LAPACK version: ${GCTA_BLAS_VERSION}")
 
 # Verbose BLAS logging: print detection details when requested
 if(CMAKE_VERBOSE_MAKEFILE OR GCTA_VERBOSE_BLAS)
@@ -659,9 +732,9 @@ if(CMAKE_VERBOSE_MAKEFILE OR GCTA_VERBOSE_BLAS)
     message(STATUS "---- end BLAS detection details ----")
 endif()
 
-add_executable(gcta64)
+add_executable(GCTAg)
 
-target_sources(gcta64 PRIVATE
+target_sources(GCTAg PRIVATE
             # entry point
         src/main.cpp
         # src/ module
@@ -669,6 +742,7 @@ target_sources(gcta64 PRIVATE
         src/FastFAM.cpp
         src/MLMA_stream.cpp
         src/MLMA_loco.cpp
+        src/pca_stream.cpp
         src/RemlEngine.cpp
         src/GRM.cpp
         src/Geno.cpp
@@ -711,7 +785,7 @@ target_sources(gcta64 PRIVATE
         main/reml_within_family.cpp
         main/sbat.cpp)
 
-target_include_directories(gcta64 PRIVATE
+target_include_directories(GCTAg PRIVATE
     ${CMAKE_SOURCE_DIR}
     include
     ${GCTA_BLAS_INCLUDE_DIRS}
@@ -722,7 +796,7 @@ target_include_directories(gcta64 PRIVATE
 
 # Boost: prefer modern config-mode targets; fall back to module-mode Boost_LIBRARIES.
 # $<TARGET_EXISTS:...> (3.27) avoids the imperative if(TARGET)/list(APPEND) pattern.
-target_link_libraries(gcta64 PRIVATE
+target_link_libraries(GCTAg PRIVATE
     $<$<TARGET_EXISTS:Boost::iostreams>:Boost::iostreams>
     $<$<TARGET_EXISTS:Boost::headers>:Boost::headers>
     $<$<BOOL:${Boost_LIBRARIES}>:${Boost_LIBRARIES}>
@@ -732,12 +806,12 @@ target_link_libraries(gcta64 PRIVATE
     STDEXEC::stdexec
     ${GCTA_ZSTD_LIBS})
 
-target_precompile_headers(gcta64 PRIVATE
+target_precompile_headers(GCTAg PRIVATE
     <Eigen/Dense>
     <boost/algorithm/string.hpp>
     <boost/math/distributions.hpp>)
 
-# ── gcta64 target properties ───────────────────────────────────────────────
+# ── GCTAg target properties ───────────────────────────────────────────────
 # IPO check must run before set_target_properties.
 set(GCTA_IPO_ENABLED OFF)
 if(GCTA_ENABLE_IPO AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
@@ -750,17 +824,18 @@ if(GCTA_ENABLE_IPO AND CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$")
     endif()
 endif()
 
-set_target_properties(gcta64 PROPERTIES
+set_target_properties(GCTAg PROPERTIES
     UNITY_BUILD                   ${GCTA_UNITY_BUILD}
     INTERPROCEDURAL_OPTIMIZATION  ${GCTA_IPO_ENABLED})
 
-target_include_directories(gcta64 PRIVATE
+target_include_directories(GCTAg PRIVATE
     ${GCTA_ZSTD_INCLUDE_DIRS}
     ${GCTA_BLAS_INCLUDE_DIRS})
 
-target_compile_definitions(gcta64 PRIVATE
+target_compile_definitions(GCTAg PRIVATE
     ${GCTA_BLAS_DEFINES}
-    GCTA_BLAS_BACKEND_STR="${GCTA_BLAS_PROVIDER}")
+    GCTA_BLAS_BACKEND_STR="${GCTA_BLAS_PROVIDER}"
+    GCTA_BLAS_VERSION_STR="${GCTA_BLAS_VERSION}")
 
 # LTO flavour: AOCC requires full LTO; upstream Clang prefers ThinLTO; GCC uses auto.
 # Folded into the same target_compile/link_options calls so all flags are co-located.
@@ -781,17 +856,17 @@ if(GCTA_IPO_ENABLED)
     endif()
 endif()
 
-target_compile_options(gcta64 PRIVATE
+target_compile_options(GCTAg PRIVATE
     $<$<BOOL:${APPLE}>:-Wno-nullability-completeness>
     -pipe
     $<$<CONFIG:Release>:$<IF:$<BOOL:${APPLE}>,-mcpu=native,-march=native>>
     $<$<CONFIG:Release>:-O3>
     $<$<AND:$<CONFIG:Release>,$<BOOL:${_lto_compile_flag}>>:${_lto_compile_flag}>)
 
-target_link_options(gcta64 PRIVATE
+target_link_options(GCTAg PRIVATE
     $<$<AND:$<CONFIG:Release>,$<BOOL:${_lto_link_flag}>>:${_lto_link_flag}>)
 
-target_link_libraries(gcta64 PRIVATE OpenMP::OpenMP_CXX)
+target_link_libraries(GCTAg PRIVATE OpenMP::OpenMP_CXX)
 
 # Both GCC (GNU ld) and Clang (lld or GNU ld) default to DT_RUNPATH (--enable-new-dtags).
 # DT_RUNPATH is searched *after* LD_LIBRARY_PATH, so HPC module paths prepended
@@ -799,8 +874,8 @@ target_link_libraries(gcta64 PRIVATE OpenMP::OpenMP_CXX)
 # --disable-new-dtags writes DT_RPATH instead, searched *before* LD_LIBRARY_PATH.
 # Applied to all Linux builds regardless of Clang variant (AOCC or upstream).
 if(LINUX)
-    target_link_options(gcta64 PRIVATE "LINKER:--disable-new-dtags")
-    message(STATUS "gcta64: using DT_RPATH (--disable-new-dtags) for HPC library pinning")
+    target_link_options(GCTAg PRIVATE "LINKER:--disable-new-dtags")
+    message(STATUS "GCTAg: using DT_RPATH (--disable-new-dtags) for HPC library pinning")
 endif()
 
 
@@ -827,7 +902,7 @@ target_sources(Pgenlib PRIVATE
         third_party/plink-ng/2.0/include/plink2_zstfile.cc
         third_party/plink-ng/2.0/include/pvar_ffi_support.cc)
 # Unity builds must be disabled for Pgenlib: it is a separate static library
-# with its own include paths and must never be merged into a gcta64 unity TU.
+# with its own include paths and must never be merged into a GCTAg unity TU.
 # Without this, CMake can concatenate PgenReader.cpp and PgenBackend.cpp into
 # the same translation unit, causing PgenReader.cpp to fail to find GCTA
 # headers such as GenoBackendFactory.h.
@@ -840,19 +915,19 @@ endif()
 
 
 if(BGEN_SUPPORT)
-    target_link_libraries(gcta64 PRIVATE sqlite3)
-    target_compile_definitions(gcta64 PRIVATE BGEN_SUPPORT)
+    target_link_libraries(GCTAg PRIVATE sqlite3)
+    target_compile_definitions(GCTAg PRIVATE BGEN_SUPPORT)
 endif()
-target_link_libraries(gcta64 PRIVATE Pgenlib Threads::Threads)
+target_link_libraries(GCTAg PRIVATE Pgenlib Threads::Threads)
 
 # Link BLAS early so OpenBLAS/Accelerate/MKL cblas symbols take precedence
 # over other cblas implementations in dyld (macOS) and ld.so (Linux) symbol resolution order
-target_link_libraries(gcta64 PRIVATE ${GCTA_BLAS_LIBS})
+target_link_libraries(GCTAg PRIVATE ${GCTA_BLAS_LIBS})
 
 # On Linux, re-link BLAS to ensure it appears last in NEEDED and
 # its cblas symbols take precedence via ld.so's first-match ordering.
 if(LINUX)
-    target_link_libraries(gcta64 PRIVATE ${GCTA_BLAS_LIBS})
+    target_link_libraries(GCTAg PRIVATE ${GCTA_BLAS_LIBS})
 endif()
 
 # List all targets (verbose, only if requested)
@@ -883,20 +958,20 @@ endif()
 if(LINUX OR APPLE)
     set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
-    install(TARGETS gcta64
+    install(TARGETS GCTAg
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)
 endif()
 
 if(LINUX)
-    install(FILES ${CMAKE_SOURCE_DIR}/resources/gcta64.desktop
+    install(FILES ${CMAKE_SOURCE_DIR}/resources/GCTAg.desktop
         DESTINATION share/applications)
     install(FILES
-        ${CMAKE_SOURCE_DIR}/resources/gcta64.png
+        ${CMAKE_SOURCE_DIR}/resources/GCTAg.png
         DESTINATION share/icons/hicolor/256x256/apps)
     install(FILES
-        ${CMAKE_SOURCE_DIR}/resources/gcta64.svg
+        ${CMAKE_SOURCE_DIR}/resources/GCTAg.svg
         DESTINATION share/icons/hicolor/scalable/apps)
 endif()
 
@@ -911,7 +986,7 @@ message(STATUS "==========================================")
 message(STATUS "GCTAg Build Configuration Summary")
 message(STATUS "==========================================")
 message(STATUS "  Build type:        ${CMAKE_BUILD_TYPE}")
-message(STATUS "  BLAS/LAPACK:       ${GCTA_BLAS_PROVIDER}")
+message(STATUS "  BLAS/LAPACK:       ${GCTA_BLAS_PROVIDER} (${GCTA_BLAS_VERSION})")
 message(STATUS "  Compiler:          ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}${GCTA_COMPILER_IS_AOCC_STR} (${CMAKE_CXX_COMPILER})")
 message(STATUS "  Archiver (AR):     ${CMAKE_AR}")
 message(STATUS "  Ranlib:            ${CMAKE_RANLIB}")

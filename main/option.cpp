@@ -29,7 +29,7 @@ void option(int option_num, char* option_str[]);
 int main_v1(int argc, char* argv[])
 {
     LOGGER << "*******************************************************************" << std::endl;
-    LOGGER << "* Genome-wide Complex Trait Analysis (GCTA)" << std::endl;
+    LOGGER << "* Genome-wide Complex Trait Analysis (GCTAg)" << std::endl;
     LOGGER << "* version 1.93.3 beta3" << std::endl;
     LOGGER << "* (C) 2010-2021, Westlake University" << std::endl;
     LOGGER << "* MIT License" << std::endl;

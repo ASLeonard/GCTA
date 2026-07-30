@@ -27,6 +27,8 @@
 
 #include <Eigen/Dense>
 #include <fstream>
+#include <sstream>
+#include <unordered_map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -304,9 +306,66 @@ void write_hsq_from_ctx(const string& out_prefix, const RemlCtx& ctx)
     if (ctx.has_logL)
         o_hsq << "logL\t" << to_text(ctx.logL) << "\n";
 
+    if (ctx.reml_iterations > 0)
+        o_hsq << "reml_iterations\t" << ctx.reml_iterations << "\n";
+
     o_hsq << "n\t" << ctx.n << "\n";
     o_hsq.close();
     LOGGER.i(0, "Summary REML results saved to [" + hsq_file + "].");
+}
+
+// Load a "<prefix>.eigenvec" written by --pca-approx (rSVD or Lanczos) and
+// align its rows to `analysis_ids` (the same FID\tIID order used to build
+// ctx.y / ctx.X / ctx.A[0]), for use as ctx.Uk before reml::compute() so
+// compute_woodbury_basis_basis()'s existing has_warm path seeds its rSVD sketch
+// from it instead of a cold Gaussian draw.
+//
+// A silently misaligned warm start would seed the sketch with the wrong
+// individual's eigenvector — worse than no warm start at all — so any
+// mismatch between the file's sample set and the current analysis sample
+// set is a hard error, not a fallback.
+Eigen::MatrixXd load_pca_warm_start(const string& eigenvec_prefix,
+                                     const vector<string>& analysis_ids)
+{
+    const string path = eigenvec_prefix + ".eigenvec";
+    std::ifstream in(path);
+    if (!in) LOGGER.e(0, "--reml-woodbury-basis-warm-start: cannot open [" + path + "].");
+
+    std::unordered_map<string, vector<double>> by_id;
+    by_id.reserve(analysis_ids.size() * 2);
+
+    string line, fid, iid;
+    int k = -1;
+    while (std::getline(in, line)) {
+        if (line.empty()) continue;
+        std::istringstream ss(line);
+        if (!(ss >> fid >> iid))
+            LOGGER.e(0, "--reml-woodbury-basis-warm-start: malformed line in [" + path + "].");
+        vector<double> pcs;
+        double v;
+        while (ss >> v) pcs.push_back(v);
+        if (k < 0) k = static_cast<int>(pcs.size());
+        else if (static_cast<int>(pcs.size()) != k)
+            LOGGER.e(0, "--reml-woodbury-basis-warm-start: inconsistent eigenvector count in [" + path + "].");
+        by_id.emplace(fid + "\t" + iid, std::move(pcs));
+    }
+    if (k <= 0)
+        LOGGER.e(0, "--reml-woodbury-basis-warm-start: no eigenvectors read from [" + path + "].");
+
+    const int n = static_cast<int>(analysis_ids.size());
+    Eigen::MatrixXd Uk(n, k);
+    for (int i = 0; i < n; ++i) {
+        const auto it = by_id.find(analysis_ids[i]);
+        if (it == by_id.end())
+            LOGGER.e(0, "--reml-woodbury-basis-warm-start: individual [" + analysis_ids[i] +
+                        "] not found in [" + path + "]. The warm-start file must come from "
+                        "the same sample set (e.g. --pca-approx run on the same --grm).");
+        for (int j = 0; j < k; ++j) Uk(i, j) = it->second[j];
+    }
+
+    LOGGER.i(0, "Woodbury warm-start: loaded " + to_string(k) + " eigenvector(s) for " +
+                to_string(n) + " individuals from [" + path + "].");
+    return Uk;
 }
 
 } // anonymous namespace
@@ -367,12 +426,13 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options["load_reml"] = options_in["--load-reml"][0];
         options_in.erase("--load-reml");
         // REML tuning flags are irrelevant when a saved state is loaded; consume to suppress warnings.
-        options_in.erase("--reml-woodbury");
-        options_in.erase("--reml-woodbury-nystrom");
+        options_in.erase("--reml-woodbury-basis");
+        options_in.erase("--reml-woodbury-basis-nystrom");
         options_in.erase("--reml-trace-approx");
         options_in.erase("--reml-maxit");
         options_in.erase("--reml-priors");
         options_in.erase("--reml-priors-var");
+        options_in.erase("--reml-no-HE-start");
     } else {
         // Inline REML path: --grm is required.
         const bool has_grm = options_in.find("--grm") != options_in.end()
@@ -382,28 +442,120 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options["grm"] = options_in["--grm"][0];
         options_in.erase("--grm");
 
-        // --reml-woodbury [k]  (k optional; -1 = auto-k, -2 = EIG99)
-        if (options_in.find("--reml-woodbury") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury"];
+        // --reml-woodbury [k]  (k optional; -1 = auto-k, -2 = EIGMASS, -3 = variance)
+        if (options_in.find("--reml-woodbury-basis") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis"];
             if (!vals.empty() && !vals[0].empty()) {
-                if (vals[0] == "EIG99")
-                    options_d["woodbury_rank"] = -2.0;  // Eigenvalue mass k
+                if (vals[0] == "EIGMASS")
+                    options_d["woodbury_basis_rank"] = -2.0;  // Eigenvalue mass k
+                else if (vals[0] == "variance")
+                    options_d["woodbury_basis_rank"] = -3.0;  // Variance-k
                 else if (vals[0] == "auto")
-                    options_d["woodbury_rank"] = -1.0;  // auto-k
+                    options_d["woodbury_basis_rank"] = -1.0;  // auto-k
                 else
-                    options_d["woodbury_rank"] = std::stod(vals[0]);
+                    options_d["woodbury_basis_rank"] = std::stod(vals[0]);
             } else
-                options_d["woodbury_rank"] = -1.0;   // auto-k
-            options_in.erase("--reml-woodbury");
+                options_d["woodbury_basis_rank"] = -1.0;   // auto-k
+            options_in.erase("--reml-woodbury-basis");
         }
-        // --reml-woodbury-nystrom is a boolean flag (no argument): selects a
+        if (options_in.find("--reml-woodbury-basis-eigen-mass") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-eigen-mass"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-basis-eigen-mass requires a fractional argument (e.g. 0.15).");
+            options_d["woodbury_basis_eigen_mass"] = std::stof(vals[0]);
+            options_in.erase("--reml-woodbury-basis-eigen-mass");
+        }
+        if (options_in.find("--reml-woodbury-basis-var-thresh") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-var-thresh"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-basis-var-thresh requires a relative Frobenius error argument (e.g. 0.001).");
+            options_d["woodbury_basis_var_thresh"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-basis-var-thresh");
+        }
+        // --reml-woodbury-basis-nystrom is a boolean flag (no argument): selects a
         // single-pass Nystrom basis instead of the default eigendecomposition
         // for the Woodbury basis. Only meaningful alongside --reml-woodbury.
-        if (options_in.find("--reml-woodbury-nystrom") != options_in.end()) {
-            if (!options_in["--reml-woodbury-nystrom"].empty())
-                LOGGER.w(0, "--reml-woodbury-nystrom takes no argument; ignoring the supplied value.");
-            options["woodbury_nystrom"] = "1";
-            options_in.erase("--reml-woodbury-nystrom");
+        if (options_in.find("--reml-woodbury-basis-nystrom") != options_in.end()) {
+            if (!options_in["--reml-woodbury-basis-nystrom"].empty())
+                LOGGER.w(0, "--reml-woodbury-basis-nystrom takes no argument; ignoring the supplied value.");
+            options["woodbury_basis_nystrom"] = "1";
+            options_in.erase("--reml-woodbury-basis-nystrom");
+        }
+        // --reml-woodbury-basis-warm-start <prefix>: seed the Woodbury rSVD sketch
+        // with eigenvectors from a prior "<prefix>.eigenvec" (e.g. written by
+        // --pca-approx rSVD on the same GRM/sample set), instead of a cold
+        // Gaussian draw. Ignored when --reml-woodbury-basis-nystrom is set, since
+        // the Nystrom path doesn't use power iteration.
+        if (options_in.find("--reml-woodbury-basis-warm-start") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-warm-start"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-basis-warm-start requires a file prefix argument.");
+            options["woodbury_basis_warm_start"] = vals[0];
+            options_in.erase("--reml-woodbury-basis-warm-start");
+        }
+        if (options_in.find("--reml-no-HE-start") != options_in.end()) {
+            if (!options_in["--reml-no-HE-start"].empty())
+                LOGGER.w(0, "--reml-no-HE-start takes no argument; ignoring the supplied value.");
+            options["no_HE_start"] = false;
+            options_in.erase("--reml-no-HE-start");
+        }
+        // --reml-svd-chunked: read K in lower-triangular tiles for the
+        // Woodbury basis rSVD instead of holding a dense n x n K resident —
+        // see chunked_grm_matvec.hpp. Requires the caller (below, once
+        // grm_binary_io.hpp's reader is wired up) to populate
+        // ctx.grm_tile_reader; RemlEngine enforces this at runtime.
+        if (options_in.find("--reml-svd-chunked") != options_in.end()) {
+            if (!options_in["--reml-svd-chunked"].empty())
+                LOGGER.w(0, "--reml-svd-chunked takes no argument; ignoring the supplied value.");
+            options["svd_chunked"] = "1";
+            options_in.erase("--reml-svd-chunked");
+        }
+        if (options_in.find("--reml-svd-chunk-size") != options_in.end()) {
+            const auto& vals = options_in["--reml-svd-chunk-size"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-svd-chunk-size requires a row-count argument.");
+            options_d["svd_chunk_size"] = std::stod(vals[0]);
+            options_in.erase("--reml-svd-chunk-size");
+        }
+        // These three were previously read from options_d further down
+        // (woodbury_basis_edge_margin / woodbury_basis_edge_confirm / woodbury_basis_EIGMASS_k_buffer)
+        // with no CLI parsing block actually populating them — silently
+        // always falling back to their hardcoded defaults regardless of what
+        // was passed on the command line. Fixed alongside adding the new
+        // memory-budget flag, since all four are the same kind of numeric
+        // --reml-woodbury-basis-* option and belong together.
+        if (options_in.find("--reml-woodbury-basis-edge-margin") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-edge-margin"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-basis-edge-margin requires a fractional argument (e.g. 0.15).");
+            options_d["woodbury_basis_edge_margin"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-basis-edge-margin");
+        }
+        if (options_in.find("--reml-woodbury-basis-edge-confirm") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-edge-confirm"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-basis-edge-confirm requires an integer argument.");
+            options_d["woodbury_basis_edge_confirm"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-basis-edge-confirm");
+        }
+        if (options_in.find("--reml-woodbury-basis-EIGMASS-k-buffer") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-EIGMASS-k-buffer"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-basis-EIGMASS-k-buffer requires an integer argument.");
+            options_d["woodbury_basis_EIGMASS_k_buffer"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-basis-EIGMASS-k-buffer");
+        }
+        // --reml-woodbury-basis-mem-budget <GB>: hard cap on k_svd derived from an
+        // approximate rSVD sketch memory budget, independent of n-1. See the
+        // reml_svd_mem_budget_gb comment in RemlCtx.hpp — chunking K does
+        // nothing to bound this, since the sketch buffers scale with k_ext
+        // regardless of whether K itself is chunked or dense.
+        if (options_in.find("--reml-woodbury-basis-mem-budget") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-mem-budget"];
+            if (vals.empty() || vals[0].empty())
+                LOGGER.e(0, "--reml-woodbury-basis-mem-budget requires a GB argument (e.g. 32).");
+            options_d["woodbury_basis_mem_budget_gb"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-basis-mem-budget");
         }
         if (options_in.find("--reml-trace-approx") != options_in.end()) {
             options["trace_approx"] = "1";
@@ -583,23 +735,39 @@ void MLMA::processMain()
             const string grm_pfx = options.at("grm");
             LOGGER.i(0, "Running inline REML using GRM [" + grm_pfx + "] ...");
 
-            vector<string> grm_ids;
-            Eigen::MatrixXd G_n;
-            double m_all = 0.0;
-            read_grm_binary(grm_pfx, grm_ids, G_n, m_all);
-
-            // Get post-filter analysis IDs (FID\tIID) and match to GRM
             const vector<string> analysis_ids = pheno->get_id(0, n - 1, "\t");
-            const vector<int>    kp           = match_ids_to_grm(analysis_ids, grm_ids);
-            for (int i = 0; i < n; ++i)
-                if (kp[i] < 0)
-                    LOGGER.e(0, "Individual [" + analysis_ids[i] +
-                                "] not found in GRM [" + grm_pfx + "]. "
-                                "Re-build the GRM from the same sample set.");
+            const bool svd_chunked = options.count("svd_chunked") > 0;
 
-            // Subset GRM to the n analysis individuals.
-            // Fast path: if GRM sample == analysis sample (in order), no copy needed.
-            {
+            vector<string> grm_ids;
+            Eigen::MatrixXd G_n;      // left empty when svd_chunked
+            double m_all = 0.0;
+            gcta_grm_io::ChunkedGrmHandle chunked_grm;  // only populated when svd_chunked
+
+            if (svd_chunked) {
+                // Skip the dense O(n_grm^2) load entirely — the whole point
+                // of --reml-svd-chunked. make_chunked_grm_reader does its
+                // own ID validation (same fail-loud contract as the dense
+                // path below) and reads m_snps from .grm.N.bin's diagonal
+                // without touching .grm.bin.
+                chunked_grm = gcta_grm_io::make_chunked_grm_reader(grm_pfx, analysis_ids);
+                m_all = chunked_grm.m_snps;
+                LOGGER.i(0, "--reml-svd-chunked: GRM will be read in " +
+                            to_string(options_d.count("svd_chunk_size")
+                                          ? static_cast<int>(options_d.at("svd_chunk_size")) : 8000) +
+                            "-row tiles from [" + grm_pfx + "] as needed, not loaded densely.");
+            } else {
+                read_grm_binary(grm_pfx, grm_ids, G_n, m_all);
+
+                // Get post-filter analysis IDs (FID\tIID) and match to GRM
+                const vector<int> kp = match_ids_to_grm(analysis_ids, grm_ids);
+                for (int i = 0; i < n; ++i)
+                    if (kp[i] < 0)
+                        LOGGER.e(0, "Individual [" + analysis_ids[i] +
+                                    "] not found in GRM [" + grm_pfx + "]. "
+                                    "Re-build the GRM from the same sample set.");
+
+                // Subset GRM to the n analysis individuals.
+                // Fast path: if GRM sample == analysis sample (in order), no copy needed.
                 const int  n_grm        = static_cast<int>(grm_ids.size());
                 bool       is_identity  = (n_grm == n);
                 for (int i = 0; i < n && is_identity; ++i)
@@ -619,11 +787,11 @@ void MLMA::processMain()
             }
 
             // REML tuning parameters
-            const int  woodbury_rank  = options_d.count("woodbury_rank")
-                ? static_cast<int>(options_d.at("woodbury_rank")) : 0;
+            const int  woodbury_basis_rank  = options_d.count("woodbury_basis_rank")
+                ? static_cast<int>(options_d.at("woodbury_basis_rank")) : 0;
             const bool trace_approx   = options.count("trace_approx") > 0;
             const int  trace_nprobes  = options_d.count("trace_approx_nprobes")
-                ? static_cast<int>(options_d.at("trace_approx_nprobes")) : 100;
+                ? static_cast<int>(options_d.at("trace_approx_nprobes")) : 90;
             const int  reml_maxit     = options_d.count("reml_maxit")
                 ? static_cast<int>(options_d.at("reml_maxit")) : 100;
             const int  reml_alg       = options_d.count("reml_alg")
@@ -631,18 +799,27 @@ void MLMA::processMain()
             const int  reml_diagV_adj = options_d.count("reml_diagV_adj")
                 ? static_cast<int>(options_d.at("reml_diagV_adj")) : 0;
             const bool no_constrain   = options.count("no_constrain") > 0;
-            const bool woodbury_nystrom = options.count("woodbury_nystrom") > 0;
-            const float  woodbury_eigen_mass  = options_d.count("woodbury_eigen_mass")
-                ? static_cast<float>(options_d.at("woodbury_eigen_mass")) : 99.0f;
+            const bool woodbury_basis_nystrom = options.count("woodbury_basis_nystrom") > 0;
+            const float  woodbury_basis_eigen_mass  = options_d.count("woodbury_basis_eigen_mass")
+                ? static_cast<float>(options_d.at("woodbury_basis_eigen_mass")) : 0.99f;
+            const double woodbury_basis_edge_margin = options_d.count("woodbury_basis_edge_margin")
+                ? options_d.at("woodbury_basis_edge_margin") : 0.15;
+            const int    woodbury_basis_edge_confirm = options_d.count("woodbury_basis_edge_confirm")
+                ? static_cast<int>(options_d.at("woodbury_basis_edge_confirm")) : 20;
+            const int woodbury_basis_EIGMASS_k_buffer = options_d.count("woodbury_basis_EIGMASS_k_buffer")
+                ? static_cast<int>(options_d.at("woodbury_basis_EIGMASS_k_buffer")) : 0;
+            const double woodbury_basis_mem_budget_gb = options_d.count("woodbury_basis_mem_budget_gb")
+                ? options_d.at("woodbury_basis_mem_budget_gb") : 0.0;
+            const bool no_HE_start = options.count("no_HE_start") > 0;
 
             if (reml_alg < 0 || reml_alg > 2)
                 LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
             if (reml_diagV_adj < 0 || reml_diagV_adj > 2)
                 LOGGER.e(0, "--reml-diagV-adj should be 0, 1, or 2.");
-            if (woodbury_rank != 0 && reml_alg == 1)
+            if (woodbury_basis_rank != 0 && reml_alg == 1)
                 LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML (--reml-alg 1). Use AI-REML (default) or EM-REML (--reml-alg 2).");
-            if (woodbury_nystrom && woodbury_rank == 0)
-                LOGGER.e(0, "--reml-woodbury-nystrom requires --reml-woodbury <k|auto|EIG99>.");
+            if (woodbury_basis_nystrom && woodbury_basis_rank == 0)
+                LOGGER.e(0, "--reml-woodbury-basis-nystrom requires --reml-woodbury <k|auto|EIGMASS>.");
 
             const vector<double> priors =
                 options_vd.count("reml_priors") ? options_vd.at("reml_priors") : vector<double>{};
@@ -661,7 +838,15 @@ void MLMA::processMain()
                 ctx.y_Ssq = ctx.y.squaredNorm();
             }
             ctx.A.resize(2);
-            ctx.A[0] = std::move(G_n);
+            if (svd_chunked) {
+                // ctx.A[0] stays empty (default RemlMat()); RemlEngine reads
+                // K through ctx.grm_tile_reader instead. See the guard in
+                // compute_woodbury_basis_basis that errors out if this flag is set
+                // without a reader.
+                ctx.grm_tile_reader = std::move(chunked_grm.reader);
+            } else {
+                ctx.A[0] = std::move(G_n);
+            }
             ctx.grm_N.resize(1, 1);
             ctx.grm_N(0, 0) = m_all;
             // ctx.A[1] left default (size 0 == identity convention for residual)
@@ -674,12 +859,37 @@ void MLMA::processMain()
             ctx.reml_max_iter            = reml_maxit;
             ctx.reml_inv_mtd             = 0;  // LLT
             ctx.reml_diagV_adj           = reml_diagV_adj;
-            ctx.woodbury_rank            = woodbury_rank;
-            ctx.woodbury_buffer_factor   = 1.5;
-            ctx.woodbury_nystrom         = woodbury_nystrom;
+            ctx.woodbury_basis_rank            = woodbury_basis_rank;
+            if (svd_chunked && woodbury_basis_rank == 0)
+                LOGGER.e(0, "--reml-svd-chunked requires --reml-woodbury. Every REML code path "
+                            "outside compute_woodbury_basis_basis (the trace/projection machinery, "
+                            "Hutch++, dense/exact REML) still reads ctx.A[...] directly and treats "
+                            "an empty component as \"identity\" — chunked mode leaves it empty for "
+                            "a different reason, and nothing else knows the difference yet.");
+            ctx.woodbury_basis_edge_margin        = woodbury_basis_edge_margin;
+            ctx.woodbury_basis_edge_confirm       = woodbury_basis_edge_confirm;
+            ctx.woodbury_basis_eigmass_k_buffer  = woodbury_basis_EIGMASS_k_buffer;
+            ctx.woodbury_basis_var_thresh         = options_d.count("woodbury_basis_var_thresh")
+                ? options_d.at("woodbury_basis_var_thresh") : 0.001;
+            ctx.reml_svd_mem_budget_gb   = woodbury_basis_mem_budget_gb;
+            ctx.woodbury_basis_nystrom         = woodbury_basis_nystrom;
+            ctx.reml_svd_chunked         = svd_chunked;
+            ctx.reml_svd_chunk_size      = options_d.count("svd_chunk_size")
+                ? static_cast<int>(options_d.at("svd_chunk_size")) : 8000;
             ctx.reml_trace_approx        = trace_approx;
             ctx.reml_trace_approx_nprobes = trace_nprobes;
-            ctx.reml_eigen_mass             = woodbury_eigen_mass;
+            ctx.woodbury_basis_eigen_mass             = woodbury_basis_eigen_mass;
+            ctx.reml_no_HE_start         = no_HE_start;
+
+            if (options.count("woodbury_basis_warm_start")) {
+                if (woodbury_basis_rank == 0)
+                    LOGGER.w(0, "--reml-woodbury-basis-warm-start given without --reml-woodbury; ignoring.");
+                else if (woodbury_basis_nystrom)
+                    LOGGER.w(0, "--reml-woodbury-basis-warm-start has no effect with --reml-woodbury-basis-nystrom "
+                                "(the Nystrom path doesn't use power iteration); ignoring.");
+                else
+                    ctx.Uk = load_pca_warm_start(options.at("woodbury_basis_warm_start"), analysis_ids);
+            }
 
             reml::compute(ctx, priors, priors_var, no_constrain);
 

@@ -89,7 +89,7 @@ inline void run_mlma_stream_association(RemlState& state,
     Vi_y.array() *= w_sqrt.array();
 
     const uint32_t total_m = marker->count_extract();
-    LOGGER << "\nRunning association tests for " << total_m << " SNPs..." << std::endl;
+    LOGGER << "\nStreaming association tests for " << total_m << " SNPs..." << std::endl;
 
     constexpr int BLOCK = 10000;
     Eigen::MatrixXf X_block(n, BLOCK);

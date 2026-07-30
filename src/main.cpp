@@ -36,6 +36,7 @@
 #include <omp.h>
 #include "MLMA.h"
 #include "MLMA_loco.h"
+#include "PCA_stream.h"
 #include <cstdlib>
 #include "mem.hpp"
 #include "config.h"
@@ -75,7 +76,13 @@ void out_ver(bool flag_outFile){
         log(0, outstring.str(), "");
     }
 #ifdef GCTA_BLAS_BACKEND_STR
-    log(0, std::string("* BLAS/LAPACK: ") + GCTA_BLAS_BACKEND_STR, "");
+    {
+        std::string blas_line = std::string("* BLAS/LAPACK: ") + GCTA_BLAS_BACKEND_STR;
+#ifdef GCTA_BLAS_VERSION_STR
+        blas_line += std::string(" (") + GCTA_BLAS_VERSION_STR + ")";
+#endif
+        log(0, blas_line, "");
+    }
 #endif
     log(0, "* (C) 2010-present, Yang Lab, Westlake University", "");
     log(0, "* Please report bugs to Jian Yang <jian.yang@westlake.edu.cn>", "");
@@ -98,7 +105,7 @@ int main(int argc, char *argv[]){
         "--cg", "--ldlt", "--llt", "--pardiso", "--tcg", "--lscg", "--save-inv", "--load-inv",
         "--update-ref-allele", "--update-freq", "--update-sex", "--mbfile", "--freqx", "--make-grm-homogametic", "--make-grm-homogametic-part", "--dc", "--make-grm-alg",
         "--make-bed", "--recodet", "--sum-geno-x", "--sample", "--bgen", "--mbgen", "--hard-call-thresh", "--dosage-call", "--dosage", "--mgrm", "--unify-grm", "--rel-only", 
-        "--ld-matrix", "--r", "--ld-wind", "--r2", "--subtract-grm", "--save-pheno", "--save-bin", "--no-marker", "--joint-covar", "--sparse-cutoff", "--noblas", "--fastGWA-gram",
+        "--ld-matrix", "--r", "--ld-wind", "--r2", "--subtract-grm", "--merge-grm-streaming", "--merge-grm-row-block", "--save-pheno", "--save-bin", "--no-marker", "--joint-covar", "--sparse-cutoff", "--noblas", "--fastGWA-gram",
         "--inv-t1", "--est-vg", "--force-gwa", "--reml-detail", "--h2-limit", "--gwa-no-constrain", "--verbose", "--c-inf", "--c-inf-no-filter", "--geno", "--info", "--nofilter",
         "--set-list", "--burden",
         "--pfile", "--bpfile", "--mpfile", "--mbpfile", "--model-only", "--load-model", "--seed", "--fastGWA-mlm-binary", "--num-vec", "--trace-exact", "--cv-threshold", "--tao-start",
@@ -106,9 +113,10 @@ int main(int argc, char *argv[]){
         "--envir", "--optimal-rho", "--noSandwich", "--grid-size",
         "--GRM-tile-budget",
         "--mlma-stream", "--save-reml", "--load-reml", "--mlma-no-preadj-covar", "--log-pval", "--model",
-        "--reml-trace-approx", "--reml-maxit", "--reml-woodbury", "--reml-woodbury-nystrom", "--reml-woodbury-eigen-mass", "--reml-alg",
-        "--reml-no-constrain", "--reml-priors", "--reml-priors-var", "--reml-diagV-adj",
+        "--reml-trace-approx", "--reml-maxit", "--reml-woodbury-basis", "--reml-woodbury-basis-nystrom", "--reml-woodbury-basis-eigen-mass", "--reml-woodbury-basis-var-thresh", "--reml-svd-chunked", "--reml-svd-chunk-size", "--reml-alg",
+        "--reml-no-constrain", "--reml-no-HE-start", "--reml-priors", "--reml-priors-var", "--reml-diagV-adj",
         "--mlma-loco-stream", "--loco-manifest",
+        "--pca-stream", "--pca-approx",
     };
     map<string, vector<string>> options;
     vector<string> keys;
@@ -268,9 +276,9 @@ int main(int argc, char *argv[]){
 
     //start register the options
     // Please take care of the order, C++ has few reflation feature, I did in a ugly way.
-    // Note: "mlma" and "mlma_loco" must appear before "GRM" so that --grm is captured
-    // by the MLMA modules before GRM::registerOption unconditionally erases it.
-    vector<string> module_names = {"phenotype", "marker", "genotype", "covar", "mlma", "mlma_loco", "GRM", "fastFAM", "LD"};
+        // Note: "mlma", "mlma_loco", and "pca_stream" must appear before "GRM" so
+        // that --grm is captured by those modules before GRM::registerOption erases it.
+        vector<string> module_names = {"phenotype", "marker", "genotype", "covar", "mlma", "mlma_loco", "pca_stream", "GRM", "fastFAM", "LD"};
     vector<int (*)(map<string, vector<string>>&)> registers = {
             Pheno::registerOption,
             Marker::registerOption,
@@ -278,6 +286,7 @@ int main(int argc, char *argv[]){
             Covar::registerOption,
             MLMA::registerOption,
             MLMALoco::registerOption,
+            PCAStream::registerOption,
             GRM::registerOption,
             FastFAM::registerOption,
             LD::registerOption
@@ -289,6 +298,7 @@ int main(int argc, char *argv[]){
             Covar::processMain,
             MLMA::processMain,
             MLMALoco::processMain,
+            PCAStream::processMain,
             GRM::processMain,
             FastFAM::processMain,
             LD::processMain
