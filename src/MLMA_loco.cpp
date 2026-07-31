@@ -247,10 +247,10 @@ int MLMALoco::registerOption(map<string, vector<string>>& options_in)
         options_in.erase("--reml-trace-hutchpp");
     }
 
-    // --reml-trace-hutchpp-fresh-probes
-    if (options_in.find("--reml-trace-hutchpp-fresh-probes") != options_in.end()) {
-        options["trace_hutchpp_fresh_probes"] = "1";
-        options_in.erase("--reml-trace-hutchpp-fresh-probes");
+    // --reml-trace-hutchpp-fixed-probes
+    if (options_in.find("--reml-trace-hutchpp-fixed-probes") != options_in.end()) {
+        options["trace_hutchpp_fixed_probes"] = "1";
+        options_in.erase("--reml-trace-hutchpp-fixed-probes");
     }
 
     // --reml-maxit

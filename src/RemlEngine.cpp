@@ -448,14 +448,14 @@ void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, RemlVec& tr_PA_var, int m
     const int k = std::max(m_probes / 3, 3);
 
     // Probe policy:
-    // - reml_hutchpp_fresh_probes=true: redraw every call/iteration.
-    // - reml_hutchpp_fresh_probes=false: keep probes fixed unless dimensions change.
+    // - reml_hutchpp_fixed_probes=false: redraw every call/iteration.
+    // - reml_hutchpp_fixed_probes=true: keep probes fixed unless dimensions change.
     const bool need_resize = (ctx.hutchpp_S.rows() != ctx.n || ctx.hutchpp_S.cols() != k);
     if (need_resize) {
         ctx.hutchpp_S.resize(ctx.n, k);
         ctx.hutchpp_G.resize(ctx.n, k);
     }
-    if (need_resize || ctx.reml_hutchpp_fresh_probes) {
+    if (need_resize || !ctx.reml_hutchpp_fixed_probes) {
         std::uniform_int_distribution<int> coin(0, 1);
         for (int j = 0; j < k; j++)
             for (int r = 0; r < ctx.n; r++) {
@@ -505,7 +505,7 @@ void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, RemlVec& tr_PA_var, int m
         const RemlVec per_col = R_.cwiseProduct(MR).colwise().sum();  // k values
         const double mean_r = per_col.mean();
         tr_PA(ci) = t_lr + mean_r;
-        tr_PA_var(ci) = ctx.reml_hutchpp_fresh_probes
+        tr_PA_var(ci) = !ctx.reml_hutchpp_fixed_probes
             ? (per_col.array() - mean_r).square().sum() / (static_cast<double>(k) * (k - 1))
             : 0.0;
     }
@@ -683,7 +683,7 @@ void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
     } else if (use_approx) {
         const int eff_nprobes = (std::fabs(dlogL) < 1.0)
             ? ctx.reml_trace_hutchpp_nprobes
-            : std::max(ctx.reml_trace_hutchpp_nprobes / 3, 9);
+            : std::max(ctx.reml_trace_hutchpp_nprobes / 3, 30);
         calcu_tr_PA_hutchpp(ctx, tr_PA, tr_PA_var, eff_nprobes);
     } else {
         calcu_tr_PA(ctx, P, tr_PA);
@@ -724,7 +724,7 @@ void em_reml(RemlCtx& ctx, RemlMat& P, RemlVec& Py,
     } else if (use_approx) {
         const int eff_nprobes = (std::fabs(dlogL) < 1.0)
             ? ctx.reml_trace_hutchpp_nprobes
-            : std::max(ctx.reml_trace_hutchpp_nprobes / 3, 9);
+            : std::max(ctx.reml_trace_hutchpp_nprobes / 3, 30);
         RemlVec tr_PA_var_unused;   // EM-REML has no Newton-decrement consumer
         calcu_tr_PA_hutchpp(ctx, tr_PA, tr_PA_var_unused, eff_nprobes);
         Py = applyP_vec(ctx, ctx.y);
@@ -782,7 +782,7 @@ double reml_iteration(RemlCtx& ctx,
 
     if (ctx.reml_trace_hutchpp && !ctx.Vi_use_woodbury_basis) {
         LOGGER << "Using Hutch++ stochastic trace estimator with "
-               << ctx.reml_trace_hutchpp_nprobes << " probes." << std::endl;
+               << ctx.reml_trace_hutchpp_nprobes << (ctx.reml_hutchpp_fixed_probes ? "fixed" : "fresh")  << " probes." << std::endl;
     }
     if (ctx.reml_mtd == 0 && ctx.reml_ai_robust_stop) {
         LOGGER << "Using Newton-decrement convergence criterion (--reml-ai-robust-stop, "
