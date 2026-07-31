@@ -62,7 +62,7 @@ void out_ver(bool flag_outFile){
 
     log(0, "*******************************************************************", "");
     log(0, "* Genome-wide Complex Trait Analysis -- Agricuture (GCTAg)", "");
-    log(0, std::string("* version ") + std::string(GCTA_VERSION) + std::string(" ") + getOSName(), "");
+    log(0, std::string("* ") + std::string(GCTA_VERSION) + std::string(" ") + "(" + getOSName() + ")", "");
     {
         std::ostringstream outstring;
         outstring << "* Built at " << __DATE__ << " " << __TIME__;

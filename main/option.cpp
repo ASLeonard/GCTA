@@ -30,7 +30,7 @@ int main_v1(int argc, char* argv[])
 {
     LOGGER << "*******************************************************************" << std::endl;
     LOGGER << "* Genome-wide Complex Trait Analysis -- Agricuture (GCTAg)" << std::endl;
-    LOGGER << "* version 1.0" << std::endl;
+    LOGGER << "* v1.0.0 \"Braunvieh\"" << std::endl;
     LOGGER << "* GCTA: (C) 2010-2021, Westlake University" << std::endl;
     LOGGER << "* GCTAg: (C) 2026-present, Alexander S. Leonard, ETH Zurich" << std::endl;
     LOGGER << "* MIT License" << std::endl;
