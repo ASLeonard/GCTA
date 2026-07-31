@@ -1017,9 +1017,9 @@ namespace {
 
 static const char* woodbury_mode_name(WoodburyMode mode) {
     switch (mode) {
-        case WoodburyMode::AutoMP:   return "auto-k";
-        case WoodburyMode::EigMass:  return "EIGMASS-k";
-        case WoodburyMode::Variance: return "variance-k";
+        case WoodburyMode::AutoMP:   return "MP-k";
+        case WoodburyMode::EigMass:  return "EIG-k";
+        case WoodburyMode::Variance: return "VAR-k";
         case WoodburyMode::Fixed:    return "fixed-k";
         default:                     return "off";
     }
@@ -1037,10 +1037,10 @@ static int woodbury_initial_k_svd(const RemlCtx& ctx, WoodburyMode mode, int k_b
     const int n = ctx.n;
     switch (mode) {
         case WoodburyMode::AutoMP:
-            return hard_cap ? ctx.woodbury_basis_k_max : std::min({n - 1, k_budget_ceiling, 1200});
+            return hard_cap ? ctx.woodbury_basis_k_max : std::min({n - 1, k_budget_ceiling, 2000});
         case WoodburyMode::EigMass:
         case WoodburyMode::Variance: {
-            const int start_guess = std::clamp(n / 20, 1200, 25000);
+            const int start_guess = std::clamp(n / 20, 2000, 25000);
             return hard_cap ? ctx.woodbury_basis_k_max : std::min({n - 1, k_budget_ceiling, start_guess});
         }
         case WoodburyMode::Fixed:
@@ -1168,13 +1168,13 @@ static int finalize_and_log_woodbury_rank(
                    << ctx.woodbury_basis_edge_confirm << " consecutive)"
                    << ", using k = " << k << std::endl;
             if (k_edge >= k_svd && k_svd >= n - 1)
-                LOGGER.w(0, "Woodbury auto-k: edge band not confirmed even at k=n-1=" + std::to_string(n - 1)
+                LOGGER.w(0, "Woodbury MP-k: edge band not confirmed even at k=n-1=" + std::to_string(n - 1)
                          + "; this GRM has near-full effective rank and Woodbury may not offer a computational advantage here.");
             else if (k_edge >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
-                LOGGER.w(0, "Woodbury auto-k: edge band not confirmed within the memory-budget-implied ceiling k="
-                         + std::to_string(k_svd) + " (--reml-woodbury-basis-mem-budget=" + std::to_string(ctx.reml_svd_mem_budget_gb) + "GB).");
+                LOGGER.w(0, "Woodbury MP-k: edge band not confirmed within the memory-budget-implied ceiling k="
+                         + std::to_string(k_svd) + " (--reml-woodbury-basis-mem-budget=" + std::to_string(ctx.svd_mem_budget_gb) + "GB).");
             else if (k_edge >= k_svd)
-                LOGGER.w(0, "Woodbury auto-k: edge band not confirmed within k_max=" + std::to_string(k_svd) + "; clamped to k_max.");
+                LOGGER.w(0, "Woodbury MP-k: edge band not confirmed within k_max=" + std::to_string(k_svd) + "; clamped to k_max.");
             break;
         }
         case WoodburyMode::EigMass: {
@@ -1183,16 +1183,16 @@ static int finalize_and_log_woodbury_rank(
             double cumulative = 0.0;
             for (int i = 0; i < k; ++i) cumulative += eval_full[i];
             const double rho = cumulative / trace_K_full;
-            LOGGER << "EIGMASS: trace(K)=" << trace_K_full
+            LOGGER << "EIG-k: trace(K)=" << trace_K_full
                    << ", raw " << ctx.woodbury_basis_eigen_mass * 100 << "% mass crossing at k=" << k_EIGMASS
                    << ", using k=" << k << " (+" << ctx.woodbury_basis_eigmass_k_buffer << " eigenvalue buffer)"
                    << ", captured mass rho=" << rho << std::endl;
             if (k_EIGMASS >= k_svd && k_svd >= n - 1)
-                LOGGER.w(0, "Woodbury EIGMASS: mass target not reached even at k=n-1=" + std::to_string(n - 1) + ".");
+                LOGGER.w(0, "Woodbury EIG-k: mass target not reached even at k=n-1=" + std::to_string(n - 1) + ".");
             else if (k_EIGMASS >= k_svd && k_svd >= k_svd_budget_ceiling && !k_max_is_hard_ceiling)
-                LOGGER.w(0, "Woodbury EIGMASS: mass target not reached within memory budget ceiling k=" + std::to_string(k_svd) + ".");
+                LOGGER.w(0, "Woodbury EIG-k: mass target not reached within memory budget ceiling k=" + std::to_string(k_svd) + ".");
             else if (k_EIGMASS >= k_svd)
-                LOGGER.w(0, "Woodbury EIGMASS: mass target not reached within k_max=" + std::to_string(k_svd) + ".");
+                LOGGER.w(0, "Woodbury EIG-k: mass target not reached within k_max=" + std::to_string(k_svd) + ".");
             break;
         }
         case WoodburyMode::Variance: {
@@ -1240,21 +1240,21 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         LOGGER.e(0, "--reml-woodbury-basis is incompatible with Fisher-scoring REML.");
     if ((int)ctx.r_indx.size() != 2)
         LOGGER.e(0, "--reml-woodbury-basis supports only single-GRM models.");
-    if (ctx.A[ctx.r_indx[0]].size() == 0 && !ctx.reml_svd_chunked)
+    if (ctx.A[ctx.r_indx[0]].size() == 0 && !ctx.svd_chunked)
         LOGGER.e(0, "--reml-woodbury: GRM component is identity; cannot compute basis.");
-    if (ctx.reml_svd_chunked && !ctx.grm_tile_reader)
-        LOGGER.e(0, "--reml-woodbury: --reml-svd-chunked is set but ctx.grm_tile_reader is empty "
+    if (ctx.svd_chunked && !ctx.grm_tile_reader)
+        LOGGER.e(0, "--reml-woodbury: --svd-chunked is set but ctx.grm_tile_reader is empty "
                     "— the GRM component wasn't actually loaded either way.");
 
     const WoodburyMode mode = ctx.woodbury_mode();
     const int  n = ctx.n;
 
     int k_svd_budget_ceiling = n - 1;
-    if (ctx.reml_svd_mem_budget_gb > 0.0) {
-        const double budget_bytes = ctx.reml_svd_mem_budget_gb * 1e9;
+    if (ctx.svd_mem_budget_gb > 0.0) {
+        const double budget_bytes = ctx.svd_mem_budget_gb * 1e9;
         const int max_k_ext = static_cast<int>(budget_bytes / (5.0 * n * 8.0));
         k_svd_budget_ceiling = std::min(k_svd_budget_ceiling, std::max(20, max_k_ext - 200));
-        LOGGER << "--reml-woodbury-basis-mem-budget=" << ctx.reml_svd_mem_budget_gb
+        LOGGER << "--reml-woodbury-basis-mem-budget=" << ctx.svd_mem_budget_gb
                << "GB -> k_svd capped at " << k_svd_budget_ceiling << std::endl;
     }
 
@@ -1267,7 +1267,7 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         if (k_svd > k_svd_budget_ceiling)
             LOGGER.e(0, "--reml-woodbury-basis " + std::to_string(k_svd) + " exceeds the k_svd ceiling ("
                         + std::to_string(k_svd_budget_ceiling) + ") implied by --reml-woodbury-basis-mem-budget="
-                        + std::to_string(ctx.reml_svd_mem_budget_gb) + "GB; raise the budget or lower the rank.");
+                        + std::to_string(ctx.svd_mem_budget_gb) + "GB; raise the budget or lower the rank.");
         LOGGER << "\nComputing Woodbury low-rank basis (k=" << k_svd << ") ..." << std::endl;
     } else {
         LOGGER << "\nComputing Woodbury basis (" << woodbury_mode_name(mode) << ", k_max=" << k_svd
@@ -1283,13 +1283,13 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     if (k_svd >= n) LOGGER.e(0, "--reml-woodbury-basis rank must be < n.");
 
     const Eigen::MatrixXd& K_dbl = ctx.A[ctx.r_indx[0]];
-    const double trace_K_full = ctx.reml_svd_chunked
-        ? gcta_chunked::chunked_diagonal(ctx.grm_tile_reader, n, ctx.reml_svd_chunk_size).sum()
+    const double trace_K_full = ctx.svd_chunked
+        ? gcta_chunked::chunked_diagonal(ctx.grm_tile_reader, n, ctx.svd_chunk_size).sum()
         : K_dbl.diagonal().sum();
 
     double trace_K2 = 0.0;
-    if (ctx.reml_svd_chunked) {
-        trace_K2 = gcta_chunked::chunked_trace_K_squared(ctx.grm_tile_reader, n, ctx.reml_svd_chunk_size);
+    if (ctx.svd_chunked) {
+        trace_K2 = gcta_chunked::chunked_trace_K_squared(ctx.grm_tile_reader, n, ctx.svd_chunk_size);
     } else {
         double diag_sq = K_dbl.diagonal().squaredNorm();
         double off_sq  = 0.0;
@@ -1303,8 +1303,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     if (mode == WoodburyMode::AutoMP) {
         double M = 0.0;
         if (ctx.grm_N.rows() == n && ctx.grm_N.cols() == n) {
-            if (ctx.reml_svd_chunked)
-                LOGGER.w(0, "--reml-svd-chunked: ctx.grm_N is a dense n x n matrix — this defeats "
+            if (ctx.svd_chunked)
+                LOGGER.w(0, "--svd-chunked: ctx.grm_N is a dense n x n matrix — this defeats "
                             "the memory savings from chunking K. If your SNP-count-per-pair GRM_N "
                             "is roughly constant, pass it as a 1x1 scalar via ctx.grm_N instead.");
             M = ctx.grm_N.diagonal().mean();
@@ -1312,7 +1312,7 @@ void compute_woodbury_basis(RemlCtx& ctx) {
             M = ctx.grm_N(0, 0);
         }
         if (M <= 0.0)
-            LOGGER.e(0, "--reml-woodbury-basis auto: cannot determine SNP count. Use --reml-woodbury-basis <k>.");
+            LOGGER.e(0, "--reml-woodbury-basis MP: cannot determine SNP count. Use --reml-woodbury-basis <k>.");
         const double gamma = static_cast<double>(n) / M;
         lambda_plus = std::pow(1.0 + std::sqrt(gamma), 2.0);
     }
@@ -1320,8 +1320,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     const bool allows_warm = woodbury_mode_allows_warm_start(mode);
 
     auto apply = [&](const auto& X) -> Eigen::MatrixXd {
-        if (ctx.reml_svd_chunked)
-            return gcta_chunked::chunked_symmetric_matvec(ctx.grm_tile_reader, n, ctx.reml_svd_chunk_size, X);
+        if (ctx.svd_chunked)
+            return gcta_chunked::chunked_symmetric_matvec(ctx.grm_tile_reader, n, ctx.svd_chunk_size, X);
         return K_dbl * X;
     };
 
@@ -1333,13 +1333,13 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         const int oversample = gcta_eigh::recommended_oversample(k_svd);
         const int k_ext = std::min(k_svd + oversample, n - 1);
 
-        if (ctx.woodbury_basis_nystrom) {
+        if (ctx.svd_nystrom) {
             try {
                 gcta_eigh::EighResult res = gcta_eigh::nystrom_symmetric_eigh(
                     apply, n, k_svd,
                     gcta_eigh::recommended_oversample(k_svd));
                 if (mode == WoodburyMode::EigMass) {
-                    LOGGER << "Woodbury EIGMASS: refining Nystrom basis with one Rayleigh-Ritz projection ..."
+                    LOGGER << "Woodbury EIG-k: refining Nystrom basis with one Rayleigh-Ritz projection ..."
                            << std::endl;
                     res = gcta_eigh::rayleigh_ritz_refine(apply, std::move(res.eigenvectors), k_svd);
                 }
@@ -1378,14 +1378,14 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         if (eval_res.satisfied || k_max_is_hard_ceiling || k_svd >= n - 1 || k_svd >= k_svd_budget_ceiling) break;
 
         const int k_svd_next = std::min({k_svd * 2, n - 1, k_svd_budget_ceiling});
-        const char* warm_status = ctx.woodbury_basis_nystrom ? " (Nystrom: no warm start, full recompute)"
+        const char* warm_status = ctx.svd_nystrom ? " (Nystrom: no warm start, full recompute)"
                                  : !allows_warm              ? " (no warm start, fresh probe)"
                                                              : " (warm-started)";
         LOGGER << "Woodbury " << woodbury_mode_name(mode)
                << ": signal not resolved within k=" << k_svd
                << "; expanding budget to k=" << k_svd_next
                << warm_status << " ..." << std::endl;
-        if (!ctx.woodbury_basis_nystrom && allows_warm) ctx.Uk = evec_full;
+        if (!ctx.svd_nystrom && allows_warm) ctx.Uk = evec_full;
         k_svd = k_svd_next;
     }
 

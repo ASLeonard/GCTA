@@ -170,20 +170,20 @@ int MLMALoco::registerOption(map<string, vector<string>>& options_in)
         options_in.erase("--log-pval");
     }
 
-    // --reml-woodbury-basis [k]  (k optional; -1 = auto-k, -2 = EIGMASS, -3 = variance)
+    // --reml-woodbury-basis [k]  (k optional; -1 = MP-k, -2 = EIGMASS, -3 = variance)
     if (options_in.find("--reml-woodbury-basis") != options_in.end()) {
         const auto& vals = options_in["--reml-woodbury-basis"];
         if (!vals.empty() && !vals[0].empty()) {
-            if (vals[0] == "EIGMASS")
+            if (vals[0] == "EIG")
                 options_d["woodbury_basis_rank"] = -2.0;  // Eigenvalue mass k
-            else if (vals[0] == "variance")
+            else if (vals[0] == "VAR")
                 options_d["woodbury_basis_rank"] = -3.0;  // Variance-k
-            else if (vals[0] == "auto")
-                options_d["woodbury_basis_rank"] = -1.0;  // auto-k
+            else if (vals[0] == "MP")  // Marchenko-Pastur
+                options_d["woodbury_basis_rank"] = -1.0;  // MP-k
             else
                 options_d["woodbury_basis_rank"] = std::stod(vals[0]);
         } else
-            options_d["woodbury_basis_rank"] = -1.0;   // auto-k
+            options_d["woodbury_basis_rank"] = -1.0;   // MP-k
         options_in.erase("--reml-woodbury-basis");
     }
     if (options_in.find("--reml-woodbury-basis-eigen-mass") != options_in.end()) {
@@ -221,11 +221,21 @@ int MLMALoco::registerOption(map<string, vector<string>>& options_in)
         options_d["woodbury_basis_EIGMASS_k_buffer"] = std::stod(vals[0]);
         options_in.erase("--reml-woodbury-basis-EIGMASS-k-buffer");
     }
-    if (options_in.find("--reml-woodbury-basis-nystrom") != options_in.end()) {
-        if (!options_in["--reml-woodbury-basis-nystrom"].empty())
-            LOGGER.w(0, "--reml-woodbury-basis-nystrom takes no argument; ignoring the supplied value.");
-        options["woodbury_basis_nystrom"] = "1";
-        options_in.erase("--reml-woodbury-basis-nystrom");
+    if (options_in.find("--svd-method") != options_in.end()) {
+        const auto& vals = options_in["--svd-method"];
+        if (vals.empty() || vals[0].empty())
+            LOGGER.e(0, "--svd-method requires one argument: power or nystrom.");
+        string method = vals[0];
+        std::transform(method.begin(), method.end(), method.begin(),
+                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+        if (method == "nystrom") {
+            options["svd_nystrom"] = "1";
+        } else if (method != "power") {
+            LOGGER.e(0, "Unsupported --svd-method value [" + vals[0] + "]. Allowed values: power, nystrom.");
+        }
+        if (vals.size() > 1)
+            LOGGER.w(0, "--svd-method expects exactly one value; using the first one.");
+        options_in.erase("--svd-method");
     }
 
     // --reml-trace-approx [n]
@@ -275,7 +285,7 @@ void MLMALoco::processMain()
         const int    reml_diagV_adj = (options_d.count("reml_diagV_adj") > 0)
             ? static_cast<int>(options_d.at("reml_diagV_adj")) : 0;
         const bool   no_constrain = options.count("no_constrain") > 0;
-        const bool   woodbury_basis_nystrom = options.count("woodbury_basis_nystrom") > 0;
+        const bool   svd_nystrom = options.count("svd_nystrom") > 0;
         const float  woodbury_basis_eigen_mass = options_d.count("woodbury_basis_eigen_mass")
             ? static_cast<float>(options_d.at("woodbury_basis_eigen_mass")) : 0.99f;
         const double woodbury_basis_edge_margin = options_d.count("woodbury_basis_edge_margin")
@@ -554,7 +564,7 @@ void MLMALoco::processMain()
             ctx.woodbury_basis_edge_confirm    = woodbury_basis_edge_confirm;
             ctx.woodbury_basis_eigmass_k_buffer = woodbury_basis_EIGMASS_k_buffer;
             ctx.woodbury_basis_var_thresh      = woodbury_basis_var_thresh;
-            ctx.woodbury_basis_nystrom         = woodbury_basis_nystrom;
+            ctx.svd_nystrom         = svd_nystrom;
             ctx.reml_trace_approx = trace_approx;
             ctx.reml_trace_approx_nprobes = trace_nprobes;
 

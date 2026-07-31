@@ -58,7 +58,7 @@ struct RemlCtx {
     // An empty matrix (size() == 0) represents the identity component (residual).
     std::vector<RemlMat> A;
     std::vector<int>     r_indx;  // typically {0, 1}
-    RemlMat grm_N;   // from _grm_N — used only for Woodbury auto-k M estimation
+    RemlMat grm_N;   // from _grm_N — used only for Woodbury MP-k M estimation
 
     // ── Chunked K@X (avoids a dense n x n K resident during basis construction) ──
     // Only affects compute_woodbury_basis_basis's matvecs. When enabled, ctx.A[...]
@@ -67,19 +67,19 @@ struct RemlCtx {
     // chunked_grm_matvec.hpp for the exact callback contract (reads a single
     // lower-triangular tile; float32-on-disk should be widened to double at
     // the tile level, not for the whole file up front).
-    bool                     reml_svd_chunked    = false;
-    int                      reml_svd_chunk_size = 8000;   // rows/cols per tile
+    bool                     svd_chunked    = false;
+    int                      svd_chunk_size = 8000;   // rows/cols per tile
     gcta_chunked::TileReader grm_tile_reader;               // caller-populated when chunked
 
     // Hard cap on rSVD sketch memory (Omega/Y/qr_scratch/Q, each ~n*k_ext*8
     // bytes, several live simultaneously during power iteration) as k_ext
-    // escalates. Chunking K (reml_svd_chunked) removes K's own O(n^2)
+    // escalates. Chunking K (svd_chunked) removes K's own O(n^2)
     // footprint but does nothing to bound this — it scales with k_ext
     // identically whether K is chunked or dense, and unbounded escalation on
     // a pathological (near-full-rank) GRM can reach hundreds of GB before
     // the "may not offer a computational advantage" warning below even
     // fires. 0 = no explicit cap (only bounded by n-1, as before).
-    double reml_svd_mem_budget_gb = 0.0;
+    double svd_mem_budget_gb = 0.0;
 
     // ── Config (algorithm control) ────────────────────────────────────────────
     int    reml_mtd                  = 0;     // 0=AI-REML, 1=Fisher, 2=EM-REML
@@ -87,8 +87,8 @@ struct RemlCtx {
     int    reml_inv_mtd              = 0;     // 0=LLT, 1=LU (for V inversion fallback)
     double reml_diag_mul             = 0.01;  // diagonal jitter when V is near-singular
     int    reml_diagV_adj            = 0;     // 0=none, 1=diag jitter, 2=bending
-    int    woodbury_basis_rank             = 0;     // >0 fixed k; -1 auto-k; -2 EIGMASS-k; -3 variance-k; 0 off
-    // auto-k: eigenvalues fall off a cliff at the Marchenko-Pastur bulk edge,
+    int    woodbury_basis_rank             = 0;     // >0 fixed k; -1 MP-k; -2 EIG-k; -3 VAR-k; 0 off
+    // MP-k: eigenvalues fall off a cliff at the Marchenko-Pastur bulk edge,
     // but the exact crossing point is noisy over a band of eigenvalues near
     // the edge (rSVD tail estimation error + finite-M lambda_plus estimate +
     // edge fluctuations). That band's *size* doesn't grow with k_signal —
@@ -104,7 +104,7 @@ struct RemlCtx {
     // eigenvalue near zero. 0.001 limits its non-isotropic energy to 0.001% of
     // the GRM's total spectral energy.
     double woodbury_basis_var_thresh       = 0.001;
-    // EIGMASS-k: trace(K) ~ n (GRM diagonals are ~1), and most of that mass
+    // EIG-k: trace(K) ~ n (GRM diagonals are ~1), and most of that mass
     // sits in the Marchenko-Pastur bulk — many eigenvalues of similar size,
     // not a few outliers — so capturing "the last 0.5%" of trace mass can
     // require a lot more eigenvalues than capturing the first 99%, not a
@@ -114,8 +114,7 @@ struct RemlCtx {
     // already sitting in the existing k_svd budget's headroom (oversample /
     // starting-budget slack), so this is normally free — no extra rSVD pass.
     int    woodbury_basis_eigmass_k_buffer   = 0;    // extra eigenvalues past the raw reml_eigen_mass crossing
-    int    woodbury_basis_k_max            = 0;     // rank cap for auto-k (0 → min(n−1,1200))
-    bool   woodbury_basis_nystrom          = false; // true → single-pass Nystrom basis
+    int    woodbury_basis_k_max            = 0;     // rank cap for MP-k
     bool   reml_trace_approx         = false; // Hutch++ trace (skips n x n P)
     int    reml_trace_approx_nprobes = 90;
     int    reml_trace_power_iter     = 0;     // power-iter for Hutch++ range sketch
@@ -126,6 +125,8 @@ struct RemlCtx {
     bool   reml_allow_constrain_run  = false;
     bool   reml_no_HE_start          = false; // Active by default
 
+    bool   svd_nystrom          = false; // true → single-pass Nystrom basis
+
     // Output naming (for .hsq file and LOGGER lines)
     std::string out;                       // output file prefix
     std::vector<std::string> var_name;     // e.g. {"V(G)", "V(e)"}
@@ -133,7 +134,7 @@ struct RemlCtx {
 
     // ── Woodbury basis (set by reml::compute_woodbury_basis_basis()) ───────────────
     bool    Vi_use_woodbury_basis = false;
-    int     woodbury_basis_rank_  = 0;     // actual rank used (<= woodbury_basis_rank or auto)
+    int     woodbury_basis_rank_  = 0;     // actual rank used (<= woodbury_basis_rank or MP)
     float woodbury_basis_eigen_mass = 0.99f;    // fraction of eigenvalue mass captured by Uk
     RemlMat Uk;                      // n x k leading eigenvectors of K
     RemlVec dk;                      // k eigenvalues (clamped >= 0)

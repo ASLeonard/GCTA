@@ -33,6 +33,7 @@ gcta::WoodburyMLMACache gcta::build_woodbury_mlma_cache() const {
 
 void gcta::mlma(std::string grm_file, bool m_grm_flag, std::string subtract_grm_file, std::string phen_file, std::string qcovar_file, std::string covar_file, int mphen, int MaxIter, std::vector<double> reml_priors, std::vector<double> reml_priors_var, bool no_constrain, bool within_family, bool inbred, bool no_adj_covar, std::string weight_file, std::string save_reml_file, std::string load_reml_file)
 {
+    LOGGER.w(0, "The --mlma option has largely been superseded by the --mlma-stream option.");
     _within_family=within_family;
     _reml_max_iter=MaxIter;
     unsigned long i = 0, j = 0, k = 0;

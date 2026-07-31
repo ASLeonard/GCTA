@@ -555,16 +555,16 @@ void option(int option_num, char* option_str[])
         } else if (flag == "--denseness") {
             denseness_metric = argv[++i];
             LOGGER << "--denseness " << denseness_metric << std::endl;
-        } else if (flag == "--pca") {
+        } else if (flag == "--pca-v1") {
             pca_flag = true;
             thread_flag = true;
             if (i + 1 < argc && std::string_view{argv[i+1]}.substr(0, 2) != "--") {
                 out_pc_num = std::atoi(argv[++i]);
-                if (out_pc_num < 0) LOGGER.e(0, "\n the value to be specified after --pca should be positive.\n");
-                LOGGER << "--pca " << out_pc_num << std::endl;
+                if (out_pc_num < 0) LOGGER.e(0, "\n the value to be specified after --pca-v1 should be positive.\n");
+                LOGGER << "--pca-v1 " << out_pc_num << std::endl;
             }
             else {
-                LOGGER << "--pca (\"all by default\")" << std::endl;
+                LOGGER << "--pca-v1 (\"all by default\")" << std::endl;
             }
         } else if (flag == "--pca-approx") {
             i++;
@@ -1356,10 +1356,10 @@ void option(int option_num, char* option_str[])
     if (pca_flag) {
         if (grm_adj_fac>-1.0) {
             grm_adj_fac = -2.0;
-            LOGGER.w(0, "--grm-adj option suppressed by the --pca option.");
+            LOGGER.w(0, "--grm-adj option suppressed by the --pca-v1 option.");
         } else if (dosage_compen>-1) {
             grm_adj_fac = -2;
-            LOGGER.w(0, "--dosage-compen option suppressed by the --pca option.");
+            LOGGER.w(0, "--dosage-compen option suppressed by the --pca-v1 option.");
         }
     }
     if (!gxe_file.empty() && !grm_flag && !m_grm_flag) {
