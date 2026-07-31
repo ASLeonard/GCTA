@@ -116,7 +116,7 @@ struct RemlCtx {
     int    woodbury_basis_eigmass_k_buffer   = 0;    // extra eigenvalues past the raw reml_eigen_mass crossing
     int    woodbury_basis_k_max            = 0;     // rank cap for MP-k
     bool   reml_trace_hutchpp         = false; // Hutch++ trace (skips n x n P)
-    int    reml_trace_hutchpp_nprobes = 90;
+    int    reml_trace_hutchpp_nprobes = 200;
     int    reml_trace_power_iter     = 0;     // power-iter for Hutch++ range sketch
     bool   reml_force_inv            = false;
     bool   reml_force_converge       = false;
@@ -155,7 +155,7 @@ struct RemlCtx {
     RemlVec UkTy;               // U_k^T y  (k, constant, cached)
     RemlMat hutchpp_S;          // Hutch++ Rademacher probes  (n x k)
     RemlMat hutchpp_G;          // Hutch++ Rademacher probes  (n x k)
-    bool reml_hutchpp_fresh_probes = false; // true → redraw every call/iteration (default false)
+    bool reml_hutchpp_fixed_probes = false; // true → don't redraw every call/iteration (default false)
     RemlMat P;                  // projection matrix (freed after convergence)
     bool   reml_ai_robust_stop      = false;   // opt-in: legacy dlogL gate is default until validated
     double reml_ai_robust_stop_tol  = 1e-4;    // logL-unit tolerance; lambda_sq_floor = 2*this
