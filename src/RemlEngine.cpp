@@ -448,8 +448,8 @@ void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, RemlVec& tr_PA_var, int m
     const int k = std::max(m_probes / 3, 3);
 
     // Probe policy:
-    // - reml_hutchpp_use_fresh_probes=true: redraw every call/iteration.
-    // - reml_hutchpp_use_fresh_probes=false: keep probes fixed unless dimensions change.
+    // - reml_hutchpp_fresh_probes=true: redraw every call/iteration.
+    // - reml_hutchpp_fresh_probes=false: keep probes fixed unless dimensions change.
     const bool need_resize = (ctx.hutchpp_S.rows() != ctx.n || ctx.hutchpp_S.cols() != k);
     if (need_resize) {
         ctx.hutchpp_S.resize(ctx.n, k);
@@ -505,8 +505,9 @@ void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, RemlVec& tr_PA_var, int m
         const RemlVec per_col = R_.cwiseProduct(MR).colwise().sum();  // k values
         const double mean_r = per_col.mean();
         tr_PA(ci) = t_lr + mean_r;
-        tr_PA_var(ci) = (per_col.array() - mean_r).square().sum()
-                         / (static_cast<double>(k) * (k - 1));
+        tr_PA_var(ci) = ctx.reml_hutchpp_fresh_probes
+            ? (per_col.array() - mean_r).square().sum() / (static_cast<double>(k) * (k - 1))
+            : 0.0;
     }
 }
 
@@ -640,7 +641,7 @@ double newton_decrement_null_quantile(const RemlMat& Hi, const RemlVec& var_U, d
 void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
              RemlVec& prev_varcmp, RemlVec& varcmp, double dlogL,
              double& lambda_sq, RemlVec& var_U) {
-    const bool use_approx     = ctx.reml_trace_approx;
+    const bool use_approx     = ctx.reml_trace_hutchpp;
     const bool woodbury_basis_active = ctx.Vi_use_woodbury_basis;
 
     if (use_approx || woodbury_basis_active)
@@ -681,8 +682,8 @@ void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
         calcu_tr_PA_woodbury(ctx, tr_PA);
     } else if (use_approx) {
         const int eff_nprobes = (std::fabs(dlogL) < 1.0)
-            ? ctx.reml_trace_approx_nprobes
-            : std::max(ctx.reml_trace_approx_nprobes / 3, 9);
+            ? ctx.reml_trace_hutchpp_nprobes
+            : std::max(ctx.reml_trace_hutchpp_nprobes / 3, 9);
         calcu_tr_PA_hutchpp(ctx, tr_PA, tr_PA_var, eff_nprobes);
     } else {
         calcu_tr_PA(ctx, P, tr_PA);
@@ -714,7 +715,7 @@ void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
 void em_reml(RemlCtx& ctx, RemlMat& P, RemlVec& Py,
              RemlVec& prev_varcmp, RemlVec& varcmp, double dlogL) {
     const bool woodbury_basis_active = ctx.Vi_use_woodbury_basis;
-    const bool use_approx     = ctx.reml_trace_approx;
+    const bool use_approx     = ctx.reml_trace_hutchpp;
 
     RemlVec tr_PA;
     if (woodbury_basis_active) {
@@ -722,8 +723,8 @@ void em_reml(RemlCtx& ctx, RemlMat& P, RemlVec& Py,
         Py = applyP_vec(ctx, ctx.y);
     } else if (use_approx) {
         const int eff_nprobes = (std::fabs(dlogL) < 1.0)
-            ? ctx.reml_trace_approx_nprobes
-            : std::max(ctx.reml_trace_approx_nprobes / 3, 9);
+            ? ctx.reml_trace_hutchpp_nprobes
+            : std::max(ctx.reml_trace_hutchpp_nprobes / 3, 9);
         RemlVec tr_PA_var_unused;   // EM-REML has no Newton-decrement consumer
         calcu_tr_PA_hutchpp(ctx, tr_PA, tr_PA_var_unused, eff_nprobes);
         Py = applyP_vec(ctx, ctx.y);
@@ -779,9 +780,9 @@ double reml_iteration(RemlCtx& ctx,
     const double ai_robust_alpha_per_iter =
         ctx.reml_ai_robust_stop_risk / std::max(1, ctx.reml_max_iter);
 
-    if (ctx.reml_trace_approx && !ctx.Vi_use_woodbury_basis) {
+    if (ctx.reml_trace_hutchpp && !ctx.Vi_use_woodbury_basis) {
         LOGGER << "Using Hutch++ stochastic trace estimator with "
-               << ctx.reml_trace_approx_nprobes << " probes." << std::endl;
+               << ctx.reml_trace_hutchpp_nprobes << " probes." << std::endl;
     }
     if (ctx.reml_mtd == 0 && ctx.reml_ai_robust_stop) {
         LOGGER << "Using Newton-decrement convergence criterion (--reml-ai-robust-stop, "
@@ -823,7 +824,7 @@ double reml_iteration(RemlCtx& ctx,
             LOGGER << std::endl;
         }
 
-        const bool skip_P_this_iter = (ctx.reml_trace_approx || ctx.Vi_use_woodbury_basis) && ctx.reml_mtd != 1;
+        const bool skip_P_this_iter = (ctx.reml_trace_hutchpp || ctx.Vi_use_woodbury_basis) && ctx.reml_mtd != 1;
         if (!calcu_Vi(ctx, prev_varcmp, logdet, iter, skip_P_this_iter)) {
             LOGGER << "Warning: V matrix is not positive-definite." << std::endl;
             varcmp = prev_prev_varcmp;
@@ -1490,7 +1491,7 @@ void compute(RemlCtx& ctx,
     // Ensure V^{-1} is available for downstream MLMA streaming.
     // If neither Woodbury nor Hutch++ path: calcu_Vi with factorize_only=true so
     // we get L in ctx.Vi_L (or Vi in ctx.Vi) without needing P.
-    if (!ctx.reml_trace_approx && !ctx.Vi_use_woodbury_basis) {
+    if (!ctx.reml_trace_hutchpp && !ctx.Vi_use_woodbury_basis) {
         double logdet_dummy = 0.0;
         int iter_dummy = 0;
         calcu_Vi(ctx, varcmp, logdet_dummy, iter_dummy, /*factorize_only=*/true);

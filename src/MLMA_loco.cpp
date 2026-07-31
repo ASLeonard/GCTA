@@ -571,8 +571,8 @@ void MLMALoco::processMain()
             ctx.woodbury_basis_eigmass_k_buffer = woodbury_basis_EIGMASS_k_buffer;
             ctx.woodbury_basis_var_thresh      = woodbury_basis_var_thresh;
             ctx.svd_nystrom         = svd_nystrom;
-            ctx.reml_trace_approx = trace_approx;
-            ctx.reml_trace_approx_nprobes = trace_nprobes;
+            ctx.reml_trace_hutchpp = trace_approx;
+            ctx.reml_trace_hutchpp_nprobes = trace_nprobes;
 
             // Warm-start woodbury basis from previous chr
             if (woodbury_basis_rank != 0 && Uk_warmstart.rows() > 0) {
