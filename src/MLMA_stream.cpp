@@ -857,6 +857,10 @@ void MLMA::processMain()
                 LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML (--reml-alg 1). Use AI-REML (default) or EM-REML (--reml-alg 2).");
             if (svd_nystrom && woodbury_basis_rank == 0)
                 LOGGER.e(0, "--svd-method nystrom requires --reml-woodbury <k|MP|EIG|VAR>.");
+            if (woodbury_basis_rank != 0 && trace_hutchpp)
+                LOGGER.w(0, "--reml-woodbury-basis and --reml-trace-hutchpp both given; "
+                            "the Woodbury basis provides an exact tr(PA) and takes precedence — "
+                            "--reml-trace-hutchpp is ignored.");
 
             const vector<double> priors =
                 options_vd.count("reml_priors") ? options_vd.at("reml_priors") : vector<double>{};
