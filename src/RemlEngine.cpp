@@ -447,17 +447,15 @@ void calcu_tr_PA_hutchpp(RemlCtx& ctx, RemlVec& tr_PA, RemlVec& tr_PA_var, int m
     tr_PA_var.resize(ncomp);
     const int k = std::max(m_probes / 3, 3);
 
-    // Always draw a fresh probe set on every call (i.e. every outer AI-REML
-    // iteration), rather than only when dimensions change. Reusing a single
-    // draw across the whole optimization makes AI-REML converge to the root
-    // of one fixed noisy surrogate instead of tracking the expected score
-    // equations, which can bias the converged V(G)/V(e) away from exact and
-    // hide the probe-count -> variance relationship across separate runs.
-    if (ctx.hutchpp_S.rows() != ctx.n || ctx.hutchpp_S.cols() != k) {
+    // Probe policy:
+    // - reml_hutchpp_use_fresh_probes=true: redraw every call/iteration.
+    // - reml_hutchpp_use_fresh_probes=false: keep probes fixed unless dimensions change.
+    const bool need_resize = (ctx.hutchpp_S.rows() != ctx.n || ctx.hutchpp_S.cols() != k);
+    if (need_resize) {
         ctx.hutchpp_S.resize(ctx.n, k);
         ctx.hutchpp_G.resize(ctx.n, k);
     }
-    {
+    if (need_resize || ctx.reml_hutchpp_fresh_probes) {
         std::uniform_int_distribution<int> coin(0, 1);
         for (int j = 0; j < k; j++)
             for (int r = 0; r < ctx.n; r++) {
@@ -622,14 +620,6 @@ void reml_equation(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py, RemlVec& 
 // Returns 0 when var_U is (numerically) all-zero -- the deterministic
 // exact/Woodbury case, where there is no noise term and the caller's
 // logL-unit floor alone governs convergence.
-//
-// This replaces the old "require M consecutive small deltas" heuristic:
-// instead of hoping repetition makes a false stop unlikely, alpha *is* the
-// chosen per-iteration false-stop probability under H0, directly. It is an
-// approximation (moment-matching + diagonal noise covariance), so alpha is
-// nominal, not exact -- validate empirically per stopping.md's checklist
-// (e.g. does the empirical early-stop rate under a fixed non-optimal theta
-// roughly track alpha across the probe sweep) before trusting it in production.
 double newton_decrement_null_quantile(const RemlMat& Hi, const RemlVec& var_U, double alpha) {
     const RemlVec sqrt_var = var_U.cwiseMax(0.0).cwiseSqrt();
     if (sqrt_var.squaredNorm() < 1e-300) return 0.0;   // fully deterministic; no noise term

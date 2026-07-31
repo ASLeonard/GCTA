@@ -238,13 +238,19 @@ int MLMALoco::registerOption(map<string, vector<string>>& options_in)
         options_in.erase("--svd-method");
     }
 
-    // --reml-trace-approx [n]
-    if (options_in.find("--reml-trace-approx") != options_in.end()) {
-        const auto& vals = options_in["--reml-trace-approx"];
-        options["trace_approx"] = "1";
+    // --reml-trace-hutchpp [n]
+    if (options_in.find("--reml-trace-hutchpp") != options_in.end()) {
+        const auto& vals = options_in["--reml-trace-hutchpp"];
+        options["trace_hutchpp"] = "1";
         if (!vals.empty() && !vals[0].empty())
-            options_d["trace_approx_nprobes"] = std::stod(vals[0]);
-        options_in.erase("--reml-trace-approx");
+            options_d["trace_hutchpp_nprobes"] = std::stod(vals[0]);
+        options_in.erase("--reml-trace-hutchpp");
+    }
+
+    // --reml-trace-hutchpp-fresh-probes
+    if (options_in.find("--reml-trace-hutchpp-fresh-probes") != options_in.end()) {
+        options["trace_hutchpp_fresh_probes"] = "1";
+        options_in.erase("--reml-trace-hutchpp-fresh-probes");
     }
 
     // --reml-maxit
