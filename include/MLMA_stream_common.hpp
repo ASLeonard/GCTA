@@ -135,9 +135,8 @@ inline void run_mlma_stream_association(RemlState& state,
             }
             valid_v[i] = 1;
             af_v[i]    = static_cast<float>(item.additive_af);
-            X_block.col(i) =
-                Eigen::Map<const Eigen::VectorXd>(item.geno.data(), n).cast<float>();
-            X_block.col(i).array() *= w_sqrt.array();
+            X_block.col(i) = (Eigen::Map<const Eigen::VectorXd>(item.geno.data(), n)
+                                .cast<float>().array() * w_sqrt.array()).matrix();
         }
 
 

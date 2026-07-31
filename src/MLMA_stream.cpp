@@ -428,7 +428,8 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         // REML tuning flags are irrelevant when a saved state is loaded; consume to suppress warnings.
         options_in.erase("--reml-woodbury-basis");
         options_in.erase("--svd-method");
-        options_in.erase("--reml-trace-approx");
+        options_in.erase("--reml-trace-hutchpp");
+        options_in.erase("--reml-trace-hutchpp-fixed-probes");
         options_in.erase("--reml-maxit");
         options_in.erase("--reml-priors");
         options_in.erase("--reml-priors-var");
@@ -573,12 +574,16 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             options_d["woodbury_basis_mem_budget_gb"] = std::stod(vals[0]);
             options_in.erase("--reml-woodbury-basis-mem-budget");
         }
-        if (options_in.find("--reml-trace-approx") != options_in.end()) {
-            options["trace_approx"] = "1";
-            const auto& v = options_in["--reml-trace-approx"];
+        if (options_in.find("--reml-trace-hutchpp") != options_in.end()) {
+            options["trace_hutchpp"] = "1";
+            const auto& v = options_in["--reml-trace-hutchpp"];
             if (!v.empty() && !v[0].empty())
-                options_d["trace_approx_nprobes"] = std::stod(v[0]);
-            options_in.erase("--reml-trace-approx");
+                options_d["trace_hutchpp_nprobes"] = std::stod(v[0]);
+            options_in.erase("--reml-trace-hutchpp");
+        }
+        if (options_in.find("--reml-trace-hutchpp-fixed-probes") != options_in.end()) {
+            options["trace_hutchpp_fixed_probes"] = "1";
+            options_in.erase("--reml-trace-hutchpp-fixed-probes");
         }
         if (options_in.find("--reml-maxit") != options_in.end()
                 && !options_in["--reml-maxit"].empty()) {
@@ -816,9 +821,9 @@ void MLMA::processMain()
             // REML tuning parameters
             const int  woodbury_basis_rank  = options_d.count("woodbury_basis_rank")
                 ? static_cast<int>(options_d.at("woodbury_basis_rank")) : 0;
-            const bool trace_approx   = options.count("trace_approx") > 0;
-            const int  trace_nprobes  = options_d.count("trace_approx_nprobes")
-                ? static_cast<int>(options_d.at("trace_approx_nprobes")) : 90;
+            const bool trace_hutchpp   = options.count("trace_hutchpp") > 0;
+            const int  trace_hutchpp_nprobes  = options_d.count("trace_hutchpp_nprobes")
+                ? static_cast<int>(options_d.at("trace_hutchpp_nprobes")) : 200;
             const int  reml_maxit     = options_d.count("reml_maxit")
                 ? static_cast<int>(options_d.at("reml_maxit")) : 100;
             const int  reml_alg       = options_d.count("reml_alg")
@@ -908,8 +913,9 @@ void MLMA::processMain()
             ctx.svd_chunked         = svd_chunked;
             ctx.svd_chunk_size      = options_d.count("svd_chunk_size")
                 ? static_cast<int>(options_d.at("svd_chunk_size")) : 8000;
-            ctx.reml_trace_approx        = trace_approx;
-            ctx.reml_trace_approx_nprobes = trace_nprobes;
+            ctx.reml_trace_hutchpp        = trace_hutchpp;
+            ctx.reml_trace_hutchpp_nprobes = trace_hutchpp_nprobes;
+            ctx.reml_hutchpp_fixed_probes = options.count("trace_hutchpp_fixed_probes") > 0;
             ctx.woodbury_basis_eigen_mass             = woodbury_basis_eigen_mass;
             ctx.reml_no_HE_start         = no_HE_start;
             ctx.reml_ai_robust_stop      = reml_ai_robust_stop;
