@@ -29,11 +29,12 @@ void option(int option_num, char* option_str[]);
 int main_v1(int argc, char* argv[])
 {
     LOGGER << "*******************************************************************" << std::endl;
-    LOGGER << "* Genome-wide Complex Trait Analysis (GCTAg)" << std::endl;
-    LOGGER << "* version 1.93.3 beta3" << std::endl;
-    LOGGER << "* (C) 2010-2021, Westlake University" << std::endl;
+    LOGGER << "* Genome-wide Complex Trait Analysis -- Agricuture (GCTAg)" << std::endl;
+    LOGGER << "* version 1.0" << std::endl;
+    LOGGER << "* GCTA: (C) 2010-2021, Westlake University" << std::endl;
+    LOGGER << "* GCTAg: (C) 2026-present, Alexander S. Leonard, ETH Zurich" << std::endl;
     LOGGER << "* MIT License" << std::endl;
-    LOGGER << "* Please report bugs to: Jian Yang <jian.yang@westlake.edu.cn>" << std::endl;
+    LOGGER << "* Please report bugs at https://github.com/ASLeonard/GCTAg/issues" << std::endl;
     LOGGER << "*******************************************************************" << std::endl;
 
     long int time_used = 0, start = time(NULL);

@@ -61,7 +61,7 @@ void out_ver(bool flag_outFile){
     }
 
     log(0, "*******************************************************************", "");
-    log(0, "* Genome-wide Complex Trait Analysis (GCTAg)", "");
+    log(0, "* Genome-wide Complex Trait Analysis -- Agricuture (GCTAg)", "");
     log(0, std::string("* version ") + std::string(GCTA_VERSION) + std::string(" ") + getOSName(), "");
     {
         std::ostringstream outstring;
@@ -84,8 +84,9 @@ void out_ver(bool flag_outFile){
         log(0, blas_line, "");
     }
 #endif
-    log(0, "* (C) 2010-present, Yang Lab, Westlake University", "");
-    log(0, "* Please report bugs to Jian Yang <jian.yang@westlake.edu.cn>", "");
+    log(0, "* GCTA: (C) 2010-present, Yang Lab, Westlake University", "");
+    log(0, "* GCTAg: (C) 2026-present, Alexander S. Leonard, ETH Zurich", "");
+    log(0, "* Please report bugs at https://github.com/ASLeonard/GCTAg/issues", "");
     log(0, "*******************************************************************", "");
     log(0, string("at ") + getLocalTime() + ".", "Analysis started");
     log(0, "Hostname: " + getHostName(), "");
