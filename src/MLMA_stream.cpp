@@ -761,7 +761,7 @@ void MLMA::processMain()
             LOGGER.i(0, "Running inline REML using GRM [" + grm_pfx + "] ...");
 
             const vector<string> analysis_ids = pheno->get_id(0, n - 1, "\t");
-            const bool svd_chunked = options.count("svd_chunked_budget") > 0.0;
+            const bool svd_chunked = options_d.count("svd_chunked_budget") > 0.0;
 
             vector<string> grm_ids;
             Eigen::MatrixXd G_n;      // left empty when svd_chunked
@@ -777,8 +777,7 @@ void MLMA::processMain()
                 chunked_grm = gcta_grm_io::make_chunked_grm_reader(grm_pfx, analysis_ids);
                 m_all = chunked_grm.m_snps;
                 LOGGER.i(0, "--svd-chunked-budget: GRM will be read in approximate chunks of" +
-                            to_string(options_d.count("svd_chunked_budget")
-                                          ? static_cast<int>(options_d.at("svd_chunked_budget")) : 20) +
+                            to_string(static_cast<double>(options_d.at("svd_chunked_budget"))) +
                             " GB tiles from [" + grm_pfx + "] as needed, not loaded densely.");
             } else {
                 read_grm_binary(grm_pfx, grm_ids, G_n, m_all);
@@ -908,7 +907,7 @@ void MLMA::processMain()
             ctx.svd_mem_budget_gb   = woodbury_basis_mem_budget_gb;
             ctx.svd_nystrom         = svd_nystrom;
             ctx.svd_chunked_budget         = options_d.count("svd_chunked_budget")
-                ? static_cast<int>(options_d.at("svd_chunked_budget")) : 20;
+                ? static_cast<double>(options_d.at("svd_chunked_budget")) : 0.0;
             ctx.reml_trace_hutchpp        = trace_hutchpp;
             ctx.reml_trace_hutchpp_nprobes = trace_hutchpp_nprobes;
             ctx.reml_hutchpp_fixed_probes = options.count("trace_hutchpp_fixed_probes") > 0;

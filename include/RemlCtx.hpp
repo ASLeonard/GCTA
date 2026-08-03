@@ -67,7 +67,7 @@ struct RemlCtx {
     // chunked_grm_matvec.hpp for the exact callback contract (reads a single
     // lower-triangular tile; float32-on-disk should be widened to double at
     // the tile level, not for the whole file up front).
-    double                      svd_chunked_budget = 0;  // GB budget for streaming chunk rows
+    double                      svd_chunked_budget = 0.0;  // GB budget for streaming chunk rows, off by default
     gcta_chunked::TileReader grm_tile_reader;               // caller-populated when chunked
 
     // Hard cap on rSVD sketch memory (Omega/Y/qr_scratch/Q, each ~n*k_ext*8

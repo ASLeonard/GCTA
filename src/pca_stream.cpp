@@ -166,7 +166,7 @@ void PCAStream::processMain()
         }
 
         const double svd_chunked_budget = options_d.count("svd_chunked_budget")
-            ? options_d.at("svd_chunked_budget") : 0.0;
+            ? options_d.at("svd_chunked_budget") : -1.0;
         const bool svd_chunked = svd_chunked_budget > 0.0;
 
         if (pca_approx.empty() && svd_chunked)
