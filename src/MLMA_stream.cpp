@@ -436,8 +436,7 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options_in.erase("--reml-no-HE-start");
         options_in.erase("--reml-woodbury-basis-eigen-mass");
         options_in.erase("--reml-woodbury-basis-var-thresh");
-        options_in.erase("--svd-chunked");
-        options_in.erase("--svd-chunk-size");
+        options_in.erase("--svd-chunked-budget");
         options_in.erase("--reml-ai-robust-stop");
         options_in.erase("--reml-ai-robust-stop-tol");
         options_in.erase("--reml-ai-robust-stop-risk");
@@ -516,23 +515,17 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             options["no_HE_start"] = false;
             options_in.erase("--reml-no-HE-start");
         }
-        // --svd-chunked: read K in lower-triangular tiles for the
+        // --svd-chunked-budget: read K in lower-triangular tiles for the
         // Woodbury basis rSVD instead of holding a dense n x n K resident —
         // see chunked_grm_matvec.hpp. Requires the caller (below, once
         // grm_binary_io.hpp's reader is wired up) to populate
         // ctx.grm_tile_reader; RemlEngine enforces this at runtime.
-        if (options_in.find("--svd-chunked") != options_in.end()) {
-            if (!options_in["--svd-chunked"].empty())
-                LOGGER.w(0, "--svd-chunked takes no argument; ignoring the supplied value.");
-            options["svd_chunked"] = "1";
-            options_in.erase("--svd-chunked");
-        }
-        if (options_in.find("--svd-chunk-size") != options_in.end()) {
-            const auto& vals = options_in["--svd-chunk-size"];
+        if (options_in.find("--svd-chunked-budget") != options_in.end()) {
+            const auto& vals = options_in["--svd-chunked-budget"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--svd-chunk-size requires a row-count argument.");
-            options_d["svd_chunk_size"] = std::stod(vals[0]);
-            options_in.erase("--svd-chunk-size");
+                LOGGER.e(0, "--svd-chunked-budget requires a target memory in GB.");
+            options_d["svd_chunked_budget"] = std::stod(vals[0]);
+            options_in.erase("--svd-chunked-budget");
         }
         // These three were previously read from options_d further down
         // (woodbury_basis_edge_margin / woodbury_basis_edge_confirm / woodbury_basis_EIGMASS_k_buffer)
@@ -768,7 +761,7 @@ void MLMA::processMain()
             LOGGER.i(0, "Running inline REML using GRM [" + grm_pfx + "] ...");
 
             const vector<string> analysis_ids = pheno->get_id(0, n - 1, "\t");
-            const bool svd_chunked = options.count("svd_chunked") > 0;
+            const bool svd_chunked = options.count("svd_chunked_budget") > 0.0;
 
             vector<string> grm_ids;
             Eigen::MatrixXd G_n;      // left empty when svd_chunked
@@ -783,10 +776,10 @@ void MLMA::processMain()
                 // without touching .grm.bin.
                 chunked_grm = gcta_grm_io::make_chunked_grm_reader(grm_pfx, analysis_ids);
                 m_all = chunked_grm.m_snps;
-                LOGGER.i(0, "--svd-chunked: GRM will be read in " +
-                            to_string(options_d.count("svd_chunk_size")
-                                          ? static_cast<int>(options_d.at("svd_chunk_size")) : 8000) +
-                            "-row tiles from [" + grm_pfx + "] as needed, not loaded densely.");
+                LOGGER.i(0, "--svd-chunked-budget: GRM will be read in approximate chunks of" +
+                            to_string(options_d.count("svd_chunked_budget")
+                                          ? static_cast<int>(options_d.at("svd_chunked_budget")) : 20) +
+                            " GB tiles from [" + grm_pfx + "] as needed, not loaded densely.");
             } else {
                 read_grm_binary(grm_pfx, grm_ids, G_n, m_all);
 
@@ -902,7 +895,7 @@ void MLMA::processMain()
             ctx.reml_diagV_adj           = reml_diagV_adj;
             ctx.woodbury_basis_rank            = woodbury_basis_rank;
             if (svd_chunked && woodbury_basis_rank == 0)
-                LOGGER.e(0, "--svd-chunked requires --reml-woodbury. Every REML code path "
+                LOGGER.e(0, "--svd-chunked-budget requires --reml-woodbury. Every REML code path "
                             "outside compute_woodbury_basis_basis (the trace/projection machinery, "
                             "Hutch++, dense/exact REML) still reads ctx.A[...] directly and treats "
                             "an empty component as \"identity\" — chunked mode leaves it empty for "
@@ -914,9 +907,8 @@ void MLMA::processMain()
                 ? options_d.at("woodbury_basis_var_thresh") : 0.001;
             ctx.svd_mem_budget_gb   = woodbury_basis_mem_budget_gb;
             ctx.svd_nystrom         = svd_nystrom;
-            ctx.svd_chunked         = svd_chunked;
-            ctx.svd_chunk_size      = options_d.count("svd_chunk_size")
-                ? static_cast<int>(options_d.at("svd_chunk_size")) : 8000;
+            ctx.svd_chunked_budget         = options_d.count("svd_chunked_budget")
+                ? static_cast<int>(options_d.at("svd_chunked_budget")) : 20;
             ctx.reml_trace_hutchpp        = trace_hutchpp;
             ctx.reml_trace_hutchpp_nprobes = trace_hutchpp_nprobes;
             ctx.reml_hutchpp_fixed_probes = options.count("trace_hutchpp_fixed_probes") > 0;

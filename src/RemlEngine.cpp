@@ -20,6 +20,7 @@
 #include "cpu.h"
 #include "mlma_woodbury.hpp"
 #include "symmetric_eigendecomp.hpp"
+#include "chunked_grm_matvec.hpp"
 
 #include <Eigen/Dense>
 #include <boost/math/distributions/chi_squared.hpp>
@@ -1231,14 +1232,15 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         LOGGER.e(0, "--reml-woodbury-basis is incompatible with Fisher-scoring REML.");
     if ((int)ctx.r_indx.size() != 2)
         LOGGER.e(0, "--reml-woodbury-basis supports only single-GRM models.");
-    if (ctx.A[ctx.r_indx[0]].size() == 0 && !ctx.svd_chunked)
+    if (ctx.A[ctx.r_indx[0]].size() == 0 && ctx.svd_chunked_budget <= 0.0)
         LOGGER.e(0, "--reml-woodbury: GRM component is identity; cannot compute basis.");
-    if (ctx.svd_chunked && !ctx.grm_tile_reader)
-        LOGGER.e(0, "--reml-woodbury: --svd-chunked is set but ctx.grm_tile_reader is empty "
+    if (ctx.svd_chunked_budget > 0.0 && !ctx.grm_tile_reader)
+        LOGGER.e(0, "--reml-woodbury: --svd-chunked-budget is set but ctx.grm_tile_reader is empty "
                     "— the GRM component wasn't actually loaded either way.");
 
     const WoodburyMode mode = ctx.woodbury_mode();
     const int  n = ctx.n;
+    const bool svd_chunked = ctx.svd_chunked_budget > 0.0;
 
     int k_svd_budget_ceiling = n - 1;
     if (ctx.svd_mem_budget_gb > 0.0) {
@@ -1247,6 +1249,33 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         k_svd_budget_ceiling = std::min(k_svd_budget_ceiling, std::max(20, max_k_ext - 200));
         LOGGER << "--reml-woodbury-basis-mem-budget=" << ctx.svd_mem_budget_gb
                << "GB -> k_svd capped at " << k_svd_budget_ceiling << std::endl;
+    }
+
+    // Row-chunk size for streaming reads off ctx.grm_tile_reader (chunked_diagonal,
+    // chunked_trace_K_squared, chunked_symmetric_matvec). Budget-driven, same pattern
+    // as --GRM-tile-budget: solve for the number of rows that fit rather than guessing
+    // a fixed size. Sized against k_svd_budget_ceiling (the worst-case rank this call
+    // can reach) since the chunk size is fixed once here and reused across the whole
+    // adaptive-rank loop below, regardless of which k_ext is live at any given moment.
+    int svd_chunk_rows = 0;
+    if (svd_chunked) {
+        // k_svd_budget_ceiling feeds k_ext_hint below. Left at its n-1 default (no
+        // --reml-woodbury-basis-mem-budget), k_ext_hint is huge and the chunk-row
+        // solve below will spuriously fail at scale with an error that looks
+        // unrelated to the real cause. Both budgets are required together.
+        if (ctx.svd_mem_budget_gb <= 0.0)
+            LOGGER.e(0, "--svd-chunked-budget also requires --reml-woodbury-basis-mem-budget <GB>: "
+                        "it bounds k_svd, which the chunk-row solve is sized against.");
+        const int k_ext_hint = k_svd_budget_ceiling + gcta_eigh::recommended_oversample(k_svd_budget_ceiling);
+        svd_chunk_rows = gcta_chunked::solve_chunk_rows(n, ctx.svd_chunked_budget, k_ext_hint);
+        if (svd_chunk_rows < 1)
+            LOGGER.e(0, "--svd-chunked-budget=" + std::to_string(ctx.svd_chunked_budget)
+                        + "GB cannot fit even a single GRM row (n=" + std::to_string(n)
+                        + ", k_ext=" + std::to_string(k_ext_hint) + " -> "
+                        + std::to_string(8.0 * (n + k_ext_hint) / 1e9) + "GB/row); raise the budget.");
+        LOGGER << "--svd-chunked-budget=" << ctx.svd_chunked_budget
+               << "GB -> streaming " << svd_chunk_rows << " GRM row(s) per chunk (k_ext up to "
+               << k_ext_hint << ")" << std::endl;
     }
 
     const bool k_max_is_hard_ceiling = (ctx.woodbury_basis_k_max > 0);
@@ -1274,13 +1303,13 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     if (k_svd >= n) LOGGER.e(0, "--reml-woodbury-basis rank must be < n.");
 
     const Eigen::MatrixXd& K_dbl = ctx.A[ctx.r_indx[0]];
-    const double trace_K_full = ctx.svd_chunked
-        ? gcta_chunked::chunked_diagonal(ctx.grm_tile_reader, n, ctx.svd_chunk_size).sum()
+    const double trace_K_full = svd_chunked
+        ? gcta_chunked::chunked_diagonal(ctx.grm_tile_reader, n, svd_chunk_rows).sum()
         : K_dbl.diagonal().sum();
 
     double trace_K2 = 0.0;
-    if (ctx.svd_chunked) {
-        trace_K2 = gcta_chunked::chunked_trace_K_squared(ctx.grm_tile_reader, n, ctx.svd_chunk_size);
+    if (svd_chunked) {
+        trace_K2 = gcta_chunked::chunked_trace_K_squared(ctx.grm_tile_reader, n, svd_chunk_rows);
     } else {
         double diag_sq = K_dbl.diagonal().squaredNorm();
         double off_sq  = 0.0;
@@ -1294,8 +1323,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     if (mode == WoodburyMode::AutoMP) {
         double M = 0.0;
         if (ctx.grm_N.rows() == n && ctx.grm_N.cols() == n) {
-            if (ctx.svd_chunked)
-                LOGGER.w(0, "--svd-chunked: ctx.grm_N is a dense n x n matrix — this defeats "
+            if (svd_chunked)
+                LOGGER.w(0, "--svd-chunked-budget: ctx.grm_N is a dense n x n matrix — this defeats "
                             "the memory savings from chunking K. If your SNP-count-per-pair GRM_N "
                             "is roughly constant, pass it as a 1x1 scalar via ctx.grm_N instead.");
             M = ctx.grm_N.diagonal().mean();
@@ -1311,8 +1340,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     const bool allows_warm = woodbury_mode_allows_warm_start(mode);
 
     auto apply = [&](const auto& X) -> Eigen::MatrixXd {
-        if (ctx.svd_chunked)
-            return gcta_chunked::chunked_symmetric_matvec(ctx.grm_tile_reader, n, ctx.svd_chunk_size, X);
+        if (svd_chunked)
+            return gcta_chunked::chunked_symmetric_matvec(ctx.grm_tile_reader, n, svd_chunk_rows, X);
         return K_dbl * X;
     };
 
