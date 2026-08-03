@@ -1260,19 +1260,17 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     int svd_chunk_rows = 0;
     if (svd_chunked) {
         // k_svd_budget_ceiling feeds k_ext_hint below. Left at its n-1 default (no
-        // --reml-woodbury-basis-mem-budget), k_ext_hint is huge and the chunk-row
-        // solve below will spuriously fail at scale with an error that looks
-        // unrelated to the real cause. Both budgets are required together.
-        if (ctx.svd_mem_budget_gb <= 0.0)
-            LOGGER.e(0, "--svd-chunked-budget also requires --reml-woodbury-basis-mem-budget <GB>: "
-                        "it bounds k_svd, which the chunk-row solve is sized against.");
+        // --reml-woodbury-basis-mem-budget), k_ext_hint can be large, which may
+        // shrink svd_chunk_rows more than expected or trip the <1 check just
+        // below with the actual n/k_ext/GB-per-row numbers attached.
         const int k_ext_hint = k_svd_budget_ceiling + gcta_eigh::recommended_oversample(k_svd_budget_ceiling);
         svd_chunk_rows = gcta_chunked::solve_chunk_rows(n, ctx.svd_chunked_budget, k_ext_hint);
         if (svd_chunk_rows < 1)
             LOGGER.e(0, "--svd-chunked-budget=" + std::to_string(ctx.svd_chunked_budget)
                         + "GB cannot fit even a single GRM row (n=" + std::to_string(n)
                         + ", k_ext=" + std::to_string(k_ext_hint) + " -> "
-                        + std::to_string(8.0 * (n + k_ext_hint) / 1e9) + "GB/row); raise the budget.");
+                        + std::to_string(8.0 * (n + k_ext_hint) / 1e9) + "GB/row); raise the budget"
+                        + " or add --reml-woodbury-basis-mem-budget <GB> to cap k_ext.");
         LOGGER << "--svd-chunked-budget=" << ctx.svd_chunked_budget
                << "GB -> streaming " << svd_chunk_rows << " GRM row(s) per chunk (k_ext up to "
                << k_ext_hint << ")" << std::endl;
