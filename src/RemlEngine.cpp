@@ -1260,9 +1260,11 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     int svd_chunk_rows = 0;
     if (svd_chunked) {
         // k_svd_budget_ceiling feeds k_ext_hint below. Left at its n-1 default (no
-        // --reml-woodbury-basis-mem-budget), k_ext_hint can be large, which may
-        // shrink svd_chunk_rows more than expected or trip the <1 check just
-        // below with the actual n/k_ext/GB-per-row numbers attached.
+        // --reml-woodbury-basis-mem-budget), k_ext_hint is sized against the
+        // worst case the adaptive-rank loop could reach, not the rank it will
+        // actually settle on — so svd_chunk_rows may land smaller than strictly
+        // necessary. That's the intended tradeoff for a hard RSS cap on the
+        // GRM-streaming buffer regardless of k_svd, not a misconfiguration.
         const int k_ext_hint = k_svd_budget_ceiling + gcta_eigh::recommended_oversample(k_svd_budget_ceiling);
         svd_chunk_rows = gcta_chunked::solve_chunk_rows(n, ctx.svd_chunked_budget, k_ext_hint);
         if (svd_chunk_rows < 1)

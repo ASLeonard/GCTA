@@ -166,8 +166,8 @@ void PCAStream::processMain()
         }
 
         const double svd_chunked_budget = options_d.count("svd_chunked_budget")
-            ? options_d.at("svd_chunked_budget") : -1.0;
-        const bool svd_chunked = svd_chunked_budget > 0.0;
+            ? options_d.at("svd_chunked_budget") : 0.0;
+        bool svd_chunked = svd_chunked_budget > 0.0;
 
         if (pca_approx.empty() && svd_chunked)
             LOGGER.e(0, "--pca exact mode (dsyevr/dsyevd) requires dense GRM loading. "
@@ -193,6 +193,18 @@ void PCAStream::processMain()
                             "GB cannot fit even a single GRM row (n=" + to_string(n) +
                             ", k_ext=" + to_string(k_ext_hint) + " -> " +
                             to_string(8.0 * (n + k_ext_hint) / 1e9) + "GB/row); raise the budget.");
+            if (chunk_size >= n) {
+                // The whole GRM fits in a single block: chunking then buys nothing
+                // (there's no second chunk to defer loading) but still pays the
+                // diagonal-tile mirror's transient 2x n x n duplication (see
+                // chunked_grm_matvec.hpp) across the entire matrix at once, since
+                // that tile IS the whole matrix here. Strictly worse than dense.
+                LOGGER.w(0, "--svd-chunked-budget=" + to_string(svd_chunked_budget) +
+                            "GB covers the full GRM (n=" + to_string(n) + ", k_ext=" +
+                            to_string(k_ext_hint) + ") in a single chunk. Falling back to "
+                            "dense loading instead of paying chunking overhead for no benefit.");
+                svd_chunked = false;
+            }
         }
 
         // ---- GRM access: chunked tile reader, or dense (fallback / comparison) ----
