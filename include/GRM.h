@@ -68,7 +68,7 @@ public:
     void subtract_grm(string mgrm_file, string out_file);
     void merge_grm_streaming(string mgrm_file, string out_file, int row_block_rows);
 
-    inline static int nMarkerBlock = 128;
+    inline static int nMarkerBlock = 1024;
 
 private:
     Pheno *pheno = NULL;
