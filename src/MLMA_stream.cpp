@@ -20,6 +20,8 @@
 #include "Covar.h"
 #include "main/StatFunc.h"
 #include "mlma_woodbury.hpp"
+#include "symmetric_eigendecomp.hpp"
+#include "chunked_grm_matvec.hpp"
 #include "RemlState.hpp"
 #include "RemlCtx.hpp"
 #include "RemlEngine.hpp"
@@ -761,56 +763,16 @@ void MLMA::processMain()
             LOGGER.i(0, "Running inline REML using GRM [" + grm_pfx + "] ...");
 
             const vector<string> analysis_ids = pheno->get_id(0, n - 1, "\t");
-            const bool svd_chunked = options_d.count("svd_chunked_budget") > 0.0;
+            bool svd_chunked = options_d.count("svd_chunked_budget") > 0.0;
+            const double svd_chunked_budget = options_d.count("svd_chunked_budget")
+                ? options_d.at("svd_chunked_budget") : 0.0;
 
-            vector<string> grm_ids;
-            Eigen::MatrixXd G_n;      // left empty when svd_chunked
-            double m_all = 0.0;
-            gcta_grm_io::ChunkedGrmHandle chunked_grm;  // only populated when svd_chunked
-
-            if (svd_chunked) {
-                // Skip the dense O(n_grm^2) load entirely — the whole point
-                // of --svd-chunked. make_chunked_grm_reader does its
-                // own ID validation (same fail-loud contract as the dense
-                // path below) and reads m_snps from .grm.N.bin's diagonal
-                // without touching .grm.bin.
-                chunked_grm = gcta_grm_io::make_chunked_grm_reader(grm_pfx, analysis_ids);
-                m_all = chunked_grm.m_snps;
-                LOGGER.i(0, "--svd-chunked-budget: GRM will be read in approximate chunks of" +
-                            to_string(static_cast<double>(options_d.at("svd_chunked_budget"))) +
-                            " GB tiles from [" + grm_pfx + "] as needed, not loaded densely.");
-            } else {
-                read_grm_binary(grm_pfx, grm_ids, G_n, m_all);
-
-                // Get post-filter analysis IDs (FID\tIID) and match to GRM
-                const vector<int> kp = match_ids_to_grm(analysis_ids, grm_ids);
-                for (int i = 0; i < n; ++i)
-                    if (kp[i] < 0)
-                        LOGGER.e(0, "Individual [" + analysis_ids[i] +
-                                    "] not found in GRM [" + grm_pfx + "]. "
-                                    "Re-build the GRM from the same sample set.");
-
-                // Subset GRM to the n analysis individuals.
-                // Fast path: if GRM sample == analysis sample (in order), no copy needed.
-                const int  n_grm        = static_cast<int>(grm_ids.size());
-                bool       is_identity  = (n_grm == n);
-                for (int i = 0; i < n && is_identity; ++i)
-                    if (kp[i] != i) is_identity = false;
-
-                if (!is_identity) {
-                    Eigen::MatrixXd G_sub(n, n);
-                    // Column-first traversal for column-major Eigen storage.
-                    for (int j = 0; j < n; ++j) {
-                        const int src_col = kp[j];
-                        for (int i = 0; i < n; ++i)
-                            G_sub(i, j) = G_n(kp[i], src_col);
-                    }
-                    G_n = std::move(G_sub);
-                }
-                // else: G_n already contains the right n×n block
-            }
-
-            // REML tuning parameters
+            // REML tuning parameters. Parsed here (ahead of the GRM load below,
+            // not after it as before) because woodbury_basis_mem_budget_gb feeds
+            // the chunk-size solve immediately below, which needs to run before
+            // committing to a chunked vs. dense load. Also lets the
+            // reml_alg/svd_nystrom/etc. validation checks fail fast, ahead of
+            // the (potentially expensive) GRM read, instead of after it.
             const int  woodbury_basis_rank  = options_d.count("woodbury_basis_rank")
                 ? static_cast<int>(options_d.at("woodbury_basis_rank")) : 0;
             const bool trace_hutchpp   = options.count("trace_hutchpp") > 0;
@@ -853,6 +815,89 @@ void MLMA::processMain()
                 LOGGER.w(0, "--reml-woodbury-basis and --reml-trace-hutchpp both given; "
                             "the Woodbury basis provides an exact tr(PA) and takes precedence — "
                             "--reml-trace-hutchpp is ignored.");
+
+            // Row-chunk size for streaming GRM reads, resolved from
+            // --svd-chunked-budget the same way RemlEngine.cpp's
+            // compute_woodbury_basis sizes it (k_svd_budget_ceiling from
+            // --reml-woodbury-basis-mem-budget, defaulting to n-1 unbounded).
+            // Resolved here, before committing to the chunked reader below, so
+            // a budget that turns out to cover the whole matrix in one chunk
+            // can fall back to the dense load instead. Chunking then buys
+            // nothing (there's no second chunk to defer) but still pays the
+            // diagonal-tile mirror's transient 2x n x n duplication (see
+            // chunked_grm_matvec.hpp) across the entire GRM at once — strictly
+            // worse than dense in that case.
+            int svd_chunk_rows = 0;
+            if (svd_chunked) {
+                int k_svd_budget_ceiling = n - 1;
+                if (woodbury_basis_mem_budget_gb > 0.0) {
+                    const double budget_bytes = woodbury_basis_mem_budget_gb * 1e9;
+                    const int max_k_ext = static_cast<int>(budget_bytes / (5.0 * n * 8.0));
+                    k_svd_budget_ceiling = std::min(k_svd_budget_ceiling, std::max(20, max_k_ext - 200));
+                }
+                const int k_ext_hint = k_svd_budget_ceiling + gcta_eigh::recommended_oversample(k_svd_budget_ceiling);
+                svd_chunk_rows = gcta_chunked::solve_chunk_rows(n, svd_chunked_budget, k_ext_hint);
+                if (svd_chunk_rows < 1)
+                    LOGGER.e(0, "--svd-chunked-budget=" + to_string(svd_chunked_budget) +
+                                "GB cannot fit even a single GRM row (n=" + to_string(n) +
+                                ", k_ext=" + to_string(k_ext_hint) + " -> " +
+                                to_string(8.0 * (n + k_ext_hint) / 1e9) + "GB/row); raise the budget.");
+                if (svd_chunk_rows >= n) {
+                    LOGGER.w(0, "--svd-chunked-budget=" + to_string(svd_chunked_budget) +
+                                "GB covers the full GRM (n=" + to_string(n) + ", k_ext up to " +
+                                to_string(k_ext_hint) + ") in a single chunk. Falling back to "
+                                "dense loading instead of paying chunking overhead for no benefit.");
+                    svd_chunked = false;
+                }
+            }
+
+            vector<string> grm_ids;
+            Eigen::MatrixXd G_n;      // left empty when svd_chunked
+            double m_all = 0.0;
+            gcta_grm_io::ChunkedGrmHandle chunked_grm;  // only populated when svd_chunked
+
+            if (svd_chunked) {
+                // Skip the dense O(n_grm^2) load entirely — the whole point
+                // of --svd-chunked. make_chunked_grm_reader does its
+                // own ID validation (same fail-loud contract as the dense
+                // path below) and reads m_snps from .grm.N.bin's diagonal
+                // without touching .grm.bin.
+                chunked_grm = gcta_grm_io::make_chunked_grm_reader(grm_pfx, analysis_ids);
+                m_all = chunked_grm.m_snps;
+                LOGGER.i(0, "--svd-chunked-budget=" + to_string(svd_chunked_budget) +
+                            "GB -> GRM will be read in " + to_string(svd_chunk_rows) +
+                            "-row chunks from [" + grm_pfx + "], not loaded densely.");
+            } else {
+                read_grm_binary(grm_pfx, grm_ids, G_n, m_all);
+
+                // Get post-filter analysis IDs (FID\tIID) and match to GRM
+                const vector<int> kp = match_ids_to_grm(analysis_ids, grm_ids);
+                for (int i = 0; i < n; ++i)
+                    if (kp[i] < 0)
+                        LOGGER.e(0, "Individual [" + analysis_ids[i] +
+                                    "] not found in GRM [" + grm_pfx + "]. "
+                                    "Re-build the GRM from the same sample set.");
+
+                // Subset GRM to the n analysis individuals.
+                // Fast path: if GRM sample == analysis sample (in order), no copy needed.
+                const int  n_grm        = static_cast<int>(grm_ids.size());
+                bool       is_identity  = (n_grm == n);
+                for (int i = 0; i < n && is_identity; ++i)
+                    if (kp[i] != i) is_identity = false;
+
+                if (!is_identity) {
+                    Eigen::MatrixXd G_sub(n, n);
+                    // Column-first traversal for column-major Eigen storage.
+                    for (int j = 0; j < n; ++j) {
+                        const int src_col = kp[j];
+                        for (int i = 0; i < n; ++i)
+                            G_sub(i, j) = G_n(kp[i], src_col);
+                    }
+                    G_n = std::move(G_sub);
+                }
+                // else: G_n already contains the right n×n block
+            }
+
 
             const vector<double> priors =
                 options_vd.count("reml_priors") ? options_vd.at("reml_priors") : vector<double>{};
@@ -906,8 +951,7 @@ void MLMA::processMain()
                 ? options_d.at("woodbury_basis_var_thresh") : 0.001;
             ctx.svd_mem_budget_gb   = woodbury_basis_mem_budget_gb;
             ctx.svd_nystrom         = svd_nystrom;
-            ctx.svd_chunked_budget         = options_d.count("svd_chunked_budget")
-                ? static_cast<double>(options_d.at("svd_chunked_budget")) : 0.0;
+            ctx.svd_chunked_budget         = svd_chunked ? svd_chunked_budget : 0.0;
             ctx.reml_trace_hutchpp        = trace_hutchpp;
             ctx.reml_trace_hutchpp_nprobes = trace_hutchpp_nprobes;
             ctx.reml_hutchpp_fixed_probes = options.count("trace_hutchpp_fixed_probes") > 0;
