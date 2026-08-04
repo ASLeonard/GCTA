@@ -4,6 +4,7 @@
 #include "Marker.h"
 #include "Logger.h"
 #include "RemlState.hpp"
+#include "RemlCtx.hpp"
 #include "cpu.h"
 #include "mlma_woodbury.hpp"
 
@@ -52,6 +53,116 @@ inline Eigen::MatrixXd compact_sample_rows(const Eigen::MatrixXd& values,
     return compacted;
 }
 
+template <typename XVXDiagFn>
+inline void run_mlma_stream_association_impl(const Eigen::VectorXf& Vi_y,
+                                             XVXDiagFn&& compute_xvx_diag,
+                                             const Eigen::VectorXf& w_sqrt,
+                                             Geno* geno,
+                                             Marker* marker,
+                                             int n,
+                                             bool log_pval,
+                                             std::ofstream& ofile)
+{
+    const uint32_t total_m = marker->count_extract();
+    LOGGER << "\nStreaming association tests for " << total_m << " SNPs..." << std::endl;
+
+    constexpr int BLOCK = 10000;
+    Eigen::MatrixXf X_block(n, BLOCK);
+    Eigen::VectorXf Xt_Vi_y(BLOCK);
+    Eigen::VectorXf xvx_diag(BLOCK);
+
+    int  snp_done = 0;
+    int  last_pct = -1;
+
+    std::vector<GenoBufItem> gbuf_items(BLOCK);
+    std::vector<uint8_t>     valid_v(BLOCK, 0);
+    std::vector<float>       af_v(BLOCK, 0.0f);
+
+    std::string io_buf;
+    io_buf.reserve(4 << 20);
+
+    auto flush_io = [&]() {
+        if (!io_buf.empty()) {
+            ofile.write(io_buf.data(), static_cast<std::streamsize>(io_buf.size()));
+            io_buf.clear();
+        }
+    };
+
+    auto callback = [&](uintptr_t* buf, std::span<const uint32_t> exIdx) {
+        const int bs = static_cast<int>(exIdx.size());
+
+        for (int i = 0; i < bs; ++i) {
+            valid_v[i] = 0;
+            af_v[i]    = 0.0f;
+            GenoBufItem& item = gbuf_items[i];
+            item.extractedMarkerIndex = exIdx[i];
+            geno->getGenoDouble(buf, i, &item);
+            if (!item.valid) { X_block.col(i).setZero(); continue; }
+            if (static_cast<int>(item.geno.size()) != n) {
+                LOGGER.e(0, "internal error: SNP " + std::to_string(exIdx[i])
+                            + " returned geno.size=" + std::to_string(item.geno.size())
+                            + " but expected " + std::to_string(n) + ".");
+            }
+            valid_v[i] = 1;
+            af_v[i]    = static_cast<float>(item.additive_af);
+            X_block.col(i) = (Eigen::Map<const Eigen::VectorXd>(item.geno.data(), n)
+                                .cast<float>().array() * w_sqrt.array()).matrix();
+        }
+
+        Xt_Vi_y.head(bs).noalias() = X_block.leftCols(bs).transpose() * Vi_y;
+        compute_xvx_diag(X_block, bs, xvx_diag);
+
+        for (int i = 0; i < bs; ++i) {
+            const uint32_t raw      = marker->getRawIndex(exIdx[i]);
+            const std::string& chr  = marker->getRawChr(raw);
+            const std::string& name = marker->getRawName(raw);
+            const unsigned     bp   = static_cast<unsigned>(marker->getRawBp(raw));
+            const std::string& a1   = marker->getRawA1(raw);
+            const std::string& a2   = marker->getRawA2(raw);
+
+            float beta_val = 0.0f, se_val = 0.0f;
+            double pval_val = 0.0;
+            const bool stat_ok = valid_v[i] &&
+                mlma_snp_stat(Xt_Vi_y[i], xvx_diag[i], log_pval,
+                              beta_val, se_val, pval_val);
+
+            std::format_to(std::back_inserter(io_buf),
+                "{}\t{}\t{}\t{}\t{}",
+                chr, name, bp, a1, a2);
+
+            if (!stat_ok) {
+                io_buf += "\tNA\tNA\tNA\tNA\n";
+            } else {
+                std::format_to(std::back_inserter(io_buf),
+                    "\t{:.6g}\t{:.6g}\t{:.6g}\t{:.6g}\n",
+                    static_cast<double>(af_v[i]),
+                    static_cast<double>(beta_val),
+                    static_cast<double>(se_val),
+                    pval_val);
+            }
+        }
+
+        snp_done += bs;
+        const int cur_pct = (total_m > 0)
+            ? static_cast<int>((uint64_t)snp_done * 100 / total_m) : 100;
+        if (cur_pct != last_pct) {
+            LOGGER.p(0, std::to_string(snp_done) + " / " + std::to_string(total_m)
+                        + " SNPs (" + std::to_string(cur_pct) + "%)");
+            last_pct = cur_pct;
+        }
+    };
+
+    const std::vector<uint32_t>& extractIndex = marker->get_extract_index();
+    geno->loopDouble(extractIndex, BLOCK,
+                     /*bMakeGeno*/   true,
+                     /*bGenoCenter*/ true,
+                     /*bGenoStd*/    false,
+                     /*bMakeMiss*/   true,
+                     {callback});
+
+    flush_io();
+}
+
 inline void run_mlma_stream_association(RemlState& state,
                                         const Eigen::VectorXf& y_adj,
                                         const Eigen::VectorXf& w_sqrt,
@@ -85,135 +196,82 @@ inline void run_mlma_stream_association(RemlState& state,
         state.Vi.resize(0, 0);  // free RAM immediately
     }
 
-    // Apply sqrt(W) to Vi_y once; genotype columns are scaled per-SNP in the callback.
     Vi_y.array() *= w_sqrt.array();
-
-    const uint32_t total_m = marker->count_extract();
-    LOGGER << "\nStreaming association tests for " << total_m << " SNPs..." << std::endl;
-
-    constexpr int BLOCK = 10000;
-    Eigen::MatrixXf X_block(n, BLOCK);
-    Eigen::VectorXf Xt_Vi_y(BLOCK);
-    Eigen::VectorXf xvx_diag(BLOCK);
-
-    int  snp_done = 0;
-    int  last_pct = -1;
     const WoodburyMLMACache& wb = state.wb;
 
-    // Pre-allocate per-block buffers (reused across callbacks, avoids heap churn).
-    // GenoBufItem: item.geno is resized to n on the first getGenoDouble call and
-    // reused thereafter — same pattern as GRM.cpp's gbufitems array.
-    std::vector<GenoBufItem> gbuf_items(BLOCK);
-    std::vector<uint8_t>     valid_v(BLOCK, 0);  // uint8_t avoids vector<bool> bit-packing
-    std::vector<float>       af_v(BLOCK, 0.0f);
-
-    // Batch output buffer to reduce write() syscall overhead.
-    std::string io_buf;
-    io_buf.reserve(4 << 20);  // 4 MiB
-
-    auto flush_io = [&]() {
-        if (!io_buf.empty()) {
-            ofile.write(io_buf.data(), static_cast<std::streamsize>(io_buf.size()));
-            io_buf.clear();
-        }
-    };
-
-    auto callback = [&](uintptr_t* buf, std::span<const uint32_t> exIdx) {
-        const int bs = static_cast<int>(exIdx.size());
-
-        for (int i = 0; i < bs; ++i) {
-            valid_v[i] = 0;
-            af_v[i]    = 0.0f;
-            GenoBufItem& item = gbuf_items[i];
-            item.extractedMarkerIndex = exIdx[i];  // MUST be set before getGenoDouble
-            geno->getGenoDouble(buf, i, &item);
-            if (!item.valid) { X_block.col(i).setZero(); continue; }
-            if (static_cast<int>(item.geno.size()) != n) {
-                LOGGER.e(0, "internal error: SNP " + std::to_string(exIdx[i])
-                            + " returned geno.size=" + std::to_string(item.geno.size())
-                            + " but expected " + std::to_string(n) + ".");
-            }
-            valid_v[i] = 1;
-            af_v[i]    = static_cast<float>(item.additive_af);
-            X_block.col(i) = (Eigen::Map<const Eigen::VectorXd>(item.geno.data(), n)
-                                .cast<float>().array() * w_sqrt.array()).matrix();
-        }
-
-
-        // Xt_Vi_y = X^T Vi y  (computed BEFORE STRMM overwrites X_block)
-        Xt_Vi_y.head(bs).noalias() =
-            X_block.leftCols(bs).transpose() * Vi_y;
-
-        // xvx_diag = diag(X^T Vi^{-1} X)
+    auto compute_xvx_diag = [&](Eigen::MatrixXf& X_block, int bs, Eigen::VectorXf& xvx_diag) {
         if (use_wb) {
             woodbury_xvx_diag_block(wb, X_block, bs, xvx_diag);
         } else if (use_llt) {
-            // x^T V^{-1} x = ||L^{-1} x||^2 (L = lower Cholesky of V).
-            // In-place STRSM overwrites X_block with L^{-1} X_block.
             cblas_strsm(CblasColMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
                         n, bs, 1.0f,
                         state.Vi_L_f.data(), n,
                         X_block.data(), n);
             xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
         } else {
-            // x^T V^{-1} x = ||L_vi^T x||^2 (L_vi = Cholesky of V^{-1}).
             cblas_strmm(CblasColMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
                         n, bs, 1.0f,
                         Vi_llt.matrixLLT().data(), n,
                         X_block.data(), n);
             xvx_diag.head(bs) = X_block.leftCols(bs).colwise().squaredNorm();
         }
+    };
 
+    run_mlma_stream_association_impl(Vi_y, compute_xvx_diag, w_sqrt,
+                                     geno, marker, n, log_pval, ofile);
+}
 
-        // Write per-SNP results into batch output buffer to minimise write() overhead.
-        for (int i = 0; i < bs; ++i) {
-            const uint32_t raw      = marker->getRawIndex(exIdx[i]);
-            const std::string& chr  = marker->getRawChr(raw);
-            const std::string& name = marker->getRawName(raw);
-            const unsigned     bp   = static_cast<unsigned>(marker->getRawBp(raw));
-            const std::string& a1    = marker->getRawA1(raw);
-            const std::string& a2    = marker->getRawA2(raw);
+inline void run_mlma_stream_association(RemlCtx& ctx,
+                                        const Eigen::VectorXf& y_adj,
+                                        const Eigen::VectorXf& w_sqrt,
+                                        Geno* geno,
+                                        Marker* marker,
+                                        int n,
+                                        bool log_pval,
+                                        std::ofstream& ofile)
+{
+    Eigen::VectorXf Vi_y(n);
 
-            float beta_val = 0.0f, se_val = 0.0f;
-            double pval_val = 0.0;
-            const bool stat_ok = valid_v[i] &&
-                mlma_snp_stat(Xt_Vi_y[i], xvx_diag[i], log_pval,
-                            beta_val, se_val, pval_val);
+    if (ctx.Vi_use_woodbury_basis) {
+        const Eigen::VectorXd y_d = y_adj.cast<double>();
+        Eigen::VectorXd UkTy = ctx.Uk.transpose() * y_d;
+        UkTy.array() *= ctx.ck.array();
+        Vi_y = ((y_d - ctx.Uk * UkTy) / ctx.sigma2_eff).cast<float>();
+    } else if (ctx.Vi_use_llt) {
+        Eigen::VectorXd Vi_y_d = y_adj.cast<double>();
+        ctx.Vi_L.triangularView<Eigen::Lower>().solveInPlace(Vi_y_d);
+        ctx.Vi_L.triangularView<Eigen::Lower>().adjoint().solveInPlace(Vi_y_d);
+        Vi_y = Vi_y_d.cast<float>();
+    } else {
+        gcta_blas_int blas_n = static_cast<gcta_blas_int>(n);
+        if (gcta_dpotrf(blas_n, ctx.Vi.data(), blas_n) != 0)
+            LOGGER.e(0, "inline REML V^{-1} is not positive definite for MLMA streaming.");
+        const Eigen::VectorXd y_d = y_adj.cast<double>();
+        const Eigen::VectorXd tmp = ctx.Vi.transpose().triangularView<Eigen::Upper>() * y_d;
+        Vi_y = (ctx.Vi.triangularView<Eigen::Lower>() * tmp).cast<float>();
+    }
 
-            std::format_to(std::back_inserter(io_buf),
-                "{}\t{}\t{}\t{}\t{}",
-                chr, name, bp, a1, a2);
+    Vi_y.array() *= w_sqrt.array();
 
-            // Variable columns
-            if (!stat_ok) {
-                io_buf += "\tNA\tNA\tNA\tNA\n";
-            } else {
-                std::format_to(std::back_inserter(io_buf),
-                    "\t{:.6g}\t{:.6g}\t{:.6g}\t{:.6g}\n",
-                    static_cast<double>(af_v[i]),
-                    static_cast<double>(beta_val),
-                    static_cast<double>(se_val),
-                    pval_val);
-            }
-        }
-
-        snp_done += bs;
-        const int cur_pct = (total_m > 0)
-            ? static_cast<int>((uint64_t)snp_done * 100 / total_m) : 100;
-        if (cur_pct != last_pct) {
-            LOGGER.p(0, std::to_string(snp_done) + " / " + std::to_string(total_m)
-                        + " SNPs (" + std::to_string(cur_pct) + "%)");
-            last_pct = cur_pct;
+    auto compute_xvx_diag = [&](Eigen::MatrixXf& X_block, int bs, Eigen::VectorXf& xvx_diag) {
+        if (ctx.Vi_use_woodbury_basis) {
+            const Eigen::MatrixXd X_d = X_block.leftCols(bs).cast<double>();
+            const Eigen::MatrixXd UkX = ctx.Uk.transpose() * X_d;
+            const Eigen::VectorXd x_norm = X_d.colwise().squaredNorm().transpose();
+            const Eigen::VectorXd correction =
+                (UkX.array().square().colwise() * ctx.ck.array()).colwise().sum().transpose();
+            xvx_diag.head(bs) = ((x_norm.array() - correction.array()) / ctx.sigma2_eff).cast<float>();
+        } else if (ctx.Vi_use_llt) {
+            Eigen::MatrixXd X_d = X_block.leftCols(bs).cast<double>();
+            ctx.Vi_L.triangularView<Eigen::Lower>().solveInPlace(X_d);
+            xvx_diag.head(bs) = X_d.colwise().squaredNorm().transpose().cast<float>();
+        } else {
+            const Eigen::MatrixXd X_d = X_block.leftCols(bs).cast<double>();
+            const Eigen::MatrixXd proj = ctx.Vi.transpose().triangularView<Eigen::Upper>() * X_d;
+            xvx_diag.head(bs) = proj.colwise().squaredNorm().transpose().cast<float>();
         }
     };
 
-    const std::vector<uint32_t>& extractIndex = marker->get_extract_index();
-    geno->loopDouble(extractIndex, BLOCK,
-                     /*bMakeGeno*/   true,
-                     /*bGenoCenter*/ true,
-                     /*bGenoStd*/    false,
-                     /*bMakeMiss*/   true,
-                     {callback});
-
-    flush_io();
+    run_mlma_stream_association_impl(Vi_y, compute_xvx_diag, w_sqrt,
+                                     geno, marker, n, log_pval, ofile);
 }
