@@ -852,6 +852,7 @@ void MLMA::processMain()
 
         // ---- Obtain REML state (either from file or inline) ----
         RemlState state;
+        bool use_inline_ctx = false;
         Eigen::VectorXf y_vec(n);
         for (int i = 0; i < n; ++i) y_vec[i] = static_cast<float>(phenos_vec[i]);
 
@@ -1114,8 +1115,29 @@ void MLMA::processMain()
             // y_adj = y - X*b
             {
                 const Eigen::MatrixXf Xf = X_design.cast<float>();
-                y_vec -= Xf * state.b;
+                y_vec -= Xf * ctx.b.cast<float>();
             }
+
+            use_inline_ctx = true;
+
+            // ---- Open output file ----
+            const string out_file = out_prefix + ".mlma";
+            std::ofstream ofile(out_file);
+            if (!ofile) LOGGER.e(0, "cannot open [" + out_file + "] for writing.");
+            ofile << "Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\t"
+                  << (log_pval ? "log_p" : "p") << "\n";
+
+            Eigen::VectorXf w_sqrt = pheno->get_sqrt_weight_keep();
+            run_mlma_stream_association(ctx, y_vec, w_sqrt, geno, marker, n, log_pval, ofile);
+            LOGGER << "\nAssociation results saved to [" << out_file << "]." << std::endl;
+            ofile.close();
+        }
+
+        if (use_inline_ctx) {
+            delete geno;
+            delete marker;
+            delete pheno;
+            continue;
         }
 
         // ---- Open output file ----
