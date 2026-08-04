@@ -278,6 +278,123 @@ void writeRemlState(const string& filename, const RemlState& st, bool no_adj_cov
         LOGGER.e(0, "write error on [" + filename + "] — disk full or I/O failure.");
 }
 
+void writeRemlStateFromCtx(const string& filename, const RemlCtx& ctx, bool no_adj_covar)
+{
+    std::ofstream out(filename, std::ios::binary);
+    if (!out.is_open())
+        LOGGER.e(0, "cannot open [" + filename + "] for writing.");
+
+    if (ctx.Vi_use_woodbury_basis) {
+        struct Header {
+            char    magic[4] = {'T', 'U', 'N', 'A'};
+            int32_t n = 0, x_c = 0, num_varcmp = 0, num_r_indx = 0;
+        } hdr;
+        hdr.n = static_cast<int32_t>(ctx.n);
+        hdr.x_c = static_cast<int32_t>(ctx.X_c);
+        hdr.num_varcmp = static_cast<int32_t>(ctx.varcmp.size());
+        hdr.num_r_indx = static_cast<int32_t>(ctx.varcmp.size());
+        out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+
+        const int32_t k = static_cast<int32_t>(ctx.dk.size());
+        out.write(reinterpret_cast<const char*>(&k), sizeof(int32_t));
+
+        const double lambda_tail = ctx.lambda_tail;
+        out.write(reinterpret_cast<const char*>(&lambda_tail), sizeof(double));
+
+        if (ctx.Uk.rows() != ctx.n || ctx.Uk.cols() != k)
+            LOGGER.e(0, "invalid Woodbury REML context dimensions before save.");
+        if (ctx.dk.size() != k)
+            LOGGER.e(0, "invalid Woodbury eigenvalue vector before save.");
+
+        Eigen::MatrixXf Uk_f = ctx.Uk.transpose().cast<float>();
+        out.write(reinterpret_cast<const char*>(Uk_f.data()),
+                  static_cast<std::streamsize>(static_cast<size_t>(ctx.n) * k * sizeof(float)));
+        Eigen::VectorXf dk_f = ctx.dk.cast<float>();
+        out.write(reinterpret_cast<const char*>(dk_f.data()),
+                  static_cast<std::streamsize>(k * sizeof(float)));
+
+        if (!no_adj_covar) {
+            Eigen::VectorXf b_f = ctx.b.cast<float>();
+            if (b_f.size() != ctx.X_c)
+                LOGGER.e(0, "invalid fixed-effect vector length before save.");
+            out.write(reinterpret_cast<const char*>(b_f.data()),
+                      static_cast<std::streamsize>(ctx.X_c * sizeof(float)));
+        }
+
+        Eigen::VectorXf varcmp_f = Eigen::Map<const Eigen::VectorXd>(ctx.varcmp.data(),
+                                                                      static_cast<Eigen::Index>(ctx.varcmp.size())).cast<float>();
+        out.write(reinterpret_cast<const char*>(varcmp_f.data()),
+                  static_cast<std::streamsize>(hdr.num_varcmp * sizeof(float)));
+    } else {
+        struct Header {
+            char    magic[4] = {'G', 'O', 'B', 'Y'};
+            int32_t n = 0, x_c = 0, num_varcmp = 0, num_r_indx = 0;
+        } hdr;
+        hdr.n = static_cast<int32_t>(ctx.n);
+        hdr.x_c = static_cast<int32_t>(ctx.X_c);
+        hdr.num_varcmp = static_cast<int32_t>(ctx.varcmp.size());
+        hdr.num_r_indx = static_cast<int32_t>(ctx.varcmp.size());
+        out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+
+        constexpr int block_cols = 32;
+
+        auto write_lower_triangle = [&](const Eigen::MatrixXd& mat) {
+            for (int col0 = 0; col0 < ctx.n; col0 += block_cols) {
+                const int bs = std::min(block_cols, ctx.n - col0);
+                for (int c = 0; c < bs; ++c) {
+                    const int global_col = col0 + c;
+                    for (int i = global_col; i < ctx.n; ++i) {
+                        const float value = static_cast<float>(mat(i, global_col));
+                        out.write(reinterpret_cast<const char*>(&value), sizeof(float));
+                    }
+                }
+            }
+        };
+
+        if (ctx.Vi_use_llt) {
+            if (ctx.Vi_L.rows() != ctx.n || ctx.Vi_L.cols() != ctx.n)
+                LOGGER.e(0, "invalid LLT REML context dimensions before save.");
+
+            for (int col0 = 0; col0 < ctx.n; col0 += block_cols) {
+                const int bs = std::min(block_cols, ctx.n - col0);
+                Eigen::MatrixXd rhs = Eigen::MatrixXd::Zero(ctx.n, bs);
+                for (int c = 0; c < bs; ++c)
+                    rhs(col0 + c, c) = 1.0;
+                ctx.Vi_L.triangularView<Eigen::Lower>().solveInPlace(rhs);
+                ctx.Vi_L.triangularView<Eigen::Lower>().adjoint().solveInPlace(rhs);
+                for (int c = 0; c < bs; ++c) {
+                    const int global_col = col0 + c;
+                    for (int i = global_col; i < ctx.n; ++i) {
+                        const float value = static_cast<float>(rhs(i, c));
+                        out.write(reinterpret_cast<const char*>(&value), sizeof(float));
+                    }
+                }
+            }
+        } else {
+            if (ctx.Vi.rows() != ctx.n || ctx.Vi.cols() != ctx.n)
+                LOGGER.e(0, "invalid dense REML context dimensions before save.");
+            write_lower_triangle(ctx.Vi);
+        }
+
+        if (!no_adj_covar) {
+            Eigen::VectorXf b_f = ctx.b.cast<float>();
+            if (b_f.size() != ctx.X_c)
+                LOGGER.e(0, "invalid fixed-effect vector length before save.");
+            out.write(reinterpret_cast<const char*>(b_f.data()),
+                      static_cast<std::streamsize>(ctx.X_c * sizeof(float)));
+        }
+
+        Eigen::VectorXf varcmp_f = Eigen::Map<const Eigen::VectorXd>(ctx.varcmp.data(),
+                                                                      static_cast<Eigen::Index>(ctx.varcmp.size())).cast<float>();
+        out.write(reinterpret_cast<const char*>(varcmp_f.data()),
+                  static_cast<std::streamsize>(hdr.num_varcmp * sizeof(float)));
+    }
+
+    out.flush();
+    if (!out)
+        LOGGER.e(0, "write error on [" + filename + "] — disk full or I/O failure.");
+}
+
 void write_hsq_from_ctx(const string& out_prefix, const RemlCtx& ctx)
 {
     const string hsq_file = out_prefix + ".hsq";
@@ -980,12 +1097,10 @@ void MLMA::processMain()
             // Reuse the already-computed REML summary to write .hsq (same feature as --mlma).
             write_hsq_from_ctx(out_prefix, ctx);
 
-            state = reml::build_reml_state(ctx);
-
             if (options.count("save_reml")) {
                 const string save_reml_file = out_prefix + ".reml";
                 LOGGER.i(0, "Saving REML state to [" + save_reml_file + "] ...");
-                writeRemlState(save_reml_file, state, no_adj_covar);
+                writeRemlStateFromCtx(save_reml_file, ctx, no_adj_covar);
                 LOGGER.i(0, "REML estimation completed. Use --load-reml " + save_reml_file +
                             " to perform association tests.");
                 delete geno;
@@ -993,6 +1108,8 @@ void MLMA::processMain()
                 delete pheno;
                 continue;
             }
+
+            state = reml::build_reml_state(ctx);
 
             // y_adj = y - X*b
             {
