@@ -83,6 +83,17 @@ string to_text(T x)
 // RemlState is now defined in include/RemlState.hpp (shared with MLMA_loco).
 // The readRemlState() function below remains file-local (only MLMA_stream needs it).
 
+template <typename MatrixT>
+void write_packed_lower_triangle(std::ofstream& out, const MatrixT& mat)
+{
+    const int n = static_cast<int>(mat.rows());
+    for (int j = 0; j < n; ++j)
+        for (int i = j; i < n; ++i) {
+            const float value = static_cast<float>(mat(i, j));
+            out.write(reinterpret_cast<const char*>(&value), sizeof(float));
+        }
+}
+
 // Read the binary REML state written by save_reml_state().
 // When !no_adj_covar the 'b' vector is loaded; otherwise it is skipped.
 RemlState readRemlState(const string& filename, bool no_adj_covar)
@@ -168,13 +179,13 @@ RemlState readRemlState(const string& filename, bool no_adj_covar)
     vector<float> buf(tri);
     must_read(buf.data(), static_cast<std::streamsize>(tri * sizeof(float)));
 
-    // Unpack lower-triangle into full symmetric matrix
-    st.Vi.resize(hdr.n, hdr.n);
+    st.is_llt = true;
+    st.Vi_L_f.resize(hdr.n, hdr.n);
+    st.Vi_L_f.setZero();
     size_t idx = 0;
     for (int32_t j = 0; j < hdr.n; ++j)
         for (int32_t i = j; i < hdr.n; ++i, ++idx) {
-            st.Vi(i, j) = buf[idx];
-            st.Vi(j, i) = buf[idx];
+            st.Vi_L_f(i, j) = buf[idx];
         }
 
     if (!no_adj_covar) {
@@ -242,25 +253,14 @@ void writeRemlState(const string& filename, const RemlState& st, bool no_adj_cov
         hdr.num_r_indx = static_cast<int32_t>(st.varcmp.size());
         out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
 
-        Eigen::MatrixXf Vi_f;
         if (st.is_llt) {
             if (st.Vi_L_f.rows() != st.n || st.Vi_L_f.cols() != st.n)
                 LOGGER.e(0, "invalid LLT REML state dimensions before save.");
-            Vi_f = Eigen::MatrixXf::Identity(st.n, st.n);
-            st.Vi_L_f.triangularView<Eigen::Lower>().solveInPlace(Vi_f);
-            st.Vi_L_f.triangularView<Eigen::Lower>().transpose().solveInPlace(Vi_f);
+            write_packed_lower_triangle(out, st.Vi_L_f);
         } else {
-            Vi_f = st.Vi;
+            LOGGER.e(0, "exact REML state save expects a Cholesky-factor representation. "
+                        "This state still holds dense V^{-1}; regenerate it from the V2 REML path.");
         }
-
-        const size_t tri = static_cast<size_t>(st.n) * (st.n + 1) / 2;
-        vector<float> packed(tri);
-        size_t idx = 0;
-        for (int32_t j = 0; j < st.n; ++j)
-            for (int32_t i = j; i < st.n; ++i)
-                packed[idx++] = Vi_f(i, j);
-        out.write(reinterpret_cast<const char*>(packed.data()),
-                  static_cast<std::streamsize>(tri * sizeof(float)));
 
         if (!no_adj_covar) {
             if (st.b.size() != st.x_c)
@@ -336,44 +336,13 @@ void writeRemlStateFromCtx(const string& filename, const RemlCtx& ctx, bool no_a
         hdr.num_r_indx = static_cast<int32_t>(ctx.varcmp.size());
         out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
 
-        constexpr int block_cols = 32;
-
-        auto write_lower_triangle = [&](const Eigen::MatrixXd& mat) {
-            for (int col0 = 0; col0 < ctx.n; col0 += block_cols) {
-                const int bs = std::min(block_cols, ctx.n - col0);
-                for (int c = 0; c < bs; ++c) {
-                    const int global_col = col0 + c;
-                    for (int i = global_col; i < ctx.n; ++i) {
-                        const float value = static_cast<float>(mat(i, global_col));
-                        out.write(reinterpret_cast<const char*>(&value), sizeof(float));
-                    }
-                }
-            }
-        };
-
         if (ctx.Vi_use_llt) {
             if (ctx.Vi_L.rows() != ctx.n || ctx.Vi_L.cols() != ctx.n)
                 LOGGER.e(0, "invalid LLT REML context dimensions before save.");
-
-            for (int col0 = 0; col0 < ctx.n; col0 += block_cols) {
-                const int bs = std::min(block_cols, ctx.n - col0);
-                Eigen::MatrixXd rhs = Eigen::MatrixXd::Zero(ctx.n, bs);
-                for (int c = 0; c < bs; ++c)
-                    rhs(col0 + c, c) = 1.0;
-                ctx.Vi_L.triangularView<Eigen::Lower>().solveInPlace(rhs);
-                ctx.Vi_L.triangularView<Eigen::Lower>().adjoint().solveInPlace(rhs);
-                for (int c = 0; c < bs; ++c) {
-                    const int global_col = col0 + c;
-                    for (int i = global_col; i < ctx.n; ++i) {
-                        const float value = static_cast<float>(rhs(i, c));
-                        out.write(reinterpret_cast<const char*>(&value), sizeof(float));
-                    }
-                }
-            }
+            write_packed_lower_triangle(out, ctx.Vi_L);
         } else {
-            if (ctx.Vi.rows() != ctx.n || ctx.Vi.cols() != ctx.n)
-                LOGGER.e(0, "invalid dense REML context dimensions before save.");
-            write_lower_triangle(ctx.Vi);
+            LOGGER.e(0, "exact REML save expects the final Cholesky factor L of V. "
+                        "This context does not currently expose one; rerun the exact V2 REML path without the operator-only state.");
         }
 
         if (!no_adj_covar) {
