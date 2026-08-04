@@ -190,23 +190,27 @@ void init_varcomp(const RemlCtx& ctx,
         const double Vy = ctx.y_Ssq;
         double trK = 0.0, trK2 = 0.0;
         RemlVec Ky(n);
-        
+         // HE moment identities (E[y'Ky] = sg*tr(K^2) + se*tr(K), E[y'y] = sg*tr(K) + se*n)
+        // assume y is mean-zero. ctx.y is left at its raw file scale everywhere else in
+        // REML (X/Vi_X project the mean out properly there), so center locally here only.
+        const RemlVec y_c = ctx.y.array() - ctx.y.mean();
+
         if (ctx.Vi_use_woodbury_basis) {
             const int k = ctx.woodbury_basis_rank_;
             trK  = ctx.dk.sum() + static_cast<double>(n - k) * ctx.lambda_tail;
             trK2 = ctx.dk.squaredNorm()
                  + static_cast<double>(n - k) * (ctx.tail_d_var + ctx.lambda_tail * ctx.lambda_tail);
-            Ky   = woodbury_basis_Kv(ctx, ctx.y);
+            Ky   = woodbury_basis_Kv(ctx, y_c);
         } else if (!ctx.A.empty() && ctx.A[ctx.r_indx[0]].size() > 0) {
             // Full exact GRM K = ctx.A[r_indx[0]]
             const auto& K = ctx.A[ctx.r_indx[0]];
             trK  = K.diagonal().sum();
             trK2 = K.squaredNorm(); // Frobenius norm squared = tr(K^2)
-            Ky   = K * ctx.y;
+            Ky   = K * y_c;
         }
         if (trK2 > 0.0) {
-            const double yKy   = ctx.y.dot(Ky);
-            const double yy    = ctx.y.squaredNorm();
+            const double yKy   = y_c.dot(Ky);
+            const double yy    = y_c.squaredNorm();
             const double denom = static_cast<double>(n) * trK2 - trK * trK;
             double sg_he = (denom > 1e-10)
                 ? (static_cast<double>(n) * yKy - trK * yy) / denom
