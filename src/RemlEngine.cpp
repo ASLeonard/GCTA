@@ -219,6 +219,7 @@ void init_varcomp(const RemlCtx& ctx,
             sg_he = std::min(sg_he, 0.99 * Vy);
             varcmp(0) = sg_he;
             varcmp(1) = std::max(Vy - sg_he, 0.01 * Vy);
+            LOGGER << "REML: used single-GRM HE warm-start for variance components = " << varcmp.transpose() << std::endl;
         }
     }
 }
