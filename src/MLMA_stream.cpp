@@ -522,6 +522,11 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             options_d["reml_diagV_adj"] = std::stod(options_in["--reml-diagV-adj"][0]);
             options_in.erase("--reml-diagV-adj");
         }
+        if (options_in.find("--seed") != options_in.end()
+             && !options_in["--seed"].empty()) {
+            options_d["seed"] = std::stod(options_in["--seed"][0]);
+            options_in.erase("--seed");
+        }
     };
 
     if (!has_mlma_stream)
@@ -779,6 +784,13 @@ void MLMA::processMain()
         if (no_adj_covar)
             LOGGER.e(0, "--mlma-no-preadj-covar is not yet supported in --MLMA. "
                         "Re-run without this flag (pre-adjustment is the default).");
+
+        // only if requested; otherwise leave it seeded from entropy (the default).
+        if (options_d.count("seed")) {
+            const auto seed = static_cast<std::mt19937::result_type>(options_d.at("seed"));
+            gcta_eigh::shared_rng().seed(seed);
+            LOGGER.i(0, "Using random seed: " + to_string(seed) + ".");
+        }
 
         // ---- Pheno / Marker / Geno (Geno re-reads pheno state in loopDouble) ----
         // Pheno alone reads the .fam (sample IDs); Marker/Geno additionally need
