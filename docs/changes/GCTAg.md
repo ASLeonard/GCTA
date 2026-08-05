@@ -12,6 +12,7 @@ Notes on `GCTAg`, a performance-oriented fork of `GCTA`.
 ### GRM Building
 
 - `--GRM-tile-budget <G>` — Process at most `G` gigabytes of GRM tiling at a time, similar to `--make-grm-part N n` but within a single call and more intuitive.
+- `--nMarkers <N=1024>` - Process N SNPs per block in GRM building. Raised the hardcoded value from 128 to now default at 1024. Higher values use more memory and eventually become cache bottlenecks, so higher is not always faster.
 
 ### PCA
 
@@ -29,7 +30,7 @@ Note: `--pca` now dispatches to the V2 paths; use `--pca-v1` for the legacy PC s
 - `--reml-trace-hutchpp-fixed-probes` — By default, fresh probes are used at every REML iteration with a stochastic stopping condition. This flag reuses fixed probes instead, converging to a biased estimator but deterministically (better for an unstable matrix).
 - `--reml-woodbury-basis [MP|EIG|VAR|k]` — Use a Woodbury basis to exploit the low effective rank of the GRM. Auto-detects the effective rank from the GRM; `EIGMASS` uses the eigenmass approach from Jiang 2026; `k` manually sets the effective rank to that value.
 - `--reml-woodbury-basis-eigen-mass <M>` — Calculate the Woodbury basis based on the number of eigenvalues needed to explain the fraction `M` of the total eigenvalue mass.
-- `--reml-ai-robust-stop` — Derive REML convergence from the remaining curvature in the model, as opposed to a fixed threshold.
+- `--reml-ai-robust` — Derive REML convergence from the remaining curvature in the model (forward looking), as opposed to a fixed threshold (backward looking). The maximum step between changes is also based on the curvature, rather than a fixed `0.316` ($`10^{-1/2}`$) proportion when $`\Delta \log(L)`$ is large.
 - `--save-reml` and `--load-reml <file>` — Run only the REML or MLMA stage respectively. The REML file is saved to `${out}.reml`, based on the `--out` prefix.
 
 The `--svd-*` flags from the PCA section above can also be used here alongside `--reml-woodbury-basis` rSVD paths.
