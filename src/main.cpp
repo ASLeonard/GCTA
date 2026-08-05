@@ -115,7 +115,7 @@ int main(int argc, char *argv[]){
         "--GRM-tile-budget",
         "--mlma-stream", "--save-reml", "--load-reml", "--mlma-no-preadj-covar", "--log-pval", "--model",
         "--reml-trace-hutchpp", "--reml-trace-hutchpp-fixed-probes", "--reml-maxit", "--reml-woodbury-basis", "--svd-method", "--reml-woodbury-basis-eigen-mass", "--reml-woodbury-basis-var-thresh", "--svd-chunked-budget", "--reml-alg",
-        "--reml-no-constrain", "--reml-no-HE-start", "--reml-priors", "--reml-priors-var", "--reml-diagV-adj", "--reml-ai-robust-stop", "--reml-ai-robust-stop-tol", "--reml-ai-robust-stop-risk",
+        "--reml-no-constrain", "--reml-no-HE-start", "--reml-priors", "--reml-priors-var", "--reml-diagV-adj", "--reml-ai-robust", "--reml-ai-robust-tol", "--reml-ai-robust-risk",
         "--mlma-loco-stream", "--loco-manifest",
         "--pca", "--pca-v1", "--pca-stream", "--pca-approx",
     };
