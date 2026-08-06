@@ -20,6 +20,8 @@
 #include "Covar.h"
 #include "main/StatFunc.h"
 #include "mlma_woodbury.hpp"
+#include "symmetric_eigendecomp.hpp"
+#include "chunked_grm_matvec.hpp"
 #include "RemlState.hpp"
 #include "RemlCtx.hpp"
 #include "RemlEngine.hpp"
@@ -276,6 +278,123 @@ void writeRemlState(const string& filename, const RemlState& st, bool no_adj_cov
         LOGGER.e(0, "write error on [" + filename + "] — disk full or I/O failure.");
 }
 
+void writeRemlStateFromCtx(const string& filename, const RemlCtx& ctx, bool no_adj_covar)
+{
+    std::ofstream out(filename, std::ios::binary);
+    if (!out.is_open())
+        LOGGER.e(0, "cannot open [" + filename + "] for writing.");
+
+    if (ctx.Vi_use_woodbury_basis) {
+        struct Header {
+            char    magic[4] = {'T', 'U', 'N', 'A'};
+            int32_t n = 0, x_c = 0, num_varcmp = 0, num_r_indx = 0;
+        } hdr;
+        hdr.n = static_cast<int32_t>(ctx.n);
+        hdr.x_c = static_cast<int32_t>(ctx.X_c);
+        hdr.num_varcmp = static_cast<int32_t>(ctx.varcmp.size());
+        hdr.num_r_indx = static_cast<int32_t>(ctx.varcmp.size());
+        out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+
+        const int32_t k = static_cast<int32_t>(ctx.dk.size());
+        out.write(reinterpret_cast<const char*>(&k), sizeof(int32_t));
+
+        const double lambda_tail = ctx.lambda_tail;
+        out.write(reinterpret_cast<const char*>(&lambda_tail), sizeof(double));
+
+        if (ctx.Uk.rows() != ctx.n || ctx.Uk.cols() != k)
+            LOGGER.e(0, "invalid Woodbury REML context dimensions before save.");
+        if (ctx.dk.size() != k)
+            LOGGER.e(0, "invalid Woodbury eigenvalue vector before save.");
+
+        Eigen::MatrixXf Uk_f = ctx.Uk.transpose().cast<float>();
+        out.write(reinterpret_cast<const char*>(Uk_f.data()),
+                  static_cast<std::streamsize>(static_cast<size_t>(ctx.n) * k * sizeof(float)));
+        Eigen::VectorXf dk_f = ctx.dk.cast<float>();
+        out.write(reinterpret_cast<const char*>(dk_f.data()),
+                  static_cast<std::streamsize>(k * sizeof(float)));
+
+        if (!no_adj_covar) {
+            Eigen::VectorXf b_f = ctx.b.cast<float>();
+            if (b_f.size() != ctx.X_c)
+                LOGGER.e(0, "invalid fixed-effect vector length before save.");
+            out.write(reinterpret_cast<const char*>(b_f.data()),
+                      static_cast<std::streamsize>(ctx.X_c * sizeof(float)));
+        }
+
+        Eigen::VectorXf varcmp_f = Eigen::Map<const Eigen::VectorXd>(ctx.varcmp.data(),
+                                                                      static_cast<Eigen::Index>(ctx.varcmp.size())).cast<float>();
+        out.write(reinterpret_cast<const char*>(varcmp_f.data()),
+                  static_cast<std::streamsize>(hdr.num_varcmp * sizeof(float)));
+    } else {
+        struct Header {
+            char    magic[4] = {'G', 'O', 'B', 'Y'};
+            int32_t n = 0, x_c = 0, num_varcmp = 0, num_r_indx = 0;
+        } hdr;
+        hdr.n = static_cast<int32_t>(ctx.n);
+        hdr.x_c = static_cast<int32_t>(ctx.X_c);
+        hdr.num_varcmp = static_cast<int32_t>(ctx.varcmp.size());
+        hdr.num_r_indx = static_cast<int32_t>(ctx.varcmp.size());
+        out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+
+        constexpr int block_cols = 32;
+
+        auto write_lower_triangle = [&](const Eigen::MatrixXd& mat) {
+            for (int col0 = 0; col0 < ctx.n; col0 += block_cols) {
+                const int bs = std::min(block_cols, ctx.n - col0);
+                for (int c = 0; c < bs; ++c) {
+                    const int global_col = col0 + c;
+                    for (int i = global_col; i < ctx.n; ++i) {
+                        const float value = static_cast<float>(mat(i, global_col));
+                        out.write(reinterpret_cast<const char*>(&value), sizeof(float));
+                    }
+                }
+            }
+        };
+
+        if (ctx.Vi_use_llt) {
+            if (ctx.Vi_L.rows() != ctx.n || ctx.Vi_L.cols() != ctx.n)
+                LOGGER.e(0, "invalid LLT REML context dimensions before save.");
+
+            for (int col0 = 0; col0 < ctx.n; col0 += block_cols) {
+                const int bs = std::min(block_cols, ctx.n - col0);
+                Eigen::MatrixXd rhs = Eigen::MatrixXd::Zero(ctx.n, bs);
+                for (int c = 0; c < bs; ++c)
+                    rhs(col0 + c, c) = 1.0;
+                ctx.Vi_L.triangularView<Eigen::Lower>().solveInPlace(rhs);
+                ctx.Vi_L.triangularView<Eigen::Lower>().adjoint().solveInPlace(rhs);
+                for (int c = 0; c < bs; ++c) {
+                    const int global_col = col0 + c;
+                    for (int i = global_col; i < ctx.n; ++i) {
+                        const float value = static_cast<float>(rhs(i, c));
+                        out.write(reinterpret_cast<const char*>(&value), sizeof(float));
+                    }
+                }
+            }
+        } else {
+            if (ctx.Vi.rows() != ctx.n || ctx.Vi.cols() != ctx.n)
+                LOGGER.e(0, "invalid dense REML context dimensions before save.");
+            write_lower_triangle(ctx.Vi);
+        }
+
+        if (!no_adj_covar) {
+            Eigen::VectorXf b_f = ctx.b.cast<float>();
+            if (b_f.size() != ctx.X_c)
+                LOGGER.e(0, "invalid fixed-effect vector length before save.");
+            out.write(reinterpret_cast<const char*>(b_f.data()),
+                      static_cast<std::streamsize>(ctx.X_c * sizeof(float)));
+        }
+
+        Eigen::VectorXf varcmp_f = Eigen::Map<const Eigen::VectorXd>(ctx.varcmp.data(),
+                                                                      static_cast<Eigen::Index>(ctx.varcmp.size())).cast<float>();
+        out.write(reinterpret_cast<const char*>(varcmp_f.data()),
+                  static_cast<std::streamsize>(hdr.num_varcmp * sizeof(float)));
+    }
+
+    out.flush();
+    if (!out)
+        LOGGER.e(0, "write error on [" + filename + "] — disk full or I/O failure.");
+}
+
 void write_hsq_from_ctx(const string& out_prefix, const RemlCtx& ctx)
 {
     const string hsq_file = out_prefix + ".hsq";
@@ -403,6 +522,11 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             options_d["reml_diagV_adj"] = std::stod(options_in["--reml-diagV-adj"][0]);
             options_in.erase("--reml-diagV-adj");
         }
+        if (options_in.find("--seed") != options_in.end()
+             && !options_in["--seed"].empty()) {
+            options_d["seed"] = std::stod(options_in["--seed"][0]);
+            options_in.erase("--seed");
+        }
     };
 
     if (!has_mlma_stream)
@@ -436,11 +560,10 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options_in.erase("--reml-no-HE-start");
         options_in.erase("--reml-woodbury-basis-eigen-mass");
         options_in.erase("--reml-woodbury-basis-var-thresh");
-        options_in.erase("--svd-chunked");
-        options_in.erase("--svd-chunk-size");
-        options_in.erase("--reml-ai-robust-stop");
-        options_in.erase("--reml-ai-robust-stop-tol");
-        options_in.erase("--reml-ai-robust-stop-risk");
+        options_in.erase("--svd-chunked-budget");
+        options_in.erase("--reml-ai-robust");
+        options_in.erase("--reml-ai-robust-tol");
+        options_in.erase("--reml-ai-robust-risk");
     } else {
         // Inline REML path: --grm is required.
         const bool has_grm = options_in.find("--grm") != options_in.end()
@@ -516,23 +639,17 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             options["no_HE_start"] = false;
             options_in.erase("--reml-no-HE-start");
         }
-        // --svd-chunked: read K in lower-triangular tiles for the
+        // --svd-chunked-budget: read K in lower-triangular tiles for the
         // Woodbury basis rSVD instead of holding a dense n x n K resident —
         // see chunked_grm_matvec.hpp. Requires the caller (below, once
         // grm_binary_io.hpp's reader is wired up) to populate
         // ctx.grm_tile_reader; RemlEngine enforces this at runtime.
-        if (options_in.find("--svd-chunked") != options_in.end()) {
-            if (!options_in["--svd-chunked"].empty())
-                LOGGER.w(0, "--svd-chunked takes no argument; ignoring the supplied value.");
-            options["svd_chunked"] = "1";
-            options_in.erase("--svd-chunked");
-        }
-        if (options_in.find("--svd-chunk-size") != options_in.end()) {
-            const auto& vals = options_in["--svd-chunk-size"];
+        if (options_in.find("--svd-chunked-budget") != options_in.end()) {
+            const auto& vals = options_in["--svd-chunked-budget"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--svd-chunk-size requires a row-count argument.");
-            options_d["svd_chunk_size"] = std::stod(vals[0]);
-            options_in.erase("--svd-chunk-size");
+                LOGGER.e(0, "--svd-chunked-budget requires a target memory in GB.");
+            options_d["svd_chunked_budget"] = std::stod(vals[0]);
+            options_in.erase("--svd-chunked-budget");
         }
         // These three were previously read from options_d further down
         // (woodbury_basis_edge_margin / woodbury_basis_edge_confirm / woodbury_basis_EIGMASS_k_buffer)
@@ -607,16 +724,16 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             }
             options_in.erase("--reml-priors");
         }
-        if (options_in.find("--reml-ai-robust-stop") != options_in.end()) {
-            options["reml_ai_robust_stop"] = "1";
+        if (options_in.find("--reml-ai-robust") != options_in.end()) {
+            options["reml_ai_robust"] = "1";
         }
-        if (options_in.find("--reml-ai-robust-stop-tol") != options_in.end()
-                && !options_in["--reml-ai-robust-stop-tol"].empty()) {
-            options_d["reml_ai_robust_stop_tol"] = std::stod(options_in["--reml-ai-robust-stop-tol"][0]);
+        if (options_in.find("--reml-ai-robust-tol") != options_in.end()
+                && !options_in["--reml-ai-robust-tol"].empty()) {
+            options_d["reml_ai_robust_tol"] = std::stod(options_in["--reml-ai-robust-tol"][0]);
         }
-        if (options_in.find("--reml-ai-robust-stop-risk") != options_in.end()
-                && !options_in["--reml-ai-robust-stop-risk"].empty()) {
-            options_d["reml_ai_robust_stop_risk"] = std::stod(options_in["--reml-ai-robust-stop-risk"][0]);
+        if (options_in.find("--reml-ai-robust-risk") != options_in.end()
+                && !options_in["--reml-ai-robust-risk"].empty()) {
+            options_d["reml_ai_robust_risk"] = std::stod(options_in["--reml-ai-robust-risk"][0]);
         }   
     }
 
@@ -667,6 +784,13 @@ void MLMA::processMain()
         if (no_adj_covar)
             LOGGER.e(0, "--mlma-no-preadj-covar is not yet supported in --MLMA. "
                         "Re-run without this flag (pre-adjustment is the default).");
+
+        // only if requested; otherwise leave it seeded from entropy (the default).
+        if (options_d.count("seed")) {
+            const auto seed = static_cast<std::mt19937::result_type>(options_d.at("seed"));
+            gcta_eigh::shared_rng().seed(seed);
+            LOGGER.i(0, "Using random seed: " + to_string(seed) + ".");
+        }
 
         // ---- Pheno / Marker / Geno (Geno re-reads pheno state in loopDouble) ----
         // Pheno alone reads the .fam (sample IDs); Marker/Geno additionally need
@@ -740,6 +864,7 @@ void MLMA::processMain()
 
         // ---- Obtain REML state (either from file or inline) ----
         RemlState state;
+        bool use_inline_ctx = false;
         Eigen::VectorXf y_vec(n);
         for (int i = 0; i < n; ++i) y_vec[i] = static_cast<float>(phenos_vec[i]);
 
@@ -768,7 +893,93 @@ void MLMA::processMain()
             LOGGER.i(0, "Running inline REML using GRM [" + grm_pfx + "] ...");
 
             const vector<string> analysis_ids = pheno->get_id(0, n - 1, "\t");
-            const bool svd_chunked = options.count("svd_chunked") > 0;
+            bool svd_chunked = options_d.count("svd_chunked_budget") > 0.0;
+            const double svd_chunked_budget = options_d.count("svd_chunked_budget")
+                ? options_d.at("svd_chunked_budget") : 0.0;
+
+            // REML tuning parameters. Parsed here (ahead of the GRM load below,
+            // not after it as before) because woodbury_basis_mem_budget_gb feeds
+            // the chunk-size solve immediately below, which needs to run before
+            // committing to a chunked vs. dense load. Also lets the
+            // reml_alg/svd_nystrom/etc. validation checks fail fast, ahead of
+            // the (potentially expensive) GRM read, instead of after it.
+            const int  woodbury_basis_rank  = options_d.count("woodbury_basis_rank")
+                ? static_cast<int>(options_d.at("woodbury_basis_rank")) : 0;
+            const bool trace_hutchpp   = options.count("trace_hutchpp") > 0;
+            const int  trace_hutchpp_nprobes  = options_d.count("trace_hutchpp_nprobes")
+                ? static_cast<int>(options_d.at("trace_hutchpp_nprobes")) : 200;
+            const int  reml_maxit     = options_d.count("reml_maxit")
+                ? static_cast<int>(options_d.at("reml_maxit")) : 100;
+            const int  reml_alg       = options_d.count("reml_alg")
+                ? static_cast<int>(options_d.at("reml_alg")) : 0;
+            const int  reml_diagV_adj = options_d.count("reml_diagV_adj")
+                ? static_cast<int>(options_d.at("reml_diagV_adj")) : 0;
+            const bool no_constrain   = options.count("no_constrain") > 0;
+            const bool svd_nystrom = options.count("svd_nystrom") > 0;
+            const float  woodbury_basis_eigen_mass  = options_d.count("woodbury_basis_eigen_mass")
+                ? static_cast<float>(options_d.at("woodbury_basis_eigen_mass")) : 0.99f;
+            const double woodbury_basis_edge_margin = options_d.count("woodbury_basis_edge_margin")
+                ? options_d.at("woodbury_basis_edge_margin") : 0.15;
+            const int    woodbury_basis_edge_confirm = options_d.count("woodbury_basis_edge_confirm")
+                ? static_cast<int>(options_d.at("woodbury_basis_edge_confirm")) : 20;
+            const int woodbury_basis_EIGMASS_k_buffer = options_d.count("woodbury_basis_EIGMASS_k_buffer")
+                ? static_cast<int>(options_d.at("woodbury_basis_EIGMASS_k_buffer")) : 0;
+            const double woodbury_basis_mem_budget_gb = options_d.count("woodbury_basis_mem_budget_gb")
+                ? options_d.at("woodbury_basis_mem_budget_gb") : 0.0;
+            const bool no_HE_start = options.count("no_HE_start") > 0;
+            const bool reml_ai_robust = options.count("reml_ai_robust") > 0;
+            const double reml_ai_robust_tol = options_d.count("reml_ai_robust_tol")
+                ? options_d.at("reml_ai_robust_tol") : 1e-4;
+            const double reml_ai_robust_risk = options_d.count("reml_ai_robust_risk")
+                ? options_d.at("reml_ai_robust_risk") : 0.01;
+
+            if (reml_alg < 0 || reml_alg > 2)
+                LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
+            if (reml_diagV_adj < 0 || reml_diagV_adj > 2)
+                LOGGER.e(0, "--reml-diagV-adj should be 0, 1, or 2.");
+            if (woodbury_basis_rank != 0 && reml_alg == 1)
+                LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML (--reml-alg 1). Use AI-REML (default) or EM-REML (--reml-alg 2).");
+            if (svd_nystrom && woodbury_basis_rank == 0)
+                LOGGER.e(0, "--svd-method nystrom requires --reml-woodbury <k|MP|EIG|VAR>.");
+            if (woodbury_basis_rank != 0 && trace_hutchpp)
+                LOGGER.w(0, "--reml-woodbury-basis and --reml-trace-hutchpp both given; "
+                            "the Woodbury basis provides an exact tr(PA) and takes precedence — "
+                            "--reml-trace-hutchpp is ignored.");
+
+            // Row-chunk size for streaming GRM reads, resolved from
+            // --svd-chunked-budget the same way RemlEngine.cpp's
+            // compute_woodbury_basis sizes it (k_svd_budget_ceiling from
+            // --reml-woodbury-basis-mem-budget, defaulting to n-1 unbounded).
+            // Resolved here, before committing to the chunked reader below, so
+            // a budget that turns out to cover the whole matrix in one chunk
+            // can fall back to the dense load instead. Chunking then buys
+            // nothing (there's no second chunk to defer) but still pays the
+            // diagonal-tile mirror's transient 2x n x n duplication (see
+            // chunked_grm_matvec.hpp) across the entire GRM at once — strictly
+            // worse than dense in that case.
+            int svd_chunk_rows = 0;
+            if (svd_chunked) {
+                int k_svd_budget_ceiling = n - 1;
+                if (woodbury_basis_mem_budget_gb > 0.0) {
+                    const double budget_bytes = woodbury_basis_mem_budget_gb * 1e9;
+                    const int max_k_ext = static_cast<int>(budget_bytes / (5.0 * n * 8.0));
+                    k_svd_budget_ceiling = std::min(k_svd_budget_ceiling, std::max(20, max_k_ext - 200));
+                }
+                const int k_ext_hint = k_svd_budget_ceiling + gcta_eigh::recommended_oversample(k_svd_budget_ceiling);
+                svd_chunk_rows = gcta_chunked::solve_chunk_rows(n, svd_chunked_budget, k_ext_hint);
+                if (svd_chunk_rows < 1)
+                    LOGGER.e(0, "--svd-chunked-budget=" + to_string(svd_chunked_budget) +
+                                "GB cannot fit even a single GRM row (n=" + to_string(n) +
+                                ", k_ext=" + to_string(k_ext_hint) + " -> " +
+                                to_string(8.0 * (n + k_ext_hint) / 1e9) + "GB/row); raise the budget.");
+                if (svd_chunk_rows >= n) {
+                    LOGGER.w(0, "--svd-chunked-budget=" + to_string(svd_chunked_budget) +
+                                "GB covers the full GRM (n=" + to_string(n) + ", k_ext up to " +
+                                to_string(k_ext_hint) + ") in a single chunk. Falling back to "
+                                "dense loading instead of paying chunking overhead for no benefit.");
+                    svd_chunked = false;
+                }
+            }
 
             vector<string> grm_ids;
             Eigen::MatrixXd G_n;      // left empty when svd_chunked
@@ -783,10 +994,9 @@ void MLMA::processMain()
                 // without touching .grm.bin.
                 chunked_grm = gcta_grm_io::make_chunked_grm_reader(grm_pfx, analysis_ids);
                 m_all = chunked_grm.m_snps;
-                LOGGER.i(0, "--svd-chunked: GRM will be read in " +
-                            to_string(options_d.count("svd_chunk_size")
-                                          ? static_cast<int>(options_d.at("svd_chunk_size")) : 8000) +
-                            "-row tiles from [" + grm_pfx + "] as needed, not loaded densely.");
+                LOGGER.i(0, "--svd-chunked-budget=" + to_string(svd_chunked_budget) +
+                            "GB -> GRM will be read in " + to_string(svd_chunk_rows) +
+                            "-row chunks from [" + grm_pfx + "], not loaded densely.");
             } else {
                 read_grm_binary(grm_pfx, grm_ids, G_n, m_all);
 
@@ -818,49 +1028,6 @@ void MLMA::processMain()
                 // else: G_n already contains the right n×n block
             }
 
-            // REML tuning parameters
-            const int  woodbury_basis_rank  = options_d.count("woodbury_basis_rank")
-                ? static_cast<int>(options_d.at("woodbury_basis_rank")) : 0;
-            const bool trace_hutchpp   = options.count("trace_hutchpp") > 0;
-            const int  trace_hutchpp_nprobes  = options_d.count("trace_hutchpp_nprobes")
-                ? static_cast<int>(options_d.at("trace_hutchpp_nprobes")) : 200;
-            const int  reml_maxit     = options_d.count("reml_maxit")
-                ? static_cast<int>(options_d.at("reml_maxit")) : 100;
-            const int  reml_alg       = options_d.count("reml_alg")
-                ? static_cast<int>(options_d.at("reml_alg")) : 0;
-            const int  reml_diagV_adj = options_d.count("reml_diagV_adj")
-                ? static_cast<int>(options_d.at("reml_diagV_adj")) : 0;
-            const bool no_constrain   = options.count("no_constrain") > 0;
-            const bool svd_nystrom = options.count("svd_nystrom") > 0;
-            const float  woodbury_basis_eigen_mass  = options_d.count("woodbury_basis_eigen_mass")
-                ? static_cast<float>(options_d.at("woodbury_basis_eigen_mass")) : 0.99f;
-            const double woodbury_basis_edge_margin = options_d.count("woodbury_basis_edge_margin")
-                ? options_d.at("woodbury_basis_edge_margin") : 0.15;
-            const int    woodbury_basis_edge_confirm = options_d.count("woodbury_basis_edge_confirm")
-                ? static_cast<int>(options_d.at("woodbury_basis_edge_confirm")) : 20;
-            const int woodbury_basis_EIGMASS_k_buffer = options_d.count("woodbury_basis_EIGMASS_k_buffer")
-                ? static_cast<int>(options_d.at("woodbury_basis_EIGMASS_k_buffer")) : 0;
-            const double woodbury_basis_mem_budget_gb = options_d.count("woodbury_basis_mem_budget_gb")
-                ? options_d.at("woodbury_basis_mem_budget_gb") : 0.0;
-            const bool no_HE_start = options.count("no_HE_start") > 0;
-            const bool reml_ai_robust_stop = options.count("reml_ai_robust_stop") > 0;
-            const double reml_ai_robust_stop_tol = options_d.count("reml_ai_robust_stop_tol")
-                ? options_d.at("reml_ai_robust_stop_tol") : 1e-4;
-            const double reml_ai_robust_stop_risk = options_d.count("reml_ai_robust_stop_risk")
-                ? options_d.at("reml_ai_robust_stop_risk") : 0.01;
-
-            if (reml_alg < 0 || reml_alg > 2)
-                LOGGER.e(0, "--reml-alg should be 0, 1 or 2.");
-            if (reml_diagV_adj < 0 || reml_diagV_adj > 2)
-                LOGGER.e(0, "--reml-diagV-adj should be 0, 1, or 2.");
-            if (woodbury_basis_rank != 0 && reml_alg == 1)
-                LOGGER.e(0, "--reml-woodbury is incompatible with Fisher-scoring REML (--reml-alg 1). Use AI-REML (default) or EM-REML (--reml-alg 2).");
-            if (svd_nystrom && woodbury_basis_rank == 0)
-                LOGGER.e(0, "--svd-method nystrom requires --reml-woodbury <k|MP|EIG|VAR>.");
-            if (woodbury_basis_rank != 0 && trace_hutchpp)
-                LOGGER.w(0, "--reml-woodbury-basis and --reml-trace-hutchpp both given; "
-                            "the Woodbury basis provides an exact tr(PA) and takes precedence — "
-                            "--reml-trace-hutchpp is ignored.");
 
             const vector<double> priors =
                 options_vd.count("reml_priors") ? options_vd.at("reml_priors") : vector<double>{};
@@ -902,7 +1069,7 @@ void MLMA::processMain()
             ctx.reml_diagV_adj           = reml_diagV_adj;
             ctx.woodbury_basis_rank            = woodbury_basis_rank;
             if (svd_chunked && woodbury_basis_rank == 0)
-                LOGGER.e(0, "--svd-chunked requires --reml-woodbury. Every REML code path "
+                LOGGER.e(0, "--svd-chunked-budget requires --reml-woodbury. Every REML code path "
                             "outside compute_woodbury_basis_basis (the trace/projection machinery, "
                             "Hutch++, dense/exact REML) still reads ctx.A[...] directly and treats "
                             "an empty component as \"identity\" — chunked mode leaves it empty for "
@@ -914,17 +1081,15 @@ void MLMA::processMain()
                 ? options_d.at("woodbury_basis_var_thresh") : 0.001;
             ctx.svd_mem_budget_gb   = woodbury_basis_mem_budget_gb;
             ctx.svd_nystrom         = svd_nystrom;
-            ctx.svd_chunked         = svd_chunked;
-            ctx.svd_chunk_size      = options_d.count("svd_chunk_size")
-                ? static_cast<int>(options_d.at("svd_chunk_size")) : 8000;
+            ctx.svd_chunked_budget         = svd_chunked ? svd_chunked_budget : 0.0;
             ctx.reml_trace_hutchpp        = trace_hutchpp;
             ctx.reml_trace_hutchpp_nprobes = trace_hutchpp_nprobes;
             ctx.reml_hutchpp_fixed_probes = options.count("trace_hutchpp_fixed_probes") > 0;
             ctx.woodbury_basis_eigen_mass             = woodbury_basis_eigen_mass;
             ctx.reml_no_HE_start         = no_HE_start;
-            ctx.reml_ai_robust_stop      = reml_ai_robust_stop;
-            ctx.reml_ai_robust_stop_tol  = reml_ai_robust_stop_tol;
-            ctx.reml_ai_robust_stop_risk = reml_ai_robust_stop_risk;
+            ctx.reml_ai_robust      = reml_ai_robust;
+            ctx.reml_ai_robust_tol  = reml_ai_robust_tol;
+            ctx.reml_ai_robust_risk = reml_ai_robust_risk;
 
             if (options.count("woodbury_basis_warm_start")) {
                 if (woodbury_basis_rank == 0)
@@ -945,12 +1110,10 @@ void MLMA::processMain()
             // Reuse the already-computed REML summary to write .hsq (same feature as --mlma).
             write_hsq_from_ctx(out_prefix, ctx);
 
-            state = reml::build_reml_state(ctx);
-
             if (options.count("save_reml")) {
                 const string save_reml_file = out_prefix + ".reml";
                 LOGGER.i(0, "Saving REML state to [" + save_reml_file + "] ...");
-                writeRemlState(save_reml_file, state, no_adj_covar);
+                writeRemlStateFromCtx(save_reml_file, ctx, no_adj_covar);
                 LOGGER.i(0, "REML estimation completed. Use --load-reml " + save_reml_file +
                             " to perform association tests.");
                 delete geno;
@@ -959,11 +1122,34 @@ void MLMA::processMain()
                 continue;
             }
 
+            state = reml::build_reml_state(ctx);
+
             // y_adj = y - X*b
             {
                 const Eigen::MatrixXf Xf = X_design.cast<float>();
-                y_vec -= Xf * state.b;
+                y_vec -= Xf * ctx.b.cast<float>();
             }
+
+            use_inline_ctx = true;
+
+            // ---- Open output file ----
+            const string out_file = out_prefix + ".mlma";
+            std::ofstream ofile(out_file);
+            if (!ofile) LOGGER.e(0, "cannot open [" + out_file + "] for writing.");
+            ofile << "Chr\tSNP\tbp\tA1\tA2\tFreq\tb\tse\t"
+                  << (log_pval ? "log_p" : "p") << "\n";
+
+            Eigen::VectorXf w_sqrt = pheno->get_sqrt_weight_keep();
+            run_mlma_stream_association(ctx, y_vec, w_sqrt, geno, marker, n, log_pval, ofile);
+            LOGGER << "\nAssociation results saved to [" << out_file << "]." << std::endl;
+            ofile.close();
+        }
+
+        if (use_inline_ctx) {
+            delete geno;
+            delete marker;
+            delete pheno;
+            continue;
         }
 
         // ---- Open output file ----

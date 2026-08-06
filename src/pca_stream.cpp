@@ -85,21 +85,16 @@ int PCAStream::registerOption(map<string, vector<string>>& options_in)
         options_in.erase("--remove");
     }
 
-    // Same names as --svd-chunked / --svd-chunk-size in
-    // MLMA_stream.cpp — same meaning ("read the GRM in tiles instead of
-    // densely"), reused verbatim rather than introducing a PCA-specific pair.
-    if (options_in.find("--svd-chunked") != options_in.end()) {
-        if (!options_in["--svd-chunked"].empty())
-            LOGGER.w(0, "--svd-chunked takes no argument; ignoring the supplied value.");
-        options["svd_chunked"] = "1";
-        options_in.erase("--svd-chunked");
-    }
-    if (options_in.find("--svd-chunk-size") != options_in.end()) {
-        const auto& vals = options_in["--svd-chunk-size"];
+    // Same name and meaning as --svd-chunked-budget in MLMA_stream.cpp /
+    // RemlEngine.cpp — GB budget for streaming the GRM in row-chunks instead
+    // of loading it densely — reused verbatim rather than introducing a
+    // PCA-specific flag.
+    if (options_in.find("--svd-chunked-budget") != options_in.end()) {
+        const auto& vals = options_in["--svd-chunked-budget"];
         if (vals.empty() || vals[0].empty())
-            LOGGER.e(0, "--svd-chunk-size requires a row-count argument.");
-        options_d["svd_chunk_size"] = std::stod(vals[0]);
-        options_in.erase("--svd-chunk-size");
+            LOGGER.e(0, "--svd-chunked-budget requires a GB argument (e.g. 20).");
+        options_d["svd_chunked_budget"] = std::stod(vals[0]);
+        options_in.erase("--svd-chunked-budget");
     }
 
     if (options_in.find("--svd-method") != options_in.end()) {
@@ -170,13 +165,47 @@ void PCAStream::processMain()
             pca_approx.clear();
         }
 
-        const bool svd_chunked = options.count("svd_chunked") > 0;
-        const int  chunk_size  = options_d.count("svd_chunk_size")
-            ? static_cast<int>(options_d.at("svd_chunk_size")) : 8000;
+        const double svd_chunked_budget = options_d.count("svd_chunked_budget")
+            ? options_d.at("svd_chunked_budget") : 0.0;
+        bool svd_chunked = svd_chunked_budget > 0.0;
 
         if (pca_approx.empty() && svd_chunked)
             LOGGER.e(0, "--pca exact mode (dsyevr/dsyevd) requires dense GRM loading. "
-                        "Remove --svd-chunked, or set --pca-approx to Lanczos/rSVD.");
+                        "Remove --svd-chunked-budget, or set --pca-approx to Lanczos/rSVD.");
+
+        // Row-chunk size for streaming reads off the GRM (chunked_symmetric_matvec /
+        // matvec_blocked). Budget-driven rather than a guessed constant, same pattern
+        // as RemlEngine.cpp's compute_woodbury_basis: solve for the number of rows
+        // that fit chunk_rows x (n + k_ext) doubles in the budget. k_ext is sized for
+        // whichever approx method got selected above — rSVD/Nystrom multiply block-wise
+        // by out_pc_num + oversample columns at once; Lanczos is normally one vector at
+        // a time (cols=1) but ncv is used here anyway as a conservative upper bound in
+        // case the underlying implementation ever blocks its matvecs internally.
+        int chunk_size = 0;
+        int k_ext_hint = 0;
+        if (svd_chunked) {
+            k_ext_hint = (pca_approx == "Lanczos")
+                ? std::min(n, std::max(3 * out_pc_num + 1, 30))
+                : out_pc_num + gcta_eigh::recommended_oversample(out_pc_num);
+            chunk_size = gcta_chunked::solve_chunk_rows(n, svd_chunked_budget, k_ext_hint);
+            if (chunk_size < 1)
+                LOGGER.e(0, "--svd-chunked-budget=" + to_string(svd_chunked_budget) +
+                            "GB cannot fit even a single GRM row (n=" + to_string(n) +
+                            ", k_ext=" + to_string(k_ext_hint) + " -> " +
+                            to_string(8.0 * (n + k_ext_hint) / 1e9) + "GB/row); raise the budget.");
+            if (chunk_size >= n) {
+                // The whole GRM fits in a single block: chunking then buys nothing
+                // (there's no second chunk to defer loading) but still pays the
+                // diagonal-tile mirror's transient 2x n x n duplication (see
+                // chunked_grm_matvec.hpp) across the entire matrix at once, since
+                // that tile IS the whole matrix here. Strictly worse than dense.
+                LOGGER.w(0, "--svd-chunked-budget=" + to_string(svd_chunked_budget) +
+                            "GB covers the full GRM (n=" + to_string(n) + ", k_ext=" +
+                            to_string(k_ext_hint) + ") in a single chunk. Falling back to "
+                            "dense loading instead of paying chunking overhead for no benefit.");
+                svd_chunked = false;
+            }
+        }
 
         // ---- GRM access: chunked tile reader, or dense (fallback / comparison) ----
         gcta_chunked::TileReader chunked_reader;
@@ -188,7 +217,9 @@ void PCAStream::processMain()
             chunked_reader = std::move(handle.reader);
             chunked_file = std::move(handle.file);
             LOGGER.i(0, "--pca: GRM will be read in " + to_string(chunk_size) +
-                        "-row tiles from [" + grm_pfx + "] as needed, not loaded densely.");
+                        "-row chunks from [" + grm_pfx + "] (--svd-chunked-budget=" +
+                        to_string(svd_chunked_budget) + "GB, k_ext up to " + to_string(k_ext_hint) +
+                        "), not loaded densely.");
         } else {
             vector<string> loaded_ids;
             double m_snps_unused = 0.0;

@@ -21,8 +21,7 @@ Note: `--pca` now dispatches to the V2 paths; use `--pca-v1` for the legacy PC s
 - `--pca-approx [Lanczos|rSVD]` — Use an approximate solver for eigenvalues. If the number of requested PCs is much smaller than the GRM dimension, this is highly accurate.
 - `--pca <N>` — If `N` is not given, defaults to all eigenvalues rather than the top 20.
 - `--svd-method [power|nystrom]` — By default, use power iterations during rSVD, or swap to a Nystrom approach (can fail on poorly conditioned matrices).
-- `--svd-chunked` — Use a chunked approach to loading the GRM when doing rSVD, to lower memory.
-- `--svd-chunk-size <N=8000>` — Process `N` rows of the GRM per batch during chunked rSVD.
+- `--svd-chunked-budget <G>` — Use a chunked approach to loading the GRM when doing rSVD, using `G` gigabytes of the GRM at a time.
 
 ### REML
 

@@ -67,8 +67,7 @@ struct RemlCtx {
     // chunked_grm_matvec.hpp for the exact callback contract (reads a single
     // lower-triangular tile; float32-on-disk should be widened to double at
     // the tile level, not for the whole file up front).
-    bool                     svd_chunked    = false;
-    int                      svd_chunk_size = 8000;   // rows/cols per tile
+    double                      svd_chunked_budget = 0.0;  // GB budget for streaming chunk rows, off by default
     gcta_chunked::TileReader grm_tile_reader;               // caller-populated when chunked
 
     // Hard cap on rSVD sketch memory (Omega/Y/qr_scratch/Q, each ~n*k_ext*8
@@ -157,9 +156,9 @@ struct RemlCtx {
     RemlMat hutchpp_G;          // Hutch++ Rademacher probes  (n x k)
     bool reml_hutchpp_fixed_probes = false; // true → don't redraw every call/iteration (default false)
     RemlMat P;                  // projection matrix (freed after convergence)
-    bool   reml_ai_robust_stop      = false;   // opt-in: legacy dlogL gate is default until validated
-    double reml_ai_robust_stop_tol  = 1e-4;    // logL-unit tolerance; lambda_sq_floor = 2*this
-    double reml_ai_robust_stop_risk = 0.01;  // per-iteration false-stop probability under H0
+    bool   reml_ai_robust      = false;   // opt-in: legacy dlogL gate is default until validated
+    double reml_ai_robust_tol  = 1e-4;    // logL-unit tolerance; lambda_sq_floor = 2*this
+    double reml_ai_robust_risk = 0.01;  // per-iteration false-stop probability under H0
 
     // ── Status flags ─────────────────────────────────────────────────────────
     bool reml_AI_not_invertible = false;

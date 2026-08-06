@@ -20,6 +20,7 @@
 #include "cpu.h"
 #include "mlma_woodbury.hpp"
 #include "symmetric_eigendecomp.hpp"
+#include "chunked_grm_matvec.hpp"
 
 #include <Eigen/Dense>
 #include <boost/math/distributions/chi_squared.hpp>
@@ -189,23 +190,27 @@ void init_varcomp(const RemlCtx& ctx,
         const double Vy = ctx.y_Ssq;
         double trK = 0.0, trK2 = 0.0;
         RemlVec Ky(n);
-        
+         // HE moment identities (E[y'Ky] = sg*tr(K^2) + se*tr(K), E[y'y] = sg*tr(K) + se*n)
+        // assume y is mean-zero. ctx.y is left at its raw file scale everywhere else in
+        // REML (X/Vi_X project the mean out properly there), so center locally here only.
+        const RemlVec y_c = ctx.y.array() - ctx.y.mean();
+
         if (ctx.Vi_use_woodbury_basis) {
             const int k = ctx.woodbury_basis_rank_;
             trK  = ctx.dk.sum() + static_cast<double>(n - k) * ctx.lambda_tail;
             trK2 = ctx.dk.squaredNorm()
                  + static_cast<double>(n - k) * (ctx.tail_d_var + ctx.lambda_tail * ctx.lambda_tail);
-            Ky   = woodbury_basis_Kv(ctx, ctx.y);
+            Ky   = woodbury_basis_Kv(ctx, y_c);
         } else if (!ctx.A.empty() && ctx.A[ctx.r_indx[0]].size() > 0) {
             // Full exact GRM K = ctx.A[r_indx[0]]
             const auto& K = ctx.A[ctx.r_indx[0]];
             trK  = K.diagonal().sum();
             trK2 = K.squaredNorm(); // Frobenius norm squared = tr(K^2)
-            Ky   = K * ctx.y;
+            Ky   = K * y_c;
         }
         if (trK2 > 0.0) {
-            const double yKy   = ctx.y.dot(Ky);
-            const double yy    = ctx.y.squaredNorm();
+            const double yKy   = y_c.dot(Ky);
+            const double yy    = y_c.squaredNorm();
             const double denom = static_cast<double>(n) * trK2 - trK * trK;
             double sg_he = (denom > 1e-10)
                 ? (static_cast<double>(n) * yKy - trK * yy) / denom
@@ -214,6 +219,7 @@ void init_varcomp(const RemlCtx& ctx,
             sg_he = std::min(sg_he, 0.99 * Vy);
             varcmp(0) = sg_he;
             varcmp(1) = std::max(Vy - sg_he, 0.01 * Vy);
+            LOGGER << "REML: used single-GRM HE warm-start for variance components = " << varcmp.transpose() << std::endl;
         }
     }
 }
@@ -400,7 +406,7 @@ double calcu_P_impl(RemlCtx& ctx, RemlMat* P) {
     return logdet_Xt_Vi_X;
 }
 
-void calcu_tr_PA_woodbury(const RemlCtx& ctx, RemlVec& tr_PA) {
+void calcu_tr_PA_woodbury(const RemlCtx& ctx, RemlVec& tr_PA, RemlVec* tr_PA_corrected = nullptr) {
     const int ncomp = static_cast<int>(ctx.r_indx.size());
     tr_PA.resize(ncomp);
 
@@ -434,6 +440,33 @@ void calcu_tr_PA_woodbury(const RemlCtx& ctx, RemlVec& tr_PA) {
     const double tr_corr_K = ctx.Xt_Vi_X_i.cwiseProduct(ViX_K_ViX.transpose()).sum();
 
     tr_PA(0) = tr_Vinv_K - tr_corr_K;
+
+    // Delta-method (second-order Taylor) correction for tail heterogeneity: the
+    // flat-tail approximation above treats every unretained eigenvalue as exactly
+    // lambda_tail, which is only exact in expectation to first order. tail_d_var
+    // (E[(d-lambda_tail)^2] over the tail) corrects the curvature terms this flat
+    // approximation misses. Mirrors the existing logdet correction in calcu_Vi
+    // (same r = sg2/sigma2_eff, same tail_d_var).
+    //
+    // NOT wired into tr_PA/live REML iteration -- that patching only this half 
+    // of the score while leaving the AImatrix / quadratic score term 
+    // (R, built in ai_reml from APy) uncorrected causes AI-REML to diverge once 
+    // a component hits its clamp (score and curvature stop describing the same 
+    // objective). This output is for a post-hoc, non-iterated correction only.
+    // See ai_reml's delta_corrected_out.
+    if (tr_PA_corrected) {
+        tr_PA_corrected->resize(ncomp);
+        double tr_Vinv_c   = tr_Vinv;
+        double tr_Vinv_K_c = tr_Vinv_K;
+        if (ctx.tail_d_var > 0.0 && n > k) {
+            const double r = sg2 / sigma2_eff;
+            tr_Vinv_c   += static_cast<double>(n - k) * r * r * ctx.tail_d_var / sigma2_eff;
+            tr_Vinv_K_c -= static_cast<double>(n - k) * sg2 * se2 * ctx.tail_d_var
+                          / (sigma2_eff * sigma2_eff * sigma2_eff);
+        }
+        (*tr_PA_corrected)(ncomp - 1) = tr_Vinv_c - tr_corr_I;
+        (*tr_PA_corrected)(0)         = tr_Vinv_K_c - tr_corr_K;
+    }
 }
 
 // tr_PA_var receives, per component, the sampling variance of the Hutch++
@@ -640,7 +673,8 @@ double newton_decrement_null_quantile(const RemlMat& Hi, const RemlVec& var_U, d
 // — see call site.
 void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
              RemlVec& prev_varcmp, RemlVec& varcmp, double dlogL,
-             double& lambda_sq, RemlVec& var_U) {
+             double& lambda_sq, RemlVec& var_U,
+             RemlVec* delta_corrected_out = nullptr) {
     const bool use_approx     = ctx.reml_trace_hutchpp;
     const bool woodbury_basis_active = ctx.Vi_use_woodbury_basis;
 
@@ -676,10 +710,22 @@ void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
     }
     Hi = 0.5 * Hi;
 
+    // Saved before R is overwritten into the score U below. R_raw is the
+    // quadratic-form term (y'PA_iPy); it has no closed-form tail-heterogeneity
+    // correction (unlike tr_PA's log-linear terms), so it's reused as-is for
+    // the post-hoc corrected estimate -- see delta_corrected_out below.
+    const RemlVec R_raw = R;
+
     RemlVec tr_PA;
+    RemlVec tr_PA_corrected;
     RemlVec tr_PA_var = RemlVec::Zero(m);   // deterministic (exact/Woodbury) => 0
     if (woodbury_basis_active) {
-        calcu_tr_PA_woodbury(ctx, tr_PA);
+        if (delta_corrected_out) {
+            tr_PA_corrected.resize(m);
+            calcu_tr_PA_woodbury(ctx, tr_PA, &tr_PA_corrected);
+        } else {
+            calcu_tr_PA_woodbury(ctx, tr_PA);
+        }
     } else if (use_approx) {
         const int eff_nprobes = (std::fabs(dlogL) < 1.0)
             ? ctx.reml_trace_hutchpp_nprobes
@@ -703,13 +749,55 @@ void ai_reml(RemlCtx& ctx, RemlMat& P, RemlMat& Hi, RemlVec& Py,
     // via lambda_sq = U'*delta, the Newton decrement -- no extra solve.
     RemlVec delta = Hi * R;
     lambda_sq = R.dot(delta);
+
+    // Post-hoc, diagnostic-only tail correction: one Newton step using the
+    // *same* curvature (Hi) as the live step above, but a tail-heterogeneity-
+    // corrected score. Deliberately NOT fed back into varcmp/prev_varcmp --
+    // only tr_PA's log-linear terms have a validated closed-form correction;
+    // R_raw (the quadratic term) does not, so this is a partial correction
+    // and must never be iterated (confirmed: iterating it diverges once a
+    // component hits its clamp).
+    //
+    // Step-size damping. Legacy behaviour (default): GCTA's original fixed
+    // 0.316 (~1/sqrt(10)) shrink whenever the *previous* iteration's logL
+    // change exceeded 1.0 -- an undocumented magic constant, and a backward-
+    // looking gate (dlogL says nothing about whether *this* step's local
+    // quadratic model is trustworthy).
+    //
+    // Under --reml-ai-robust: replace it with a continuous damped-Newton
+    // step scaled by the Newton decrement itself (lambda_sq, already computed
+    // above for the robust stopping criterion, reused here rather than
+    // introducing a second unrelated diagnostic). lambda_sq/2 is the predicted
+    // logL improvement from a full step; large lambda_sq means the current
+    // point is far enough from the optimum that the quadratic model backing
+    // Hi shouldn't be trusted at full strength, so the step is shrunk
+    // proportionally to sqrt(target_decrement / lambda_sq) rather than gated
+    // on an unrelated threshold. Converges to a full Newton step (scale -> 1)
+    // as lambda_sq -> 0, matching the legacy scheme's asymptotic behaviour
+    // near convergence while differing (continuously, not via a step
+    // function) far from it.
+    double step_scale = 1.0;
+    if (dlogL > 1.0) step_scale = 0.316;
+    if (ctx.reml_mtd == 0 && ctx.reml_ai_robust) {
+        constexpr double target_decrement = 0.5;
+        step_scale = std::min(1.0, std::sqrt(target_decrement / std::max(lambda_sq, 1e-12)));
+    }
+
+    if (delta_corrected_out) {
+        if (woodbury_basis_active) {
+            const RemlVec U_corrected = -0.5 * (tr_PA_corrected - R_raw);
+            *delta_corrected_out = step_scale * (Hi * U_corrected);
+        } else {
+            delta_corrected_out->setZero(m);
+        }
+    }
+
     // Var(U_i) = 0.25 * Var(tr_PA_i) since only tr_PA is stochastic (Hutch++).
     // 0 for exact/Woodbury since tr_PA_var == 0. Left as a vector (not reduced
     // to trace(AI^{-1}*Var(U)) here) so the caller can build the full
     // null-distribution weight matrix, not just its trace.
     var_U = 0.25 * tr_PA_var;
-    if (dlogL > 1.0) varcmp = prev_varcmp + 0.316 * delta;
-    else             varcmp = prev_varcmp + delta;
+    varcmp = prev_varcmp + step_scale * delta;
 }
 
 void em_reml(RemlCtx& ctx, RemlMat& P, RemlVec& Py,
@@ -763,9 +851,10 @@ double reml_iteration(RemlCtx& ctx,
     double prev_lgL = -1e20, lgL = -1e20, dlogL = 1000.0;
     double lambda_sq = 1e300;   // only meaningful when reml_mtd == 0
     RemlVec var_U;              // ditto -- Var(U) per component, from Hutch++ probe noise (0 for exact/Woodbury)
+    RemlVec delta_corrected = RemlVec::Zero(m);   // post-hoc tail-corrected step; diagnostic only, read once at convergence
     RemlVec prev_prev_varcmp(varcmp), prev_varcmp(varcmp), varcomp_init(varcmp);
 
-    // ctx.reml_ai_robust_stop_risk is the one number you set: the (Bonferroni,
+    // ctx.reml_ai_robust_risk is the one number you set: the (Bonferroni,
     // approximate) probability that ANY iteration across this whole run
     // falsely declares convergence under H0, treating each iteration's fresh
     // Hutch++ probe draw as an independent test of "is the true score zero".
@@ -778,16 +867,16 @@ double reml_iteration(RemlCtx& ctx,
     // because fresh probes are redrawn every call -- see calcu_tr_PA_hutchpp
     // -- but this is still an approximation, not a rigorous sequential test.)
     const double ai_robust_alpha_per_iter =
-        ctx.reml_ai_robust_stop_risk / std::max(1, ctx.reml_max_iter);
+        ctx.reml_ai_robust_risk / std::max(1, ctx.reml_max_iter);
 
     if (ctx.reml_trace_hutchpp && !ctx.Vi_use_woodbury_basis) {
         LOGGER << "Using Hutch++ stochastic trace estimator with "
                << ctx.reml_trace_hutchpp_nprobes << (ctx.reml_hutchpp_fixed_probes ? "fixed" : "fresh")  << " probes." << std::endl;
     }
-    if (ctx.reml_mtd == 0 && ctx.reml_ai_robust_stop) {
+    if (ctx.reml_mtd == 0 && ctx.reml_ai_robust) {
         LOGGER << "Using Newton-decrement convergence criterion (--reml-ai-robust-stop, "
-               << "logL tol=" << ctx.reml_ai_robust_stop_tol
-               << ", run-level false-stop risk=" << ctx.reml_ai_robust_stop_risk
+               << "logL tol=" << ctx.reml_ai_robust_tol
+               << ", run-level false-stop risk=" << ctx.reml_ai_robust_risk
                << " => alpha/iter=" << ai_robust_alpha_per_iter << ")." << std::endl;
     }
 
@@ -848,8 +937,13 @@ double reml_iteration(RemlCtx& ctx,
         }
         logdet_Xt_Vi_X = logdet_Xt_Vi_X2;
 
-        if (ctx.reml_mtd == 0)
-            ai_reml(ctx, ctx.P, Hi, Py, prev_varcmp, varcmp, dlogL, lambda_sq, var_U);
+        if (ctx.reml_mtd == 0) {
+            ai_reml(ctx, ctx.P, Hi, Py, prev_varcmp, varcmp, dlogL, lambda_sq, var_U, &delta_corrected);
+            if (ctx.Vi_use_woodbury_basis) {   // TEMP: unconditional, remove after diagnostic run
+                LOGGER << "  [diag] iter " << iter << " post-hoc: "
+                       << (prev_varcmp + delta_corrected).transpose() << std::endl;
+            }
+        }
         else if (ctx.reml_mtd == 1)
             reml_equation(ctx, ctx.P, Hi, Py, varcmp);
         else if (ctx.reml_mtd == 2)
@@ -903,9 +997,9 @@ double reml_iteration(RemlCtx& ctx,
         // i.e. lambda_sq is (twice) the estimated log-likelihood gap remaining
         // to the optimum -- not an abstract unitless number. That lets the
         // floor be derived from an interpretable logL-unit tolerance
-        // (ctx.reml_ai_robust_stop_tol, same unit/default as the old absolute
+        // (ctx.reml_ai_robust_tol, same unit/default as the old absolute
         // dlogL<1e-4 gate) instead of being picked directly:
-        //     lambda_sq_floor = 2 * reml_ai_robust_stop_tol
+        //     lambda_sq_floor = 2 * reml_ai_robust_tol
         //
         // Under Hutch++, newton_decrement_null_quantile(Hi, var_U, alpha)
         // gives the (1-alpha) quantile of lambda_sq's own null distribution
@@ -921,9 +1015,9 @@ double reml_iteration(RemlCtx& ctx,
         // gate, as does mtd==0 when --reml-ai-robust-stop isn't set (this also
         // covers the iter==0 EM burn-in step used to pick priors).
         bool like_small;
-        const bool ai_robust_active = (ctx.reml_mtd == 0 && ctx.reml_ai_robust_stop);
+        const bool ai_robust_active = (ctx.reml_mtd == 0 && ctx.reml_ai_robust);
         if (ai_robust_active) {
-            const double lambda_sq_floor = 2.0 * ctx.reml_ai_robust_stop_tol;
+            const double lambda_sq_floor = 2.0 * ctx.reml_ai_robust_tol;
             const double null_q = newton_decrement_null_quantile(Hi, var_U, ai_robust_alpha_per_iter);
             const double thresh = std::max(lambda_sq_floor, null_q);
             like_small = (lambda_sq <= thresh);
@@ -957,6 +1051,12 @@ double reml_iteration(RemlCtx& ctx,
 
         if (converged_flag) {
             //varcmp = best_varcmp;   // report best-seen, not last-iterate //Deactivated on purpose without testing, as this would no longer be a "convergence" method.
+            if (ctx.Vi_use_woodbury_basis && ctx.reml_mtd == 0) {
+                const RemlVec varcmp_post = prev_varcmp + delta_corrected;
+                // Disabled for now
+                //LOGGER << "Post-hoc tail-corrected estimate (diagnostic only, not applied): "
+                //       << varcmp_post.transpose() << std::endl;
+            }
             if (ctx.reml_mtd == 2) {
                 RemlMat P_tmp;
                 calcu_P_impl(ctx, &P_tmp);
@@ -1231,14 +1331,15 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         LOGGER.e(0, "--reml-woodbury-basis is incompatible with Fisher-scoring REML.");
     if ((int)ctx.r_indx.size() != 2)
         LOGGER.e(0, "--reml-woodbury-basis supports only single-GRM models.");
-    if (ctx.A[ctx.r_indx[0]].size() == 0 && !ctx.svd_chunked)
+    if (ctx.A[ctx.r_indx[0]].size() == 0 && ctx.svd_chunked_budget <= 0.0)
         LOGGER.e(0, "--reml-woodbury: GRM component is identity; cannot compute basis.");
-    if (ctx.svd_chunked && !ctx.grm_tile_reader)
-        LOGGER.e(0, "--reml-woodbury: --svd-chunked is set but ctx.grm_tile_reader is empty "
+    if (ctx.svd_chunked_budget > 0.0 && !ctx.grm_tile_reader)
+        LOGGER.e(0, "--reml-woodbury: --svd-chunked-budget is set but ctx.grm_tile_reader is empty "
                     "— the GRM component wasn't actually loaded either way.");
 
     const WoodburyMode mode = ctx.woodbury_mode();
     const int  n = ctx.n;
+    const bool svd_chunked = ctx.svd_chunked_budget > 0.0;
 
     int k_svd_budget_ceiling = n - 1;
     if (ctx.svd_mem_budget_gb > 0.0) {
@@ -1247,6 +1348,33 @@ void compute_woodbury_basis(RemlCtx& ctx) {
         k_svd_budget_ceiling = std::min(k_svd_budget_ceiling, std::max(20, max_k_ext - 200));
         LOGGER << "--reml-woodbury-basis-mem-budget=" << ctx.svd_mem_budget_gb
                << "GB -> k_svd capped at " << k_svd_budget_ceiling << std::endl;
+    }
+
+    // Row-chunk size for streaming reads off ctx.grm_tile_reader (chunked_diagonal,
+    // chunked_trace_K_squared, chunked_symmetric_matvec). Budget-driven, same pattern
+    // as --GRM-tile-budget: solve for the number of rows that fit rather than guessing
+    // a fixed size. Sized against k_svd_budget_ceiling (the worst-case rank this call
+    // can reach) since the chunk size is fixed once here and reused across the whole
+    // adaptive-rank loop below, regardless of which k_ext is live at any given moment.
+    int svd_chunk_rows = 0;
+    if (svd_chunked) {
+        // k_svd_budget_ceiling feeds k_ext_hint below. Left at its n-1 default (no
+        // --reml-woodbury-basis-mem-budget), k_ext_hint is sized against the
+        // worst case the adaptive-rank loop could reach, not the rank it will
+        // actually settle on — so svd_chunk_rows may land smaller than strictly
+        // necessary. That's the intended tradeoff for a hard RSS cap on the
+        // GRM-streaming buffer regardless of k_svd, not a misconfiguration.
+        const int k_ext_hint = k_svd_budget_ceiling + gcta_eigh::recommended_oversample(k_svd_budget_ceiling);
+        svd_chunk_rows = gcta_chunked::solve_chunk_rows(n, ctx.svd_chunked_budget, k_ext_hint);
+        if (svd_chunk_rows < 1)
+            LOGGER.e(0, "--svd-chunked-budget=" + std::to_string(ctx.svd_chunked_budget)
+                        + "GB cannot fit even a single GRM row (n=" + std::to_string(n)
+                        + ", k_ext=" + std::to_string(k_ext_hint) + " -> "
+                        + std::to_string(8.0 * (n + k_ext_hint) / 1e9) + "GB/row); raise the budget"
+                        + " or add --reml-woodbury-basis-mem-budget <GB> to cap k_ext.");
+        LOGGER << "--svd-chunked-budget=" << ctx.svd_chunked_budget
+               << "GB -> streaming " << svd_chunk_rows << " GRM row(s) per chunk (k_ext up to "
+               << k_ext_hint << ")" << std::endl;
     }
 
     const bool k_max_is_hard_ceiling = (ctx.woodbury_basis_k_max > 0);
@@ -1274,13 +1402,13 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     if (k_svd >= n) LOGGER.e(0, "--reml-woodbury-basis rank must be < n.");
 
     const Eigen::MatrixXd& K_dbl = ctx.A[ctx.r_indx[0]];
-    const double trace_K_full = ctx.svd_chunked
-        ? gcta_chunked::chunked_diagonal(ctx.grm_tile_reader, n, ctx.svd_chunk_size).sum()
+    const double trace_K_full = svd_chunked
+        ? gcta_chunked::chunked_diagonal(ctx.grm_tile_reader, n, svd_chunk_rows).sum()
         : K_dbl.diagonal().sum();
 
     double trace_K2 = 0.0;
-    if (ctx.svd_chunked) {
-        trace_K2 = gcta_chunked::chunked_trace_K_squared(ctx.grm_tile_reader, n, ctx.svd_chunk_size);
+    if (svd_chunked) {
+        trace_K2 = gcta_chunked::chunked_trace_K_squared(ctx.grm_tile_reader, n, svd_chunk_rows);
     } else {
         double diag_sq = K_dbl.diagonal().squaredNorm();
         double off_sq  = 0.0;
@@ -1294,8 +1422,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     if (mode == WoodburyMode::AutoMP) {
         double M = 0.0;
         if (ctx.grm_N.rows() == n && ctx.grm_N.cols() == n) {
-            if (ctx.svd_chunked)
-                LOGGER.w(0, "--svd-chunked: ctx.grm_N is a dense n x n matrix — this defeats "
+            if (svd_chunked)
+                LOGGER.w(0, "--svd-chunked-budget: ctx.grm_N is a dense n x n matrix — this defeats "
                             "the memory savings from chunking K. If your SNP-count-per-pair GRM_N "
                             "is roughly constant, pass it as a 1x1 scalar via ctx.grm_N instead.");
             M = ctx.grm_N.diagonal().mean();
@@ -1311,8 +1439,8 @@ void compute_woodbury_basis(RemlCtx& ctx) {
     const bool allows_warm = woodbury_mode_allows_warm_start(mode);
 
     auto apply = [&](const auto& X) -> Eigen::MatrixXd {
-        if (ctx.svd_chunked)
-            return gcta_chunked::chunked_symmetric_matvec(ctx.grm_tile_reader, n, ctx.svd_chunk_size, X);
+        if (svd_chunked)
+            return gcta_chunked::chunked_symmetric_matvec(ctx.grm_tile_reader, n, svd_chunk_rows, X);
         return K_dbl * X;
     };
 
@@ -1426,9 +1554,16 @@ void compute(RemlCtx& ctx,
             LOGGER.e(0, "phenotypic variance is infinite. Check phenotype file.");
     }
 
-    if (priors_flag && (int)priors_var.size() < (int)ctx.r_indx.size() - 1) {
+    if (!priors_var.empty() && (int)priors_var.size() < (int)ctx.r_indx.size() - 1) {
         std::ostringstream errmsg;
         errmsg << "in option --reml-priors-var. There are " << ctx.r_indx.size()
+               << " variance components. At least " << ctx.r_indx.size() - 1
+               << " prior values should be specified.";
+        LOGGER.e(0, errmsg.str());
+    }
+    if (!priors.empty() && (int)priors.size() < (int)ctx.r_indx.size() - 1) {
+        std::ostringstream errmsg;
+        errmsg << "in option --reml-priors. There are " << ctx.r_indx.size()
                << " variance components. At least " << ctx.r_indx.size() - 1
                << " prior values should be specified.";
         LOGGER.e(0, errmsg.str());

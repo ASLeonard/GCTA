@@ -28,6 +28,7 @@
 #pragma once
 
 #include <Eigen/Dense>
+#include <algorithm>
 #include <functional>
 #include <vector>
 #ifdef _OPENMP
@@ -59,6 +60,35 @@ struct BlockPartition {
     int block_start(int i) const { return starts[i]; }
     int block_end(int i) const { return starts[i + 1]; }
 };
+
+// Solve for the largest row-chunk size (the `block_size` passed to every
+// function below, and to matvec_blocked wherever that's defined) that fits
+// a given memory budget, rather than each call site guessing a fixed
+// constant or re-deriving this arithmetic independently.
+//
+// Every one of these streaming entry points holds at most two buffers live
+// per chunk: the `chunk_rows x n` tile-read slab (chunked_diagonal,
+// chunked_trace_K_squared) and, for the matvec variants, an additional
+// `chunk_rows x k_ext` output slab. This sizes for the matvec's heavier
+// footprint unconditionally, since callers generally solve one chunk size
+// up front and reuse it across all of the above regardless of which one is
+// live at a given moment — pass k_ext=0 (or 1, for a single-vector-only
+// caller) if only the lighter diagonal/trace paths will ever run.
+//
+// `k_ext` should be the worst-case column count this chunk size will ever
+// be multiplied against, not just the current one — e.g. a rank ceiling
+// plus oversample, not the live rank mid-way through an adaptive loop —
+// since the chunk size is typically solved once and held fixed thereafter.
+//
+// Returns 0 if the budget can't fit even a single row; callers are
+// expected to treat that as a hard error with their own message, since the
+// right phrasing (which flag, which units) is call-site-specific.
+inline int solve_chunk_rows(int n, double budget_gb, int k_ext) {
+    const double budget_bytes = budget_gb * 1e9;
+    const double bytes_per_row = 8.0 * (static_cast<double>(n) + static_cast<double>(k_ext));
+    const int chunk_rows = static_cast<int>(budget_bytes / bytes_per_row);
+    return std::min(std::max(chunk_rows, 0), n);
+}
 
 // K @ X without ever holding a dense n x n K. `read_tile` is called exactly
 // once per (row_block, col_block) pair with col_block <= row_block — i.e.
