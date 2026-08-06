@@ -296,6 +296,7 @@ bool calcu_Vi(RemlCtx& ctx, RemlVec& prev_varcmp, double& logdet, int& iter, boo
             // dpotrf failed: reassemble from scratch (dpotrf may have partially overwritten Vi)
             ctx.Vi.resize(ctx.n, ctx.n);
             assemble_V_lower(ctx, prev_varcmp);
+            LOGGER.w(0, "REML: final LLT factorization of V failed at convergence; falling back to dense inverse.");
         }
 
         INVmethod method_try = ctx.reml_inv_mtd ? static_cast<INVmethod>(ctx.reml_inv_mtd) : INV_LLT;
@@ -1124,17 +1125,19 @@ static bool woodbury_mode_allows_warm_start(WoodburyMode mode) {
 }
 
 static int woodbury_initial_k_svd(const RemlCtx& ctx, WoodburyMode mode, int k_budget_ceiling) {
-    const bool hard_cap = (ctx.woodbury_basis_k_max > 0);
+    const bool hard_cap = false;//(ctx.woodbury_basis_k_max > 0);
     const int n = ctx.n;
     switch (mode) {
         case WoodburyMode::AutoMP:
-            return hard_cap ? ctx.woodbury_basis_k_max : std::min({n - 1, k_budget_ceiling, 2000});
+            return hard_cap ? ctx.woodbury_basis_k_max : std::min({n - 1, k_budget_ceiling, ctx.woodbury_basis_k_init});
         case WoodburyMode::EigMass:
+            [[fallthrough]];
         case WoodburyMode::Variance: {
-            const int start_guess = std::clamp(n / 20, 2000, 25000);
+            const int start_guess = std::clamp(n / 20, ctx.woodbury_basis_k_init, ctx.woodbury_basis_k_max);
             return hard_cap ? ctx.woodbury_basis_k_max : std::min({n - 1, k_budget_ceiling, start_guess});
         }
         case WoodburyMode::Fixed:
+            [[fallthrough]];
         default:
             return ctx.woodbury_basis_rank;
     }
@@ -1494,7 +1497,7 @@ void compute_woodbury_basis(RemlCtx& ctx) {
 
         eval_res = evaluate_rank_criterion(mode, eval_full, k_svd, lambda_plus, target_mass, trace_K_full, trace_K2, ctx);
 
-        if (eval_res.satisfied || k_max_is_hard_ceiling || k_svd >= n - 1 || k_svd >= k_svd_budget_ceiling) break;
+        if (eval_res.satisfied || k_max_is_hard_ceiling || k_svd >= n / 2 || k_svd >= k_svd_budget_ceiling) break;
 
         const int k_svd_next = std::min({k_svd * 2, n - 1, k_svd_budget_ceiling});
         const char* warm_status = ctx.svd_nystrom ? " (Nystrom: no warm start, full recompute)"
@@ -1658,11 +1661,19 @@ RemlState build_reml_state(const RemlCtx& ctx) {
         // Vi_L holds the lower Cholesky factor L of V (from dpotrf).
         // Store it as float — the streaming code uses STRSV/STRSM directly,
         // avoiding dpotri (O(n³/3)) and a second Cholesky of V^{-1} (O(n³/3)).
-        rs.is_llt   = true;
-        rs.Vi_L_f   = ctx.Vi_L.cast<float>();   // n×n float, ~n²/2 significant bytes
+        rs.is_llt = true;
+        rs.Vi_L_f = ctx.Vi_L.cast<float>();   // n×n float, ~n²/2 significant bytes
     } else {
-        // Vi is already a full V^{-1}
-        rs.Vi = ctx.Vi.cast<float>();
+        // reml_diagV_adj fallback: ctx.Vi is already the dense explicit
+        // V^{-1} (computed once, O(n³), inside calcu_Vi). Factor it here —
+        // once — so the streaming code always applies V^{-1} via a
+        // triangular product (TRMM/STRMM) instead of holding a dense matrix
+        // and re-deriving a usable factor from it at association time.
+        Eigen::LLT<RemlMat> Li(ctx.Vi);
+        if (Li.info() != Eigen::Success)
+            LOGGER.e(0, "Vi is not positive definite when building REML state.");
+        rs.is_llt = false;
+        rs.Vi_L_f = RemlMat(Li.matrixL()).cast<float>();
     }
     return rs;
 }

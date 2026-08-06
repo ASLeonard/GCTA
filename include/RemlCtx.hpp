@@ -113,7 +113,8 @@ struct RemlCtx {
     // already sitting in the existing k_svd budget's headroom (oversample /
     // starting-budget slack), so this is normally free — no extra rSVD pass.
     int    woodbury_basis_eigmass_k_buffer   = 0;    // extra eigenvalues past the raw reml_eigen_mass crossing
-    int    woodbury_basis_k_max            = 0;     // rank cap for MP-k
+    int    woodbury_basis_k_init            = 2000;     // starting rank for Woodbury basis formation
+    int    woodbury_basis_k_max            = 25000;     // rank cap for Woodbury basis
     bool   reml_trace_hutchpp         = false; // Hutch++ trace (skips n x n P)
     int    reml_trace_hutchpp_nprobes = 200;
     int    reml_trace_power_iter     = 0;     // power-iter for Hutch++ range sketch
