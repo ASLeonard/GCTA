@@ -63,13 +63,10 @@ inline Eigen::MatrixXd compact_sample_rows(const Eigen::MatrixXd& values,
 // Per-SNP scalars (Xt_Vi_y, xvx_diag, af_v, valid_v) are O(1) per column
 // and negligible next to the O(n) terms above.
 // budget_gb <= 0 preserves the previous fixed BLOCK=10000 behavior exactly
-// — this is opt-in (--mlma-tile-budget-gb), matching --GRM-tile-budget and
-// --svd-chunked-budget elsewhere in this codebase, rather than silently
-// changing default memory/perf characteristics.
 inline int resolve_mlma_block_size(int n, double budget_gb)
 {
     if (budget_gb <= 0.0 || n <= 0)
-        return 10000;
+        return 10000; // Somewhat arbitrary, but balance of peak RSS and throughout. Increasing may help STRSM efficiency but increases memory.
 
     constexpr double bytes_per_snp_per_sample = 8.0 /* GenoBufItem::geno */
                                                + 4.0 /* X_block */;
@@ -209,10 +206,14 @@ inline void run_mlma_stream_association(RemlState& state,
     const bool use_llt = state.is_llt;  // selects TRSM (factor = L(V)) vs TRMM (factor = Li(Vi))
 
     if (use_wb) {
+        LOGGER << "MLMA streaming: applying V^{-1} via Woodbury low-rank update "
+            "(V^{-1} = D^{-1} - D^{-1} U_k C U_k^T D^{-1})." << std::endl;
         Vi_y = woodbury_apply_Vi_f(state.wb, y_adj);
     } else if (use_llt) {
         // V^{-1} y = L^{-T}(L^{-1} y) via two float triangular solves
         // against L, the Cholesky factor of V.
+        LOGGER << "MLMA streaming: applying V^{-1} via triangular solve against L, "
+            "where V = L L^T (STRSM/STRSV — forward/back substitution)." << std::endl;
         Vi_y = y_adj;
         cblas_strsv(CblasColMajor, CblasLower, CblasNoTrans, CblasNonUnit,
                     n, state.Vi_L_f.data(), n, Vi_y.data(), 1);
@@ -223,6 +224,8 @@ inline void run_mlma_stream_association(RemlState& state,
         // Li, the Cholesky factor of V^{-1} itself. Li was already computed
         // once at REML-exit/save time (see writeRemlStateFromCtx /
         // build_reml_state) — no factorization happens here, ever.
+        LOGGER << "MLMA streaming: applying V^{-1} via triangular product against L_i, "
+            "where V^{-1} = L_i L_i^T (STRMM — no linear solve)." << std::endl;
         Vi_y.noalias() = state.Vi_L_f.triangularView<Eigen::Lower>().transpose() * y_adj;
         Vi_y = state.Vi_L_f.triangularView<Eigen::Lower>() * Vi_y;
     }
