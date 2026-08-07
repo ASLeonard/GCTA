@@ -491,7 +491,8 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options_in.erase("--reml-priors-var");
         options_in.erase("--reml-no-HE-start");
         options_in.erase("--reml-woodbury-basis-eigen-mass");
-        options_in.erase("--reml-woodbury-basis-var-thresh");
+        options_in.erase("--reml-woodbury-basis-var-tail");
+        options_in.erase("--reml-woodbury-basis-range");
         options_in.erase("--svd-chunked-budget");
         options_in.erase("--reml-ai-robust");
         options_in.erase("--reml-ai-robust-tol");
@@ -505,7 +506,7 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options["grm"] = options_in["--grm"][0];
         options_in.erase("--grm");
 
-        // --reml-woodbury [k]  (k optional; -1 = MP-k, -2 = EIGMASS, -3 = variance)
+        // --reml-woodbury [k]  (k optional; -1 = MP-k, -2 = EIG, -3 = variance)
         if (options_in.find("--reml-woodbury-basis") != options_in.end()) {
             const auto& vals = options_in["--reml-woodbury-basis"];
             if (!vals.empty() && !vals[0].empty()) {
@@ -528,12 +529,12 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             options_d["woodbury_basis_eigen_mass"] = std::stof(vals[0]);
             options_in.erase("--reml-woodbury-basis-eigen-mass");
         }
-        if (options_in.find("--reml-woodbury-basis-var-thresh") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury-basis-var-thresh"];
+        if (options_in.find("--reml-woodbury-basis-var-tail") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-var-tail"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--reml-woodbury-basis-var-thresh requires a relative Frobenius error argument (e.g. 0.001).");
-            options_d["woodbury_basis_var_thresh"] = std::stod(vals[0]);
-            options_in.erase("--reml-woodbury-basis-var-thresh");
+                LOGGER.e(0, "--reml-woodbury-basis-var-tail requires a relative Frobenius error argument (e.g. 0.001).");
+            options_d["woodbury_basis_var_tail"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-basis-var-tail");
         }
         // --svd-method <power|nystrom>: select the Woodbury basis sketch.
         // The default power path uses subspace iteration; Nystrom is single-pass.
@@ -583,33 +584,26 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
             options_d["svd_chunked_budget"] = std::stod(vals[0]);
             options_in.erase("--svd-chunked-budget");
         }
-        // These three were previously read from options_d further down
-        // (woodbury_basis_edge_margin / woodbury_basis_edge_confirm / woodbury_basis_EIGMASS_k_buffer)
-        // with no CLI parsing block actually populating them — silently
-        // always falling back to their hardcoded defaults regardless of what
-        // was passed on the command line. Fixed alongside adding the new
-        // memory-budget flag, since all four are the same kind of numeric
-        // --reml-woodbury-basis-* option and belong together.
-        if (options_in.find("--reml-woodbury-basis-edge-margin") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury-basis-edge-margin"];
+        if (options_in.find("--reml-woodbury-basis-MP-margin") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-MP-margin"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--reml-woodbury-basis-edge-margin requires a fractional argument (e.g. 0.15).");
+                LOGGER.e(0, "--reml-woodbury-basis-MP-margin requires a fractional argument (e.g. 0.15).");
             options_d["woodbury_basis_edge_margin"] = std::stod(vals[0]);
-            options_in.erase("--reml-woodbury-basis-edge-margin");
+            options_in.erase("--reml-woodbury-basis-MP-margin");
         }
-        if (options_in.find("--reml-woodbury-basis-edge-confirm") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury-basis-edge-confirm"];
+        if (options_in.find("--reml-woodbury-basis-MP-confirm") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-MP-confirm"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--reml-woodbury-basis-edge-confirm requires an integer argument.");
+                LOGGER.e(0, "--reml-woodbury-basis-MP-confirm requires an integer argument.");
             options_d["woodbury_basis_edge_confirm"] = std::stod(vals[0]);
-            options_in.erase("--reml-woodbury-basis-edge-confirm");
+            options_in.erase("--reml-woodbury-basis-MP-confirm");
         }
-        if (options_in.find("--reml-woodbury-basis-EIGMASS-k-buffer") != options_in.end()) {
-            const auto& vals = options_in["--reml-woodbury-basis-EIGMASS-k-buffer"];
+        if (options_in.find("--reml-woodbury-basis-EIGM-k-buffer") != options_in.end()) {
+            const auto& vals = options_in["--reml-woodbury-basis-EIG-k-buffer"];
             if (vals.empty() || vals[0].empty())
-                LOGGER.e(0, "--reml-woodbury-basis-EIGMASS-k-buffer requires an integer argument.");
-            options_d["woodbury_basis_EIGMASS_k_buffer"] = std::stod(vals[0]);
-            options_in.erase("--reml-woodbury-basis-EIGMASS-k-buffer");
+                LOGGER.e(0, "--reml-woodbury-basis-EIG-k-buffer requires an integer argument.");
+            options_d["woodbury_basis_EIG_k_buffer"] = std::stod(vals[0]);
+            options_in.erase("--reml-woodbury-basis-EIG-k-buffer");
         }
         // --reml-woodbury-basis-mem-budget <GB>: hard cap on k_svd derived from an
         // approximate rSVD sketch memory budget, independent of n-1. See the
@@ -681,9 +675,14 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
         options["no_adj_covar"] = "1";
         options_in.erase("--mlma-no-preadj-covar");
     }
-    if (options_in.find("--mlma-tile-budget-gb") != options_in.end()) {
-        options["mlma_tile_budget_gb"] = options_in["--mlma-tile-budget-gb"][0];
-        options_in.erase("--mlma-tile-budget-gb");
+    if (options_in.find("--mlma-stream") != options_in.end()) {
+        const auto& vals = options_in["--mlma-stream"];
+        if (!vals.empty()) {
+            if (vals.size()==1)
+                options["mlma_tile_budget_gb"] = vals[0];
+            else
+                LOGGER.e(0, "--mlma-stream accepts at most one value: the memory budget in GB for tile-based streaming.");
+        }
     }
     if (options_in.find("--log-pval") != options_in.end()) {
         options["log_pval"] = "1";
@@ -705,7 +704,6 @@ int MLMA::registerOption(map<string, vector<string>>& options_in)
     }
 
     processFunctions.push_back("MLMA");
-    options_in.erase("--mlma-stream");
     return 1;
 }
 
@@ -875,8 +873,8 @@ void MLMA::processMain()
                 ? options_d.at("woodbury_basis_edge_margin") : 0.15;
             const int    woodbury_basis_edge_confirm = options_d.count("woodbury_basis_edge_confirm")
                 ? static_cast<int>(options_d.at("woodbury_basis_edge_confirm")) : 20;
-            const int woodbury_basis_EIGMASS_k_buffer = options_d.count("woodbury_basis_EIGMASS_k_buffer")
-                ? static_cast<int>(options_d.at("woodbury_basis_EIGMASS_k_buffer")) : 0;
+            const int woodbury_basis_EIG_k_buffer = options_d.count("woodbury_basis_EIG_k_buffer")
+                ? static_cast<int>(options_d.at("woodbury_basis_EIG_k_buffer")) : 0;
             const double woodbury_basis_mem_budget_gb = options_d.count("woodbury_basis_mem_budget_gb")
                 ? options_d.at("woodbury_basis_mem_budget_gb") : 0.0;
             const bool no_HE_start = options.count("no_HE_start") > 0;
@@ -1029,7 +1027,7 @@ void MLMA::processMain()
                             "a different reason, and nothing else knows the difference yet.");
             ctx.woodbury_basis_edge_margin        = woodbury_basis_edge_margin;
             ctx.woodbury_basis_edge_confirm       = woodbury_basis_edge_confirm;
-            ctx.woodbury_basis_eigmass_k_buffer  = woodbury_basis_EIGMASS_k_buffer;
+            ctx.woodbury_basis_EIG_k_buffer  = woodbury_basis_EIG_k_buffer;
             ctx.woodbury_basis_var_thresh         = options_d.count("woodbury_basis_var_thresh")
                 ? options_d.at("woodbury_basis_var_thresh") : 0.001;
             ctx.woodbury_basis_k_init = options_d.count("woodbury_basis_range_init")

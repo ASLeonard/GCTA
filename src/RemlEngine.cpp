@@ -1196,7 +1196,7 @@ static RankEvalResult evaluate_rank_criterion(
                 }
             }
             res.satisfied = crossed_target
-                         && (res.k_target + ctx.woodbury_basis_eigmass_k_buffer <= k_svd);
+                         && (res.k_target + ctx.woodbury_basis_EIG_k_buffer <= k_svd);
             break;
         }
         case WoodburyMode::Variance: {
@@ -1273,13 +1273,13 @@ static int finalize_and_log_woodbury_rank(
         }
         case WoodburyMode::EigMass: {
             const int k_EIGMASS = eval_res.k_target;
-            k = std::max(20, std::min(k_svd, k_EIGMASS + ctx.woodbury_basis_eigmass_k_buffer));
+            k = std::max(20, std::min(k_svd, k_EIGMASS + ctx.woodbury_basis_EIG_k_buffer));
             double cumulative = 0.0;
             for (int i = 0; i < k; ++i) cumulative += eval_full[i];
             const double rho = cumulative / trace_K_full;
             LOGGER << "EIG-k: trace(K)=" << trace_K_full
                    << ", raw " << ctx.woodbury_basis_eigen_mass * 100 << "% mass crossing at k=" << k_EIGMASS
-                   << ", using k=" << k << " (+" << ctx.woodbury_basis_eigmass_k_buffer << " eigenvalue buffer)"
+                   << ", using k=" << k << " (+" << ctx.woodbury_basis_EIG_k_buffer << " eigenvalue buffer)"
                    << ", captured mass rho=" << rho << std::endl;
             if (k_EIGMASS >= k_svd && k_svd >= n - 1)
                 LOGGER.w(0, "Woodbury EIG-k: mass target not reached even at k=n-1=" + std::to_string(n - 1) + ".");
